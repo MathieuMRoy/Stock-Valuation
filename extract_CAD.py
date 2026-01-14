@@ -5,22 +5,22 @@ import pandas as pd
 # --- CONFIGURATION DE LA PAGE ---
 st.set_page_config(page_title="Valuation Master", page_icon="📱", layout="centered")
 st.title("📱 Valuation Master")
-st.caption("Double Croissance • DCF vs Ventes • Ratios")
+st.caption("Double Croissance • Scénarios • Thèses")
 
 # --- 0. BENCHMARKS ---
 SECTOR_BENCHMARKS = {
-    "Technology": {"gr_sales": 0.15, "gr_fcf": 0.18, "ps": 6.0, "wacc": 0.095, "desc": "Levier opérationnel fort"},
-    "Communication Services": {"gr_sales": 0.10, "gr_fcf": 0.15, "ps": 4.0, "wacc": 0.09, "desc": "Média/Streaming (Ex: Netflix)"},
-    "Consumer Cyclical": {"gr_sales": 0.08, "gr_fcf": 0.10, "ps": 2.5, "wacc": 0.10, "desc": "Auto/Luxe"},
-    "Healthcare": {"gr_sales": 0.06, "gr_fcf": 0.07, "ps": 4.0, "wacc": 0.08, "desc": "Stable"},
-    "Financial Services": {"gr_sales": 0.05, "gr_fcf": 0.05, "ps": 2.0, "wacc": 0.10, "desc": "Croissance alignée"},
-    "Energy": {"gr_sales": 0.03, "gr_fcf": 0.05, "ps": 1.5, "wacc": 0.11, "desc": "Volatile"},
-    "Industrials": {"gr_sales": 0.04, "gr_fcf": 0.05, "ps": 1.8, "wacc": 0.09, "desc": "Cycle long"},
-    "Utilities": {"gr_sales": 0.03, "gr_fcf": 0.03, "ps": 2.0, "wacc": 0.065, "desc": "Très stable"},
+    "Technology": {"gr_sales": 0.15, "gr_fcf": 0.18, "ps": 6.0, "wacc": 0.095, "desc": "Tech / Logiciel"},
+    "Communication Services": {"gr_sales": 0.10, "gr_fcf": 0.15, "ps": 4.0, "wacc": 0.09, "desc": "Média / Streaming"},
+    "Consumer Cyclical": {"gr_sales": 0.08, "gr_fcf": 0.10, "ps": 2.5, "wacc": 0.10, "desc": "Conso / Auto"},
+    "Healthcare": {"gr_sales": 0.06, "gr_fcf": 0.07, "ps": 4.0, "wacc": 0.08, "desc": "Santé / Pharma"},
+    "Financial Services": {"gr_sales": 0.05, "gr_fcf": 0.05, "ps": 2.0, "wacc": 0.10, "desc": "Finance"},
+    "Energy": {"gr_sales": 0.03, "gr_fcf": 0.05, "ps": 1.5, "wacc": 0.11, "desc": "Énergie"},
+    "Industrials": {"gr_sales": 0.04, "gr_fcf": 0.05, "ps": 1.8, "wacc": 0.09, "desc": "Industrie"},
+    "Utilities": {"gr_sales": 0.03, "gr_fcf": 0.03, "ps": 2.0, "wacc": 0.065, "desc": "Services Publics"},
     "Default": {"gr_sales": 0.08, "gr_fcf": 0.10, "ps": 3.0, "wacc": 0.09, "desc": "Moyenne"}
 }
 
-# --- 1. FONCTIONS DATA ---
+# --- 1. FONCTIONS DATA (ROBUSTES) ---
 @st.cache_data(ttl=3600)
 def get_financial_data(ticker):
     try:
@@ -36,13 +36,10 @@ def get_financial_data(ticker):
 def get_ttm_flexible(df, keys_list):
     """Cherche une valeur TTM en essayant plusieurs clés possibles"""
     if df is None or df.empty: return 0
-    
     for key in keys_list:
         for idx in df.index:
-            # On nettoie les espaces et la casse pour la comparaison
             idx_clean = str(idx).upper().replace(" ", "")
             key_clean = key.upper().replace(" ", "")
-            
             if key_clean in idx_clean:
                 row = df.loc[idx]
                 total = 0
@@ -57,10 +54,7 @@ def get_ttm_flexible(df, keys_list):
 
 def get_cash_safe(df):
     if df is None or df.empty: return 0
-    # Priorité aux liquidités immédiates
-    val = get_ttm_flexible(df, ["CashAndCashEquivalents", "CashCashEquivalentsAndShortTermInvestments", "Cash"])
-    # Note: get_ttm fait une somme, ici on veut la dernière valeur pour le Bilan
-    # On refait une logique simple pour le bilan (dernière colonne)
+    # On cherche la dernière valeur disponible dans le bilan
     keys = ["CashAndCashEquivalents", "CashCashEquivalentsAndShortTermInvestments", "Cash"]
     for key in keys:
         for idx in df.index:
@@ -70,19 +64,13 @@ def get_cash_safe(df):
 
 def get_debt_safe(df):
     if df is None or df.empty: return 0
-    lt_debt = 0
-    lease = 0
-    
+    lt_debt, lease = 0, 0
     for idx in df.index:
         s = str(idx).upper().replace(" ", "")
-        if "LONGTERMDEBT" in s:
-             lt_debt = df.loc[idx].iloc[0]; break
-             
+        if "LONGTERMDEBT" in s: lt_debt = df.loc[idx].iloc[0]; break
     for idx in df.index:
         s = str(idx).upper().replace(" ", "")
-        if "LEASE" in s and "LIABILITIES" in s:
-             lease = df.loc[idx].iloc[0]; break
-             
+        if "LEASE" in s and "LIABILITIES" in s: lease = df.loc[idx].iloc[0]; break
     return lt_debt + lease
 
 def get_real_shares(info):
@@ -124,34 +112,26 @@ if ticker:
     if bs is None or inc.empty:
         st.error("Données introuvables.")
     else:
-        # Infos Secteur
+        # SECTEUR
         sector = info.get('sector', 'Default')
         bench = SECTOR_BENCHMARKS.get(sector, SECTOR_BENCHMARKS["Default"])
         st.info(f"🏢 **Secteur : {sector}**")
-        
-        with st.expander(f"💡 Aide Hypothèses ({sector})", expanded=True):
-            c1, c2, c3 = st.columns(3)
-            c1.metric("Croiss. Ventes", f"{bench['gr_sales']*100:.0f}%")
-            c2.metric("Croiss. FCF", f"{bench['gr_fcf']*100:.0f}%")
-            c3.metric("P/S Cible", f"{bench['ps']}x")
 
-        # Inputs
-        st.subheader("⚙️ Vos Hypothèses (Neutral)")
-        col1, col2 = st.columns(2)
-        with col1:
-            gr_sales_input = st.number_input("Croiss. Ventes (5 ans)", value=bench['gr_sales'], step=0.01, format="%.2f")
-            gr_fcf_input = st.number_input("Croiss. FCF (5 ans)", value=bench['gr_fcf'], step=0.01, format="%.2f")
-        with col2:
-            wacc = st.number_input("CPMC (WACC)", value=bench['wacc'], step=0.005, format="%.3f")
-            target_ps = st.number_input("Ratio P/S Cible", value=bench['ps'], step=0.5)
+        # INPUTS
+        with st.expander(f"⚙️ Modifier Hypothèses (Neutral)", expanded=False):
+            col1, col2 = st.columns(2)
+            with col1:
+                gr_sales_input = st.number_input("Croiss. Ventes (5 ans)", value=bench['gr_sales'], step=0.01, format="%.2f")
+                gr_fcf_input = st.number_input("Croiss. FCF (5 ans)", value=bench['gr_fcf'], step=0.01, format="%.2f")
+            with col2:
+                wacc = st.number_input("CPMC (WACC)", value=bench['wacc'], step=0.005, format="%.3f")
+                target_ps = st.number_input("Ratio P/S Cible", value=bench['ps'], step=0.5)
 
-        # Calculs Data
-        # Utilisation de get_ttm_flexible pour être sûr de trouver les revenus
+        # DATA CALCULATION
         revenue_ttm = get_ttm_flexible(inc, ["TotalRevenue", "Total Revenue", "Revenue"])
         cfo_ttm = get_ttm_flexible(cf, ["OperatingCashFlow", "Operating Cash Flow"])
         capex_ttm = abs(get_ttm_flexible(cf, ["CapitalExpenditure", "Capital Expenditure", "Purchase of PPE"]))
         fcf_ttm = cfo_ttm - capex_ttm
-        
         cash = get_cash_safe(bs)
         debt = get_debt_safe(bs)
         shares = get_real_shares(info)
@@ -159,75 +139,117 @@ if ticker:
         current_price = info.get('currentPrice', 0)
         market_cap = shares * current_price
 
-        # --- CALCUL EBITDA ROBUSTE ---
-        # On essaie de trouver l'EBITDA direct, sinon on le calcule
+        # EBITDA
         ebitda_ttm = get_ttm_flexible(inc, ["EBITDA", "NormalizedEBITDA"])
-        
         if ebitda_ttm == 0:
-            # Plan B : Operating Income + D&A
             op_inc = get_ttm_flexible(inc, ["OperatingIncome", "Operating Income", "EBIT"])
-            da = get_ttm_flexible(cf, ["Depreciation", "DepreciationAndAmortization", "Depreciation & Amortization"])
+            da = get_ttm_flexible(cf, ["Depreciation", "DepreciationAndAmortization"])
             ebitda_ttm = op_inc + da
 
         # Ratios
         eps = info.get('trailingEps', 0)
         pe_ratio = current_price / eps if eps > 0 else 0
         pfcf_ratio = market_cap / fcf_ttm if fcf_ttm > 0 else 0
-        
         ev = market_cap + debt - cash
         ev_ebitda = ev / ebitda_ttm if ebitda_ttm > 0 else 0
-        ps_current = market_cap / revenue_ttm if revenue_ttm > 0 else 0
 
-        # Scénarios
+        # SCÉNARIOS
+        # Bear
         bear_dcf, bear_sales = calculate_valuation(gr_sales_input*0.8, gr_fcf_input*0.8, wacc+0.01, target_ps*0.8, revenue_ttm, fcf_ttm, cash, debt, shares)
+        # Neutral
         base_dcf, base_sales = calculate_valuation(gr_sales_input, gr_fcf_input, wacc, target_ps, revenue_ttm, fcf_ttm, cash, debt, shares)
+        # Bull
         bull_dcf, bull_sales = calculate_valuation(gr_sales_input*1.2, gr_fcf_input*1.2, wacc-0.01, target_ps*1.2, revenue_ttm, fcf_ttm, cash, debt, shares)
 
-        # --- AFFICHAGE ---
+        # ==========================================
+        # AFFICHAGE PRINCIPAL (RESULTATS)
+        # ==========================================
         st.divider()
-        st.write(f"Prix Actuel : **{current_price:.2f} $**")
         
-        tab1, tab2, tab3 = st.tabs(["💵 DCF (Cash)", "📈 Ventes (Growth)", "📊 Ratios"])
+        # 1. EN-TÊTE : PRIX À PAYER AUJOURD'HUI
+        st.subheader("🏷️ Prix à Payer Aujourd'hui")
+        
+        cols_main = st.columns(2)
+        with cols_main[0]:
+            st.metric("Prix Actuel (Marché)", f"{current_price:.2f} $")
+        with cols_main[1]:
+            delta_base = base_dcf - current_price
+            color_delta = "normal" if delta_base > 0 else "off"
+            st.metric("Valeur Intrinsèque (Neutre)", f"{base_dcf:.2f} $", delta=f"{delta_base:.2f} $", delta_color=color_delta)
 
-        with tab1:
-            st.subheader("Modèle DCF")
-            c1, c2, c3 = st.columns(3)
-            c1.metric("🐻 Bear", f"{bear_dcf:.2f} $", delta=f"{bear_dcf-current_price:.1f}", delta_color="normal")
-            c2.metric("🎯 Neutral", f"{base_dcf:.2f} $", delta=f"{base_dcf-current_price:.1f}", delta_color="normal")
-            c3.metric("🐂 Bull", f"{bull_dcf:.2f} $", delta=f"{bull_dcf-current_price:.1f}", delta_color="normal")
+        # 2. SCÉNARIOS INTERACTIFS (THÈSES)
+        st.write("")
+        st.subheader("🔮 Analyse par Scénario")
+        
+        scenario_tab = st.tabs(["🐻 Pessimiste (Bear)", "🎯 Neutre (Base)", "🐂 Optimiste (Bull)"])
 
-        with tab2:
-            st.subheader("Modèle Ventes")
-            c1, c2, c3 = st.columns(3)
-            c1.metric("🐻 Bear", f"{bear_sales:.2f} $", delta=f"{bear_sales-current_price:.1f}", delta_color="normal")
-            c2.metric("🎯 Neutral", f"{base_sales:.2f} $", delta=f"{base_sales-current_price:.1f}", delta_color="normal")
-            c3.metric("🐂 Bull", f"{bull_sales:.2f} $", delta=f"{bull_sales-current_price:.1f}", delta_color="normal")
+        # --- TAB BEAR ---
+        with scenario_tab[0]:
+            st.warning("⚠️ **Thèse Pessimiste**")
+            st.markdown(f"""
+            *La croissance ralentit et les marges se compressent.*
+            - **Croissance Ventes :** {gr_sales_input*0.8*100:.1f}%
+            - **Croissance FCF :** {gr_fcf_input*0.8*100:.1f}%
+            - **Ratio P/S de sortie :** {target_ps*0.8:.1f}x
+            """)
+            col_b1, col_b2 = st.columns(2)
+            col_b1.metric("Prix DCF (Bear)", f"{bear_dcf:.2f} $")
+            col_b2.metric("Prix Ventes (Bear)", f"{bear_sales:.2f} $")
 
-        with tab3:
-            st.subheader("Analyse Fondamentale")
-            r1, r2, r3 = st.columns(3)
-            r1.metric("P/E", f"{pe_ratio:.1f}x" if pe_ratio > 0 else "N/A")
-            r2.metric("P/FCF", f"{pfcf_ratio:.1f}x" if pfcf_ratio > 0 else "N/A")
-            r3.metric("EV/EBITDA", f"{ev_ebitda:.1f}x" if ev_ebitda > 0 else "N/A", help="Enterprise Value / EBITDA. Plus c'est bas, mieux c'est.")
-            
-            st.divider()
-            fcf_margin = (fcf_ttm / revenue_ttm) * 100 if revenue_ttm > 0 else 0
-            rule_40_score = (gr_sales_input * 100) + fcf_margin
-            
-            c_rule, c_net = st.columns(2)
-            with c_rule:
-                st.write("**Rule of 40**")
-                if rule_40_score >= 40: st.success(f"✅ {rule_40_score:.1f}")
-                elif rule_40_score >= 20: st.warning(f"⚠️ {rule_40_score:.1f}")
-                else: st.error(f"❌ {rule_40_score:.1f}")
-            
-            with c_net:
-                # Clarification Position Nette
-                st.write("**Position Nette (Cash - Dette)**")
-                net = cash - debt
-                color = "red" if net < 0 else "green"
-                st.markdown(f":{color}[{net/1e6:.0f} M$]")
-                if net < 0:
-                    st.caption(f"Dette nette : {abs(net)/1e6:.0f} M$")
-                else:
-                    st.caption(f"Cash excédentaire : {net/1e6:.0f} M$")
+        # --- TAB NEUTRAL ---
+        with scenario_tab[1]:
+            st.info("✅ **Thèse Neutre (Vos Hypothèses)**")
+            st.markdown(f"""
+            *L'entreprise performe selon les attentes actuelles.*
+            - **Croissance Ventes :** {gr_sales_input*100:.1f}%
+            - **Croissance FCF :** {gr_fcf_input*100:.1f}%
+            - **Ratio P/S de sortie :** {target_ps:.1f}x
+            """)
+            col_n1, col_n2 = st.columns(2)
+            delta_n = base_dcf - current_price
+            col_n1.metric("Prix DCF (Neutre)", f"{base_dcf:.2f} $", delta=f"{delta_n:.2f}")
+            col_n2.metric("Prix Ventes (Neutre)", f"{base_sales:.2f} $")
+
+        # --- TAB BULL ---
+        with scenario_tab[2]:
+            st.success("🚀 **Thèse Optimiste**")
+            st.markdown(f"""
+            *L'entreprise surperforme, gagne des parts de marché.*
+            - **Croissance Ventes :** {gr_sales_input*1.2*100:.1f}%
+            - **Croissance FCF :** {gr_fcf_input*1.2*100:.1f}%
+            - **Ratio P/S de sortie :** {target_ps*1.2:.1f}x
+            """)
+            col_bu1, col_bu2 = st.columns(2)
+            delta_bu = bull_dcf - current_price
+            col_bu1.metric("Prix DCF (Bull)", f"{bull_dcf:.2f} $", delta=f"{delta_bu:.2f}")
+            col_bu2.metric("Prix Ventes (Bull)", f"{bull_sales:.2f} $")
+
+        # 3. RATIOS & SANTÉ
+        st.divider()
+        st.subheader("📊 Ratios & Santé Financière")
+        
+        r1, r2, r3 = st.columns(3)
+        r1.metric("P/E", f"{pe_ratio:.1f}x" if pe_ratio > 0 else "N/A")
+        r2.metric("EV/EBITDA", f"{ev_ebitda:.1f}x" if ev_ebitda > 0 else "N/A")
+        r3.metric("P/FCF", f"{pfcf_ratio:.1f}x" if pfcf_ratio > 0 else "N/A")
+
+        # Rule of 40 & Dette
+        st.write("")
+        c_rule, c_net = st.columns(2)
+        
+        # Rule of 40
+        fcf_margin = (fcf_ttm / revenue_ttm) * 100 if revenue_ttm > 0 else 0
+        rule_40_score = (gr_sales_input * 100) + fcf_margin
+        with c_rule:
+            st.write("**Rule of 40**")
+            if rule_40_score >= 40: st.success(f"✅ {rule_40_score:.1f}")
+            else: st.warning(f"⚠️ {rule_40_score:.1f}")
+        
+        # Position Nette
+        with c_net:
+            st.write("**Position Nette (Cash - Dette)**")
+            net = cash - debt
+            color = "red" if net < 0 else "green"
+            st.markdown(f":{color}[{net/1e6:.0f} M$]")
+            if net < 0: st.caption("Dette Nette")
+            else: st.caption("Cash Net")
