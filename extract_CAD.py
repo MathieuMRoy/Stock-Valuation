@@ -7,7 +7,47 @@ st.set_page_config(page_title="Valuation Master", page_icon="📱", layout="cent
 st.title("📱 Valuation Master")
 st.caption("3 Modèles : Cash • Ventes • Bénéfices")
 
-# --- 0. DATA : BENCHMARKS (Ajout P/FCF target) ---
+# --- 0. DATA : BASE DE DONNÉES INTELLIGENTE (SEARCH) ---
+# Format : "TICKER - Nom de la compagnie"
+TICKER_DB = [
+    "🔍 Autre (Entrer manuellement)",
+    "--- TECH US (MAGNIFICENT 7) ---",
+    "AAPL - Apple Inc.",
+    "MSFT - Microsoft Corp.",
+    "NVDA - NVIDIA Corp.",
+    "GOOG - Alphabet Inc. (Google)",
+    "AMZN - Amazon.com",
+    "META - Meta Platforms (Facebook)",
+    "TSLA - Tesla Inc.",
+    "--- POPULAIRE & SPACE ---",
+    "MDA.TO - MDA Space (Canada)",
+    "RKLB - Rocket Lab USA",
+    "ASTS - AST SpaceMobile",
+    "PLTR - Palantir Technologies",
+    "NFLX - Netflix",
+    "SPOT - Spotify",
+    "DUOL - Duolingo",
+    "UBER - Uber Technologies",
+    "ABNB - Airbnb",
+    "--- CANADA (TSX) ---",
+    "RY.TO - Royal Bank (RBC)",
+    "TD.TO - TD Bank",
+    "SHOP.TO - Shopify (CAD)",
+    "CNR.TO - CN Rail",
+    "ENB.TO - Enbridge",
+    "BCE.TO - BCE Inc. (Bell)",
+    "DOL.TO - Dollarama",
+    "ATD.TO - Alimentation Couche-Tard",
+    "CSU.TO - Constellation Software",
+    "--- CRYPTO & FINTECH ---",
+    "COIN - Coinbase",
+    "HOOD - Robinhood",
+    "PYPL - PayPal",
+    "SQ - Block (Square)",
+    "MSTR - MicroStrategy"
+]
+
+# --- 1. DATA : BENCHMARKS ---
 PEER_GROUPS = {
     "SPACE_TECH": {
         "tickers": ["MDA", "RKLB", "ASTS", "LUNR", "PL", "SPIR", "SPCE"],
@@ -64,7 +104,7 @@ def get_benchmark_data(ticker, sector_info):
     bench = SECTOR_BENCHMARKS.get(sector_info, SECTOR_BENCHMARKS["Default"])
     return {**bench, "source": "Secteur", "name": sector_info, "peers": "Moyenne du secteur"}
 
-# --- 1. FONCTIONS DATA ---
+# --- 2. FONCTIONS DATA ---
 @st.cache_data(ttl=3600)
 def get_financial_data(ticker):
     try:
@@ -106,7 +146,6 @@ def get_real_shares(info):
     if shares == 0: shares = info.get('sharesOutstanding', 0)
     return shares
 
-# --- FONCTION CALCUL ---
 def calculate_valuation(gr_sales, gr_fcf, gr_eps, wacc_val, ps_target, pe_target, revenue, fcf, eps, cash, debt, shares):
     # DCF
     current_fcf = fcf
@@ -122,36 +161,59 @@ def calculate_valuation(gr_sales, gr_fcf, gr_eps, wacc_val, ps_target, pe_target
     
     return price_dcf, price_sales, price_earnings
 
-# --- HELPER D'ANALYSE RELATIVE ---
 def display_relative_analysis(current, benchmark, metric_name, group_name):
     if current <= 0:
         st.caption(f"Analyse relative impossible (ratio {metric_name} négatif ou nul).")
         return
-
     diff = ((current - benchmark) / benchmark) * 100
-    if diff < -10:
-        box = st.success; status = "Sous-évalué 🟢"; msg = f"décote de {abs(diff):.0f}%"
-    elif diff > 10:
-        box = st.error; status = "Surévalué 🔴"; msg = f"prime de {diff:.0f}%"
-    else:
-        box = st.warning; status = "Juste Valeur 🟡"; msg = "aligné"
-    
-    box(f"**🔍 Analyse Relative :** {ticker} se négocie à **{current:.1f}x** vs Indice **{benchmark}x**.\n\n"
+    if diff < -10: box = st.success; status = "Sous-évalué 🟢"; msg = f"décote de {abs(diff):.0f}%"
+    elif diff > 10: box = st.error; status = "Surévalué 🔴"; msg = f"prime de {diff:.0f}%"
+    else: box = st.warning; status = "Juste Valeur 🟡"; msg = "aligné"
+    box(f"**🔍 Analyse Relative :** {metric_name} actuel **{current:.1f}x** vs Indice **{benchmark}x**.\n\n"
         f"👉 **Verdict : {status}** ({msg} vs {group_name}).")
 
-# --- 2. INTERFACE ---
-ticker = st.text_input("Symbole (Ticker)", value="NFLX").upper()
+# --- 3. INTERFACE ---
 
-if ticker:
-    bs, inc, cf, info = get_financial_data(ticker)
+# >>> NOUVEAU SYSTÈME DE RECHERCHE <<<
+st.subheader("Rechercher une entreprise")
+col_search, col_manual = st.columns([2, 1])
+
+# On utilise une selectbox pour la recherche rapide
+choice = st.selectbox(
+    "Choisir une entreprise populaire :", 
+    TICKER_DB, 
+    index=2 # Met Microsoft par défaut (plus user friendly)
+)
+
+ticker_final = "MSFT" # Valeur par défaut de sécurité
+
+if "Autre" in choice:
+    # Mode Manuel
+    ticker_input = st.text_input("Ou tapez le symbole ici (ex: AMD, GOOGL)", value="").upper()
+    if ticker_input:
+        ticker_final = ticker_input
+else:
+    # Mode Liste (Extraction du ticker avant le tiret)
+    # Ex: "MSFT - Microsoft" -> "MSFT"
+    if "-" in choice:
+        ticker_final = choice.split("-")[0].strip()
+
+# On affiche le ticker sélectionné pour confirmer
+st.caption(f"Analyse en cours pour : **{ticker_final}**")
+st.divider()
+
+# --- EXÉCUTION DE L'ANALYSE ---
+if ticker_final:
+    bs, inc, cf, info = get_financial_data(ticker_final)
     
     if bs is None or inc.empty:
-        st.error("Données introuvables.")
+        st.error(f"Données introuvables pour {ticker_final}. Vérifiez le symbole.")
     else:
         # DATA PREP
         raw_sector = info.get('sector', 'Default')
-        bench_data = get_benchmark_data(ticker, raw_sector)
+        bench_data = get_benchmark_data(ticker_final, raw_sector)
         
+        # AIDE
         with st.expander(f"💡 Aide : {bench_data['name']}", expanded=True):
             if bench_data['source'] == "Comparables": st.write(f"**Pairs :** {bench_data['peers']}")
             else: st.write(f"**Secteur :** {raw_sector}")
@@ -189,7 +251,7 @@ if ticker:
             net_income = get_ttm_flexible(inc, ["NetIncome", "Net Income Common Stockholders"])
             eps_ttm = net_income / shares if shares > 0 else 0
 
-        # RATIOS ACTUELS (Pour analyse relative)
+        # RATIOS ACTUELS
         ps_current = market_cap / revenue_ttm if revenue_ttm > 0 else 0
         pe_current = current_price / eps_ttm if eps_ttm > 0 else 0
         pfcf_current = market_cap / fcf_ttm if fcf_ttm > 0 else 0
@@ -206,10 +268,7 @@ if ticker:
         base_res = run_scenario(1.0, 1.0, 0.0)
         bull_res = run_scenario(1.2, 1.2, -0.01)
 
-        # ==========================================
         # ONGLETS
-        # ==========================================
-        st.divider()
         tabs = st.tabs(["💵 DCF (Cash)", "📈 Ventes (P/S)", "💰 Bénéfices (P/E)", "📊 Scorecard"])
 
         # --- 1. DCF ---
@@ -230,9 +289,9 @@ if ticker:
             c_bull.metric("🐂 Bull", f"{bull_res[0]:.2f} $", delta=f"{bull_res[0]-current_price:.1f}")
 
             st.markdown("##### 📝 Thèses d'Investissement")
-            st.error(f"**🐻 Bear (-20%) :** Croissance FCF ralentie à **{gr_fcf_input*0.8:.1%}**. Le marché doute de la pérennité des cash flows.")
-            st.info(f"**🎯 Neutral :** Scénario central. Croissance FCF de **{gr_fcf_input:.1%}** et WACC de **{wacc:.1%}**.")
-            st.success(f"**🐂 Bull (+20%) :** Exécution parfaite. Croissance FCF accélère à **{gr_fcf_input*1.2:.1%}**.")
+            st.error(f"**🐻 Bear (-20%) :** Croissance FCF ralentie à **{gr_fcf_input*0.8:.1%}**.")
+            st.info(f"**🎯 Neutral :** Croissance FCF de **{gr_fcf_input:.1%}**, WACC **{wacc:.1%}**.")
+            st.success(f"**🐂 Bull (+20%) :** Croissance FCF accélérée à **{gr_fcf_input*1.2:.1%}**.")
 
         # --- 2. VENTES ---
         with tabs[1]:
@@ -251,10 +310,10 @@ if ticker:
             c_base.metric("🎯 Neutral", f"{base_res[1]:.2f} $")
             c_bull.metric("🐂 Bull", f"{bull_res[1]:.2f} $")
 
-            st.markdown("##### 📝 Thèses d'Investissement")
-            st.error(f"**🐻 Bear :** Les multiples se compressent à **{target_ps*0.8:.1f}x** les ventes.")
-            st.info(f"**🎯 Neutral :** L'entreprise maintient son multiple de **{target_ps:.1f}x**.")
-            st.success(f"**🐂 Bull :** Euphorie du marché, multiple de **{target_ps*1.2:.1f}x**.")
+            st.markdown("##### 📝 Thèses")
+            st.error(f"**🐻 Bear :** Multiple P/S de **{target_ps*0.8:.1f}x**.")
+            st.info(f"**🎯 Neutral :** Multiple P/S de **{target_ps:.1f}x**.")
+            st.success(f"**🐂 Bull :** Multiple P/S de **{target_ps*1.2:.1f}x**.")
 
         # --- 3. EARNINGS ---
         with tabs[2]:
@@ -273,14 +332,22 @@ if ticker:
             c_base.metric("🎯 Neutral", f"{base_res[2]:.2f} $")
             c_bull.metric("🐂 Bull", f"{bull_res[2]:.2f} $")
 
-            st.markdown("##### 📝 Thèses d'Investissement")
-            st.error(f"**🐻 Bear :** Croissance EPS faible (**{gr_eps_input*0.8:.1%}**), P/E chute à **{target_pe*0.8:.1f}x**.")
-            st.info(f"**🎯 Neutral :** Croissance EPS solide (**{gr_eps_input:.1%}**), P/E standard de **{target_pe:.1f}x**.")
-            st.success(f"**🐂 Bull :** Marges en hausse (**{gr_eps_input*1.2:.1%}**), P/E premium de **{target_pe*1.2:.1f}x**.")
+            st.markdown("##### 📝 Thèses")
+            st.error(f"**🐻 Bear :** Croissance EPS **{gr_eps_input*0.8:.1%}**, P/E **{target_pe*0.8:.1f}x**.")
+            st.info(f"**🎯 Neutral :** Croissance EPS **{gr_eps_input:.1%}**, P/E **{target_pe:.1f}x**.")
+            st.success(f"**🐂 Bull :** Croissance EPS **{gr_eps_input*1.2:.1%}**, P/E **{target_pe*1.2:.1f}x**.")
 
         # --- 4. SCORECARD ---
         with tabs[3]:
-            # Scores
+            st.subheader("Ratios Actuels")
+            r1, r2, r3 = st.columns(3)
+            r1.metric("P/E (TTM)", f"{pe_current:.1f}x")
+            r2.metric("P/FCF", f"{pfcf_current:.1f}x")
+            net_pos = cash - debt
+            color = "red" if net_pos < 0 else "green"
+            r3.markdown(f"**Net Cash:** :{color}[{net_pos/1e6:.0f} M$]")
+            
+            st.divider()
             fcf_margin = (fcf_ttm / revenue_ttm) * 100 if revenue_ttm > 0 else 0
             fcf_yield = (fcf_ttm / market_cap) * 100 if market_cap > 0 else 0
             rule_40 = (gr_sales_input * 100) + fcf_margin
@@ -292,23 +359,15 @@ if ticker:
                 st.caption("Rule of 40")
                 if rule_40 >= 40: st.success(f"✅ {rule_40:.1f}")
                 else: st.warning(f"⚠️ {rule_40:.1f}")
-                with st.expander("Guide d'interprétation"):
-                    st.write(f"**Calcul :** Croiss. {gr_sales_input*100:.1f}% + Marge {fcf_margin:.1f}%")
-                    st.markdown("""
-                    * 🟢 **> 40 : Excellent** (Hyper-croissance efficace)
-                    * 🟡 **20 - 40 : Moyen** (À surveiller)
-                    * 🔴 **< 20 : Faible** (Inefficace)
-                    """)
+                with st.expander("Guide"):
+                    st.write("Croissance + Marge FCF")
+                    st.write("Cible > 40")
 
             with col_score2:
                 st.markdown("#### 🛡️ Stabilité")
                 st.caption("Rendement Total")
                 if total_return >= 12: st.success(f"✅ {total_return:.1f}%")
                 else: st.warning(f"⚠️ {total_return:.1f}%")
-                with st.expander("Guide d'interprétation"):
-                    st.write(f"**Calcul :** Yield {fcf_yield:.1f}% + Croiss. {gr_eps_input*100:.1f}%")
-                    st.markdown("""
-                    * 🟢 **> 12% : Excellent** (Bat le marché)
-                    * 🟡 **8 - 12% : Correct** (Moyenne marché)
-                    * 🔴 **< 8% : Faible** (Sous-performance)
-                    """)
+                with st.expander("Guide"):
+                    st.write("Yield FCF + Croissance")
+                    st.write("Cible > 12%")
