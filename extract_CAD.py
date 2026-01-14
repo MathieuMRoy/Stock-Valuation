@@ -2,111 +2,47 @@ import streamlit as st
 import yfinance as yf
 import pandas as pd
 
-# --- CONFIGURATION DE LA PAGE ---
+# --- CONFIGURATION ---
 st.set_page_config(page_title="Valuation Master", page_icon="📱", layout="centered")
 st.title("📱 Valuation Master")
 st.caption("3 Modèles : Cash • Ventes • Bénéfices")
 
-# --- 0. DATA : BASE DE DONNÉES ÉTENDUE ---
+# --- 0. DATA : BENCHMARKS ---
 PEER_GROUPS = {
-    # --- TECH & CROISSANCE ---
     "SPACE_TECH": {
         "tickers": ["MDA", "RKLB", "ASTS", "LUNR", "PL", "SPIR", "SPCE"],
         "gr_sales": 0.20, "gr_fcf": 0.25, "gr_eps": 0.25, "ps": 6.0, "pe": 40.0, "wacc": 0.11,
         "name": "Space Tech & Satellites"
     },
-    "CYBERSECURITY": {
-        "tickers": ["CRWD", "PANW", "FTNT", "ZS", "OKTA", "S", "CYBR"],
-        "gr_sales": 0.22, "gr_fcf": 0.25, "gr_eps": 0.25, "ps": 9.0, "pe": 45.0, "wacc": 0.095,
-        "name": "Cybersécurité"
-    },
     "SEMICONDUCTORS": {
-        "tickers": ["NVDA", "AMD", "INTC", "TSM", "AVGO", "QCOM", "MU", "TXN"],
-        "gr_sales": 0.15, "gr_fcf": 0.18, "gr_eps": 0.18, "ps": 7.0, "pe": 30.0, "wacc": 0.10,
+        "tickers": ["NVDA", "AMD", "INTC", "TSM", "AVGO", "QCOM"],
+        "gr_sales": 0.18, "gr_fcf": 0.20, "gr_eps": 0.20, "ps": 8.0, "pe": 35.0, "wacc": 0.10,
         "name": "Semi-conducteurs & AI"
-    },
-    "SAAS_CLOUD": {
-        "tickers": ["CRM", "ADBE", "SNOW", "DDOG", "PLTR", "NOW", "SHOP", "DUOL", "HUBS"],
-        "gr_sales": 0.18, "gr_fcf": 0.22, "gr_eps": 0.25, "ps": 8.0, "pe": 35.0, "wacc": 0.10,
-        "name": "Logiciel SaaS & Cloud"
     },
     "BIG_TECH": {
         "tickers": ["AAPL", "MSFT", "GOOG", "GOOGL", "AMZN", "META"],
-        "gr_sales": 0.12, "gr_fcf": 0.15, "gr_eps": 0.15, "ps": 6.0, "pe": 25.0, "wacc": 0.09,
+        "gr_sales": 0.12, "gr_fcf": 0.15, "gr_eps": 0.15, "ps": 6.5, "pe": 25.0, "wacc": 0.09,
         "name": "Big Tech / GAFAM"
     },
-    "FINTECH": {
-        "tickers": ["SQ", "PYPL", "COIN", "HOOD", "SOFI", "AFRM", "NVEI", "TOST"],
-        "gr_sales": 0.15, "gr_fcf": 0.18, "gr_eps": 0.20, "ps": 3.5, "pe": 25.0, "wacc": 0.11,
-        "name": "Fintech & Paiements"
+    "SAAS_CLOUD": {
+        "tickers": ["CRM", "ADBE", "SNOW", "DDOG", "PLTR", "NOW", "SHOP", "DUOL"],
+        "gr_sales": 0.20, "gr_fcf": 0.22, "gr_eps": 0.25, "ps": 10.0, "pe": 40.0, "wacc": 0.10,
+        "name": "Logiciel SaaS & Cloud"
     },
-
-    # --- CONSOMMATION & LUXE ---
-    "LUXURY": {
-        "tickers": ["MC", "RMS", "KER", "RACE", "CFR", "LVMH"],
-        "gr_sales": 0.08, "gr_fcf": 0.10, "gr_eps": 0.12, "ps": 4.5, "pe": 28.0, "wacc": 0.085,
-        "name": "Luxe (Pricing Power fort)"
-    },
-    "E_COMMERCE": {
-        "tickers": ["MELI", "SE", "JD", "BABA", "PDD", "ETSY", "EBAY"],
-        "gr_sales": 0.10, "gr_fcf": 0.12, "gr_eps": 0.15, "ps": 2.5, "pe": 20.0, "wacc": 0.10,
-        "name": "E-Commerce Global"
+    "STREAMING": {
+        "tickers": ["NFLX", "DIS", "WBD", "PARA", "SPOT"],
+        "gr_sales": 0.10, "gr_fcf": 0.15, "gr_eps": 0.18, "ps": 4.0, "pe": 25.0, "wacc": 0.09,
+        "name": "Streaming & Média"
     },
     "EV_AUTO": {
-        "tickers": ["TSLA", "RIVN", "LCID", "BYD", "NIO", "XPEV"],
-        "gr_sales": 0.20, "gr_fcf": 0.15, "gr_eps": 0.20, "ps": 3.0, "pe": 35.0, "wacc": 0.12,
+        "tickers": ["TSLA", "RIVN", "LCID", "BYD", "F", "GM"],
+        "gr_sales": 0.15, "gr_fcf": 0.12, "gr_eps": 0.15, "ps": 3.0, "pe": 30.0, "wacc": 0.11,
         "name": "Véhicules Électriques"
     },
-    "AUTO_LEGACY": {
-        "tickers": ["F", "GM", "TM", "STLA", "HMC", "VOW"],
-        "gr_sales": 0.03, "gr_fcf": 0.02, "gr_eps": 0.04, "ps": 0.4, "pe": 6.0, "wacc": 0.09,
-        "name": "Constructeurs Auto"
-    },
-
-    # --- SANTÉ ---
-    "PHARMA_BIG": {
-        "tickers": ["LLY", "NVO", "JNJ", "PFE", "MRK", "ABBV", "AZN"],
-        "gr_sales": 0.05, "gr_fcf": 0.06, "gr_eps": 0.08, "ps": 4.0, "pe": 18.0, "wacc": 0.075,
-        "name": "Big Pharma"
-    },
-    "BIOTECH_GROWTH": {
-        "tickers": ["VRTX", "REGN", "BNTX", "MRNA", "CRSP"],
-        "gr_sales": 0.12, "gr_fcf": 0.10, "gr_eps": 0.15, "ps": 6.0, "pe": 25.0, "wacc": 0.10,
-        "name": "Biotech Croissance"
-    },
-
-    # --- INDUSTRIE & ÉNERGIE ---
-    "DEFENSE": {
-        "tickers": ["LMT", "RTX", "NOC", "GD", "BA", "THALES"],
-        "gr_sales": 0.05, "gr_fcf": 0.06, "gr_eps": 0.08, "ps": 1.8, "pe": 18.0, "wacc": 0.075,
-        "name": "Défense & Aérospatial"
-    },
-    "CLEAN_ENERGY": {
-        "tickers": ["ENPH", "SEDG", "FSLR", "NEE", "BE", "PLUG"],
-        "gr_sales": 0.15, "gr_fcf": 0.12, "gr_eps": 0.15, "ps": 4.0, "pe": 30.0, "wacc": 0.095,
-        "name": "Énergie Renouvelable"
-    },
-    "OIL_GAS_MAJORS": {
-        "tickers": ["XOM", "CVX", "SHEL", "TTE", "BP", "SU", "CNQ"],
-        "gr_sales": 0.02, "gr_fcf": 0.04, "gr_eps": 0.05, "ps": 1.2, "pe": 10.0, "wacc": 0.09,
-        "name": "Pétrole & Gaz (Majors)"
-    },
-
-    # --- SPÉCIFIQUE CANADA ---
     "BANKS_CA": {
         "tickers": ["RY", "TD", "BMO", "BNS", "CM", "NA"],
         "gr_sales": 0.04, "gr_fcf": 0.05, "gr_eps": 0.06, "ps": 2.5, "pe": 11.0, "wacc": 0.08,
         "name": "Banques Canadiennes"
-    },
-    "TELCO_CA": {
-        "tickers": ["BCE", "T", "RCI", "QBR"],
-        "gr_sales": 0.03, "gr_fcf": 0.04, "gr_eps": 0.05, "ps": 1.8, "pe": 15.0, "wacc": 0.07,
-        "name": "Télécoms Canadiens"
-    },
-    "RAIL_CA": {
-        "tickers": ["CNR", "CP"],
-        "gr_sales": 0.05, "gr_fcf": 0.08, "gr_eps": 0.10, "ps": 5.0, "pe": 22.0, "wacc": 0.075,
-        "name": "Chemin de Fer (Monopole)"
     }
 }
 
@@ -117,20 +53,14 @@ SECTOR_BENCHMARKS = {
     "Healthcare": {"gr_sales": 0.05, "gr_fcf": 0.06, "gr_eps": 0.08, "ps": 4.0, "pe": 22.0, "wacc": 0.08},
     "Financial Services": {"gr_sales": 0.05, "gr_fcf": 0.05, "gr_eps": 0.06, "ps": 2.5, "pe": 12.0, "wacc": 0.09},
     "Energy": {"gr_sales": 0.03, "gr_fcf": 0.05, "gr_eps": 0.05, "ps": 1.5, "pe": 10.0, "wacc": 0.10},
-    "Industrials": {"gr_sales": 0.04, "gr_fcf": 0.05, "gr_eps": 0.06, "ps": 1.5, "pe": 15.0, "wacc": 0.09},
     "Default": {"gr_sales": 0.07, "gr_fcf": 0.08, "gr_eps": 0.08, "ps": 2.5, "pe": 15.0, "wacc": 0.09}
 }
 
 def get_benchmark_data(ticker, sector_info):
-    # Nettoyage intelligent du ticker pour matcher la liste (ex: MDA.TO -> MDA)
     ticker_clean = ticker.upper().replace(".TO", "").replace("-B", "").replace(".UN", "")
-    
-    # 1. Recherche par Ticker dans les Groupes
     for group_key, data in PEER_GROUPS.items():
-        if ticker_clean in data['tickers']:
-            return {**data, "source": "Comparables", "peers": ", ".join(data['tickers'][:5])}
-            
-    # 2. Fallback Secteur
+        if any(t in ticker_clean for t in data['tickers']):
+            return {**data, "source": "Comparables", "peers": ", ".join(data['tickers'][:4])}
     bench = SECTOR_BENCHMARKS.get(sector_info, SECTOR_BENCHMARKS["Default"])
     return {**bench, "source": "Secteur", "name": sector_info, "peers": "Moyenne du secteur"}
 
@@ -178,21 +108,41 @@ def get_real_shares(info):
 
 # --- FONCTION CALCUL ---
 def calculate_valuation(gr_sales, gr_fcf, gr_eps, wacc_val, ps_target, pe_target, revenue, fcf, eps, cash, debt, shares):
-    # DCF
     current_fcf = fcf
     fcf_projections = [current_fcf * (1 + gr_fcf)**(i+1) for i in range(5)]
     terminal_val = (fcf_projections[-1] * 1.03) / (wacc_val - 0.03)
     pv_fcf = sum([val / ((1 + wacc_val)**(i+1)) for i, val in enumerate(fcf_projections)])
     price_dcf = ((pv_fcf + (terminal_val / ((1 + wacc_val)**5))) + cash - debt) / shares
-    
-    # Ventes
     price_sales = (((revenue * ((1 + gr_sales)**5)) * ps_target) / shares) / (1.10**5)
-    
-    # Bénéfices (P/E)
     eps_future = eps * ((1 + gr_eps)**5)
     price_earnings = (eps_future * pe_target) / (1.10**5)
-    
     return price_dcf, price_sales, price_earnings
+
+# --- HELPER D'ANALYSE RELATIVE ---
+def display_relative_analysis(current, benchmark, metric_name, group_name):
+    if current <= 0:
+        st.caption(f"Analyse relative impossible (ratio {metric_name} négatif ou nul).")
+        return
+
+    diff = ((current - benchmark) / benchmark) * 100
+    
+    if diff < -10:
+        status = "Sous-évalué 🟢"
+        msg = f"se négocie avec une **décote de {abs(diff):.1f}%** par rapport à son industrie."
+        box = st.success
+    elif diff > 10:
+        status = "Surévalué 🔴"
+        msg = f"se négocie avec une **prime de {diff:.1f}%** par rapport à son industrie."
+        box = st.error
+    else:
+        status = "Juste Valeur 🟡"
+        msg = "est aligné avec la moyenne de son industrie."
+        box = st.warning
+    
+    box(f"**🔍 Analyse Relative ({group_name})**\n\n"
+        f"Moyenne secteur : **{benchmark}x** vs {ticker} : **{current:.1f}x**.\n\n"
+        f"👉 **Verdict : {status}**\n\n"
+        f"{ticker} {msg}")
 
 # --- 2. INTERFACE ---
 ticker = st.text_input("Symbole (Ticker)", value="NFLX").upper()
@@ -253,12 +203,16 @@ if ticker:
                 revenue_ttm, fcf_ttm, eps_ttm, cash, debt, shares
             )
 
-        bear_res = run_scenario(0.8, 0.8, 0.01)   # -20%
-        base_res = run_scenario(1.0, 1.0, 0.0)    # Neutral
-        bull_res = run_scenario(1.2, 1.2, -0.01)  # +20%
+        bear_res = run_scenario(0.8, 0.8, 0.01)
+        base_res = run_scenario(1.0, 1.0, 0.0)
+        bull_res = run_scenario(1.2, 1.2, -0.01)
+
+        # RATIOS ACTUELS
+        ps_current = market_cap / revenue_ttm if revenue_ttm > 0 else 0
+        pe_current = current_price / eps_ttm if eps_ttm > 0 else 0
 
         # ==========================================
-        # AFFICHAGE PAR ONGLETS (PRIX DYNAMIQUE)
+        # ONGLETS
         # ==========================================
         st.divider()
         tabs = st.tabs(["💵 DCF (Cash)", "📈 Ventes (P/S)", "💰 Bénéfices (P/E)", "📊 Scorecard"])
@@ -273,17 +227,15 @@ if ticker:
             
             st.info("ℹ️ **DCF :** Pour les entreprises rentables (Cash Flow).")
             
-            # Scénarios
             c_bear, c_base, c_bull = st.columns(3)
             c_bear.metric("🐻 Bear", f"{bear_res[0]:.2f} $", delta=f"{bear_res[0]-current_price:.1f}")
             c_base.metric("🎯 Neutral", f"{base_res[0]:.2f} $", delta=f"{base_res[0]-current_price:.1f}")
             c_bull.metric("🐂 Bull", f"{bull_res[0]:.2f} $", delta=f"{bull_res[0]-current_price:.1f}")
 
-            # Thèses
             st.markdown("##### 📝 Thèses d'Investissement")
-            st.error(f"**🐻 Bear (-20%) :** Croissance FCF ralentie à **{gr_fcf_input*0.8:.1%}**. Le marché doute de la pérennité des cash flows.")
-            st.info(f"**🎯 Neutral :** Scénario central. Croissance FCF de **{gr_fcf_input:.1%}** et WACC de **{wacc:.1%}**.")
-            st.success(f"**🐂 Bull (+20%) :** Exécution parfaite. Croissance FCF de **{gr_fcf_input*1.2:.1%}**.")
+            st.error(f"**🐻 Bear :** Croissance FCF ralentie à **{gr_fcf_input*0.8:.1%}**.")
+            st.info(f"**🎯 Neutral :** Croissance FCF de **{gr_fcf_input:.1%}**, WACC **{wacc:.1%}**.")
+            st.success(f"**🐂 Bull :** Croissance FCF accélérée à **{gr_fcf_input*1.2:.1%}**.")
 
         # --- 2. VENTES ---
         with tabs[1]:
@@ -293,19 +245,18 @@ if ticker:
             delta = base_res[1] - current_price
             c2.metric("Intrinsèque (Neutre)", f"{base_res[1]:.2f} $", delta=f"{delta:.2f} $", delta_color="normal")
             
-            st.info("ℹ️ **Ventes :** Pour les entreprises en hyper-croissance (pas encore rentables).")
+            # --- ANALYSE RELATIVE P/S ---
+            st.write("")
+            display_relative_analysis(ps_current, bench_data['ps'], "P/S (Prix/Ventes)", bench_data['name'])
+            st.divider()
             
-            # Scénarios
             c_bear, c_base, c_bull = st.columns(3)
-            c_bear.metric("🐻 Bear", f"{bear_res[1]:.2f} $", delta=f"{bear_res[1]-current_price:.1f}")
-            c_base.metric("🎯 Neutral", f"{base_res[1]:.2f} $", delta=f"{base_res[1]-current_price:.1f}")
-            c_bull.metric("🐂 Bull", f"{bull_res[1]:.2f} $", delta=f"{bull_res[1]-current_price:.1f}")
+            c_bear.metric("🐻 Bear", f"{bear_res[1]:.2f} $")
+            c_base.metric("🎯 Neutral", f"{base_res[1]:.2f} $")
+            c_bull.metric("🐂 Bull", f"{bull_res[1]:.2f} $")
 
-            # Thèses
-            st.markdown("##### 📝 Thèses d'Investissement")
-            st.error(f"**🐻 Bear :** Les multiples se compressent à **{target_ps*0.8:.1f}x** les ventes.")
-            st.info(f"**🎯 Neutral :** L'entreprise maintient son multiple de **{target_ps:.1f}x**.")
-            st.success(f"**🐂 Bull :** Euphorie du marché, multiple de **{target_ps*1.2:.1f}x**.")
+            st.markdown("##### 📝 Thèses")
+            st.info(f"**🎯 Neutral :** Multiple P/S futur de **{target_ps:.1f}x**.")
 
         # --- 3. EARNINGS ---
         with tabs[2]:
@@ -314,37 +265,32 @@ if ticker:
             c1.metric("Prix Actuel", f"{current_price:.2f} $")
             delta = base_res[2] - current_price
             c2.metric("Intrinsèque (Neutre)", f"{base_res[2]:.2f} $", delta=f"{delta:.2f} $", delta_color="normal")
-            
-            st.info("ℹ️ **Bénéfices :** Modèle classique (Peter Lynch). Focus sur le bénéfice net.")
-            
-            # Scénarios
-            c_bear, c_base, c_bull = st.columns(3)
-            c_bear.metric("🐻 Bear", f"{bear_res[2]:.2f} $", delta=f"{bear_res[2]-current_price:.1f}")
-            c_base.metric("🎯 Neutral", f"{base_res[2]:.2f} $", delta=f"{base_res[2]-current_price:.1f}")
-            c_bull.metric("🐂 Bull", f"{bull_res[2]:.2f} $", delta=f"{bull_res[2]-current_price:.1f}")
 
-            # Thèses
-            st.markdown("##### 📝 Thèses d'Investissement")
-            st.error(f"**🐻 Bear :** Croissance EPS faible (**{gr_eps_input*0.8:.1%}**), P/E chute à **{target_pe*0.8:.1f}x**.")
-            st.info(f"**🎯 Neutral :** Croissance EPS solide (**{gr_eps_input:.1%}**), P/E standard de **{target_pe:.1f}x**.")
-            st.success(f"**🐂 Bull :** Marges en hausse (**{gr_eps_input*1.2:.1%}**), P/E premium de **{target_pe*1.2:.1f}x**.")
+            # --- ANALYSE RELATIVE P/E ---
+            st.write("")
+            display_relative_analysis(pe_current, bench_data.get('pe', 20), "P/E (Prix/Bénéfices)", bench_data['name'])
+            st.divider()
+            
+            c_bear, c_base, c_bull = st.columns(3)
+            c_bear.metric("🐻 Bear", f"{bear_res[2]:.2f} $")
+            c_base.metric("🎯 Neutral", f"{base_res[2]:.2f} $")
+            c_bull.metric("🐂 Bull", f"{bull_res[2]:.2f} $")
+
+            st.markdown("##### 📝 Thèses")
+            st.info(f"**🎯 Neutral :** Multiple P/E futur de **{target_pe:.1f}x**.")
 
         # --- 4. SCORECARD ---
         with tabs[3]:
-            # Ratios
-            pe_ratio = current_price / eps_ttm if eps_ttm > 0 else 0
-            pfcf_ratio = market_cap / fcf_ttm if fcf_ttm > 0 else 0
             st.subheader("Ratios Actuels")
             r1, r2, r3 = st.columns(3)
-            r1.metric("P/E (TTM)", f"{pe_ratio:.1f}x")
-            r2.metric("P/FCF", f"{pfcf_ratio:.1f}x")
+            r1.metric("P/E (TTM)", f"{pe_current:.1f}x")
+            r2.metric("P/FCF", f"{market_cap/fcf_ttm if fcf_ttm>0 else 0:.1f}x")
             net_pos = cash - debt
             color = "red" if net_pos < 0 else "green"
             r3.markdown(f"**Net Cash:** :{color}[{net_pos/1e6:.0f} M$]")
             
             st.divider()
             
-            # Scores
             fcf_margin = (fcf_ttm / revenue_ttm) * 100 if revenue_ttm > 0 else 0
             fcf_yield = (fcf_ttm / market_cap) * 100 if market_cap > 0 else 0
             rule_40 = (gr_sales_input * 100) + fcf_margin
@@ -353,22 +299,14 @@ if ticker:
             col_score1, col_score2 = st.columns(2)
             with col_score1:
                 st.markdown("#### 🚀 Croissance")
-                st.caption("Rule of 40 (SaaS)")
+                st.caption("Rule of 40")
                 if rule_40 >= 40: st.success(f"✅ {rule_40:.1f}")
-                elif rule_40 >= 20: st.warning(f"⚠️ {rule_40:.1f}")
-                else: st.error(f"❌ {rule_40:.1f}")
-                
-                with st.expander("Comprendre"):
-                    st.write(f"Croissance ({gr_sales_input*100:.1f}%) + Marge FCF ({fcf_margin:.1f}%)")
-                    st.write("Si > 40 : Excellent équilibre.")
+                else: st.warning(f"⚠️ {rule_40:.1f}")
+                with st.expander("Détails"): st.write(f"Croissance ({gr_sales_input*100:.1f}%) + Marge ({fcf_margin:.1f}%)")
 
             with col_score2:
                 st.markdown("#### 🛡️ Stabilité")
                 st.caption("Rendement Total")
                 if total_return >= 12: st.success(f"✅ {total_return:.1f}%")
-                elif total_return >= 8: st.warning(f"⚠️ {total_return:.1f}%")
-                else: st.error(f"❌ {total_return:.1f}%")
-                
-                with st.expander("Comprendre"):
-                    st.write(f"Rendement FCF ({fcf_yield:.1f}%) + Croissance ({gr_fcf_input*100:.1f}%)")
-                    st.write("Si > 12% : Bat souvent le marché.")
+                else: st.warning(f"⚠️ {total_return:.1f}%")
+                with st.expander("Détails"): st.write(f"Yield ({fcf_yield:.1f}%) + Croissance ({gr_eps_input*100:.1f}%)")
