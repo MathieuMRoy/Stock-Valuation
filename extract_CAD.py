@@ -121,7 +121,6 @@ if ticker:
                 wacc = st.number_input("WACC", value=bench_data['wacc'], step=0.005)
                 target_ps = st.number_input("P/S Cible", value=bench_data['ps'], step=0.5)
             
-            # Tableau Spread
             st.divider()
             st.caption("Scénarios calculés (+/- 20%) :")
             st.table(pd.DataFrame({
@@ -150,14 +149,14 @@ if ticker:
         pe_ratio = current_price / eps if eps > 0 else 0
         pfcf_ratio = market_cap / fcf_ttm if fcf_ttm > 0 else 0
         
-        # RESULTATS
+        # RESULTATS PRINCIPAUX
         st.divider()
         st.subheader("🏷️ Prix à Payer")
         c1, c2 = st.columns(2)
         c1.metric("Prix Actuel", f"{current_price:.2f} $")
         c2.metric("Intrinsèque (Neutre)", f"{base_dcf:.2f} $", delta=f"{base_dcf-current_price:.2f} $")
 
-        # ONGLETS
+        # ONGLETS DE DÉTAIL
         tab_dcf, tab_sales, tab_ratios = st.tabs(["💵 DCF (Cash)", "📈 Ventes (Growth)", "📊 Scorecard"])
 
         with tab_dcf:
@@ -165,17 +164,34 @@ if ticker:
             c1.metric("🐻 Bear", f"{bear_dcf:.2f} $", delta=f"{bear_dcf-current_price:.1f}")
             c2.metric("🎯 Neutral", f"{base_dcf:.2f} $", delta=f"{base_dcf-current_price:.1f}")
             c3.metric("🐂 Bull", f"{bull_dcf:.2f} $", delta=f"{bull_dcf-current_price:.1f}")
+            
             st.info("ℹ️ **DCF :** Pour les entreprises qui génèrent déjà des profits (Cash Flow).")
+            
+            # AJOUT: Thèses Détaillées DCF
+            with st.expander("📖 Lire les Thèses d'Investissement (DCF)", expanded=True):
+                st.markdown(f"""
+                🔴 **Bear :** Croissance FCF ralentie à **{gr_fcf_input*0.8*100:.1f}%**, risque accru (WACC **{wacc+0.01:.1%}**).
+                🟡 **Neutral :** Croissance FCF stable à **{gr_fcf_input*100:.1f}%**, WACC **{wacc:.1%}**.
+                🟢 **Bull :** Croissance FCF accélérée à **{gr_fcf_input*1.2*100:.1f}%**, risque réduit (WACC **{wacc-0.01:.1%}**).
+                """)
 
         with tab_sales:
             c1, c2, c3 = st.columns(3)
             c1.metric("🐻 Bear", f"{bear_sales:.2f} $", delta=f"{bear_sales-current_price:.1f}")
             c2.metric("🎯 Neutral", f"{base_sales:.2f} $", delta=f"{base_sales-current_price:.1f}")
             c3.metric("🐂 Bull", f"{bull_sales:.2f} $", delta=f"{bull_sales-current_price:.1f}")
+            
             st.info("ℹ️ **Ventes :** Pour les entreprises en croissance qui ne font pas encore de profits.")
+            
+            # AJOUT: Thèses Détaillées Ventes
+            with st.expander("📖 Lire les Thèses d'Investissement (Ventes)", expanded=True):
+                st.markdown(f"""
+                🔴 **Bear :** Croissance Ventes ralentie à **{gr_sales_input*0.8*100:.1f}%**, multiple P/S compressé à **{target_ps*0.8:.1f}x**.
+                🟡 **Neutral :** Croissance Ventes de **{gr_sales_input*100:.1f}%**, multiple P/S historique de **{target_ps:.1f}x**.
+                🟢 **Bull :** Hyper-croissance Ventes de **{gr_sales_input*1.2*100:.1f}%**, euphorie sur le multiple à **{target_ps*1.2:.1f}x**.
+                """)
 
         with tab_ratios:
-            # 1. RATIOS CLASSIQUES
             st.subheader("Fondamentaux")
             r1, r2, r3 = st.columns(3)
             r1.metric("P/E", f"{pe_ratio:.1f}x" if pe_ratio > 0 else "N/A")
@@ -185,31 +201,20 @@ if ticker:
             r3.markdown(f"**Net Cash:** :{color_net}[{net_pos/1e6:.0f} M$]")
 
             st.divider()
-
-            # 2. SCORING AVANCÉ (Rule of 40 vs Total Return)
             st.subheader("🏆 Scoring de Qualité")
-            
-            # Calculs
             fcf_margin = (fcf_ttm / revenue_ttm) * 100 if revenue_ttm > 0 else 0
             fcf_yield = (fcf_ttm / market_cap) * 100 if market_cap > 0 else 0
-            
-            # Score 1 : Rule of 40 (Growth)
             rule_40 = (gr_sales_input * 100) + fcf_margin
-            
-            # Score 2 : Total Return (Stable)
             total_return = (gr_fcf_input * 100) + fcf_yield
 
             col_score1, col_score2 = st.columns(2)
-            
             with col_score1:
                 st.markdown("#### 🚀 Pour la Croissance")
                 st.caption("Règle des 40 (SaaS / Tech)")
                 if rule_40 >= 40: st.success(f"✅ Score : {rule_40:.1f}")
                 elif rule_40 >= 20: st.warning(f"⚠️ Score : {rule_40:.1f}")
                 else: st.error(f"❌ Score : {rule_40:.1f}")
-                with st.expander("Explication"):
-                    st.write(f"Croissance ({gr_sales_input*100:.1f}%) + Marge FCF ({fcf_margin:.1f}%)")
-                    st.write("**Cible : > 40**")
+                with st.expander("Explication"): st.write(f"Croissance ({gr_sales_input*100:.1f}%) + Marge FCF ({fcf_margin:.1f}%) > 40")
 
             with col_score2:
                 st.markdown("#### 🛡️ Pour la Stabilité")
@@ -217,6 +222,4 @@ if ticker:
                 if total_return >= 12: st.success(f"✅ Score : {total_return:.1f}%")
                 elif total_return >= 8: st.warning(f"⚠️ Score : {total_return:.1f}%")
                 else: st.error(f"❌ Score : {total_return:.1f}%")
-                with st.expander("Explication"):
-                    st.write(f"Rendement FCF ({fcf_yield:.1f}%) + Croissance ({gr_fcf_input*100:.1f}%)")
-                    st.write("**Cible : > 10-12%**")
+                with st.expander("Explication"): st.write(f"Rendement FCF ({fcf_yield:.1f}%) + Croissance ({gr_fcf_input*100:.1f}%) > 12%")
