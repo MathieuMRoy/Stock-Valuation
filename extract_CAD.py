@@ -2,42 +2,111 @@ import streamlit as st
 import yfinance as yf
 import pandas as pd
 
-# --- CONFIGURATION ---
+# --- CONFIGURATION DE LA PAGE ---
 st.set_page_config(page_title="Valuation Master", page_icon="📱", layout="centered")
 st.title("📱 Valuation Master")
 st.caption("3 Modèles : Cash • Ventes • Bénéfices")
 
-# --- 0. DATA : BENCHMARKS ---
+# --- 0. DATA : BASE DE DONNÉES ÉTENDUE ---
 PEER_GROUPS = {
+    # --- TECH & CROISSANCE ---
+    "SPACE_TECH": {
+        "tickers": ["MDA", "RKLB", "ASTS", "LUNR", "PL", "SPIR", "SPCE"],
+        "gr_sales": 0.20, "gr_fcf": 0.25, "gr_eps": 0.25, "ps": 6.0, "pe": 40.0, "wacc": 0.11,
+        "name": "Space Tech & Satellites"
+    },
+    "CYBERSECURITY": {
+        "tickers": ["CRWD", "PANW", "FTNT", "ZS", "OKTA", "S", "CYBR"],
+        "gr_sales": 0.22, "gr_fcf": 0.25, "gr_eps": 0.25, "ps": 9.0, "pe": 45.0, "wacc": 0.095,
+        "name": "Cybersécurité"
+    },
     "SEMICONDUCTORS": {
-        "tickers": ["NVDA", "AMD", "INTC", "TSM", "AVGO", "QCOM"],
-        "gr_sales": 0.18, "gr_fcf": 0.20, "gr_eps": 0.20, "ps": 8.0, "pe": 35.0, "wacc": 0.10,
+        "tickers": ["NVDA", "AMD", "INTC", "TSM", "AVGO", "QCOM", "MU", "TXN"],
+        "gr_sales": 0.15, "gr_fcf": 0.18, "gr_eps": 0.18, "ps": 7.0, "pe": 30.0, "wacc": 0.10,
         "name": "Semi-conducteurs & AI"
+    },
+    "SAAS_CLOUD": {
+        "tickers": ["CRM", "ADBE", "SNOW", "DDOG", "PLTR", "NOW", "SHOP", "DUOL", "HUBS"],
+        "gr_sales": 0.18, "gr_fcf": 0.22, "gr_eps": 0.25, "ps": 8.0, "pe": 35.0, "wacc": 0.10,
+        "name": "Logiciel SaaS & Cloud"
     },
     "BIG_TECH": {
         "tickers": ["AAPL", "MSFT", "GOOG", "GOOGL", "AMZN", "META"],
-        "gr_sales": 0.12, "gr_fcf": 0.15, "gr_eps": 0.15, "ps": 6.5, "pe": 25.0, "wacc": 0.09,
+        "gr_sales": 0.12, "gr_fcf": 0.15, "gr_eps": 0.15, "ps": 6.0, "pe": 25.0, "wacc": 0.09,
         "name": "Big Tech / GAFAM"
     },
-    "SAAS_CLOUD": {
-        "tickers": ["CRM", "ADBE", "SNOW", "DDOG", "PLTR", "NOW", "SHOP", "DUOL"],
-        "gr_sales": 0.20, "gr_fcf": 0.22, "gr_eps": 0.25, "ps": 10.0, "pe": 40.0, "wacc": 0.10,
-        "name": "Logiciel SaaS & Cloud"
+    "FINTECH": {
+        "tickers": ["SQ", "PYPL", "COIN", "HOOD", "SOFI", "AFRM", "NVEI", "TOST"],
+        "gr_sales": 0.15, "gr_fcf": 0.18, "gr_eps": 0.20, "ps": 3.5, "pe": 25.0, "wacc": 0.11,
+        "name": "Fintech & Paiements"
     },
-    "STREAMING": {
-        "tickers": ["NFLX", "DIS", "WBD", "PARA", "SPOT"],
-        "gr_sales": 0.10, "gr_fcf": 0.15, "gr_eps": 0.18, "ps": 4.0, "pe": 25.0, "wacc": 0.09,
-        "name": "Streaming & Média"
+
+    # --- CONSOMMATION & LUXE ---
+    "LUXURY": {
+        "tickers": ["MC", "RMS", "KER", "RACE", "CFR", "LVMH"],
+        "gr_sales": 0.08, "gr_fcf": 0.10, "gr_eps": 0.12, "ps": 4.5, "pe": 28.0, "wacc": 0.085,
+        "name": "Luxe (Pricing Power fort)"
+    },
+    "E_COMMERCE": {
+        "tickers": ["MELI", "SE", "JD", "BABA", "PDD", "ETSY", "EBAY"],
+        "gr_sales": 0.10, "gr_fcf": 0.12, "gr_eps": 0.15, "ps": 2.5, "pe": 20.0, "wacc": 0.10,
+        "name": "E-Commerce Global"
     },
     "EV_AUTO": {
-        "tickers": ["TSLA", "RIVN", "LCID", "BYD", "F", "GM"],
-        "gr_sales": 0.15, "gr_fcf": 0.12, "gr_eps": 0.15, "ps": 3.0, "pe": 30.0, "wacc": 0.11,
+        "tickers": ["TSLA", "RIVN", "LCID", "BYD", "NIO", "XPEV"],
+        "gr_sales": 0.20, "gr_fcf": 0.15, "gr_eps": 0.20, "ps": 3.0, "pe": 35.0, "wacc": 0.12,
         "name": "Véhicules Électriques"
     },
+    "AUTO_LEGACY": {
+        "tickers": ["F", "GM", "TM", "STLA", "HMC", "VOW"],
+        "gr_sales": 0.03, "gr_fcf": 0.02, "gr_eps": 0.04, "ps": 0.4, "pe": 6.0, "wacc": 0.09,
+        "name": "Constructeurs Auto"
+    },
+
+    # --- SANTÉ ---
+    "PHARMA_BIG": {
+        "tickers": ["LLY", "NVO", "JNJ", "PFE", "MRK", "ABBV", "AZN"],
+        "gr_sales": 0.05, "gr_fcf": 0.06, "gr_eps": 0.08, "ps": 4.0, "pe": 18.0, "wacc": 0.075,
+        "name": "Big Pharma"
+    },
+    "BIOTECH_GROWTH": {
+        "tickers": ["VRTX", "REGN", "BNTX", "MRNA", "CRSP"],
+        "gr_sales": 0.12, "gr_fcf": 0.10, "gr_eps": 0.15, "ps": 6.0, "pe": 25.0, "wacc": 0.10,
+        "name": "Biotech Croissance"
+    },
+
+    # --- INDUSTRIE & ÉNERGIE ---
+    "DEFENSE": {
+        "tickers": ["LMT", "RTX", "NOC", "GD", "BA", "THALES"],
+        "gr_sales": 0.05, "gr_fcf": 0.06, "gr_eps": 0.08, "ps": 1.8, "pe": 18.0, "wacc": 0.075,
+        "name": "Défense & Aérospatial"
+    },
+    "CLEAN_ENERGY": {
+        "tickers": ["ENPH", "SEDG", "FSLR", "NEE", "BE", "PLUG"],
+        "gr_sales": 0.15, "gr_fcf": 0.12, "gr_eps": 0.15, "ps": 4.0, "pe": 30.0, "wacc": 0.095,
+        "name": "Énergie Renouvelable"
+    },
+    "OIL_GAS_MAJORS": {
+        "tickers": ["XOM", "CVX", "SHEL", "TTE", "BP", "SU", "CNQ"],
+        "gr_sales": 0.02, "gr_fcf": 0.04, "gr_eps": 0.05, "ps": 1.2, "pe": 10.0, "wacc": 0.09,
+        "name": "Pétrole & Gaz (Majors)"
+    },
+
+    # --- SPÉCIFIQUE CANADA ---
     "BANKS_CA": {
-        "tickers": ["RY.TO", "TD.TO", "BMO.TO", "BNS.TO", "CM.TO", "NA.TO"],
+        "tickers": ["RY", "TD", "BMO", "BNS", "CM", "NA"],
         "gr_sales": 0.04, "gr_fcf": 0.05, "gr_eps": 0.06, "ps": 2.5, "pe": 11.0, "wacc": 0.08,
         "name": "Banques Canadiennes"
+    },
+    "TELCO_CA": {
+        "tickers": ["BCE", "T", "RCI", "QBR"],
+        "gr_sales": 0.03, "gr_fcf": 0.04, "gr_eps": 0.05, "ps": 1.8, "pe": 15.0, "wacc": 0.07,
+        "name": "Télécoms Canadiens"
+    },
+    "RAIL_CA": {
+        "tickers": ["CNR", "CP"],
+        "gr_sales": 0.05, "gr_fcf": 0.08, "gr_eps": 0.10, "ps": 5.0, "pe": 22.0, "wacc": 0.075,
+        "name": "Chemin de Fer (Monopole)"
     }
 }
 
@@ -48,14 +117,20 @@ SECTOR_BENCHMARKS = {
     "Healthcare": {"gr_sales": 0.05, "gr_fcf": 0.06, "gr_eps": 0.08, "ps": 4.0, "pe": 22.0, "wacc": 0.08},
     "Financial Services": {"gr_sales": 0.05, "gr_fcf": 0.05, "gr_eps": 0.06, "ps": 2.5, "pe": 12.0, "wacc": 0.09},
     "Energy": {"gr_sales": 0.03, "gr_fcf": 0.05, "gr_eps": 0.05, "ps": 1.5, "pe": 10.0, "wacc": 0.10},
+    "Industrials": {"gr_sales": 0.04, "gr_fcf": 0.05, "gr_eps": 0.06, "ps": 1.5, "pe": 15.0, "wacc": 0.09},
     "Default": {"gr_sales": 0.07, "gr_fcf": 0.08, "gr_eps": 0.08, "ps": 2.5, "pe": 15.0, "wacc": 0.09}
 }
 
 def get_benchmark_data(ticker, sector_info):
-    ticker_clean = ticker.upper().replace(".TO", "")
+    # Nettoyage intelligent du ticker pour matcher la liste (ex: MDA.TO -> MDA)
+    ticker_clean = ticker.upper().replace(".TO", "").replace("-B", "").replace(".UN", "")
+    
+    # 1. Recherche par Ticker dans les Groupes
     for group_key, data in PEER_GROUPS.items():
-        if any(t in ticker_clean for t in data['tickers']):
-            return {**data, "source": "Comparables", "peers": ", ".join(data['tickers'][:4])}
+        if ticker_clean in data['tickers']:
+            return {**data, "source": "Comparables", "peers": ", ".join(data['tickers'][:5])}
+            
+    # 2. Fallback Secteur
     bench = SECTOR_BENCHMARKS.get(sector_info, SECTOR_BENCHMARKS["Default"])
     return {**bench, "source": "Secteur", "name": sector_info, "peers": "Moyenne du secteur"}
 
@@ -64,10 +139,7 @@ def get_benchmark_data(ticker, sector_info):
 def get_financial_data(ticker):
     try:
         stock = yf.Ticker(ticker)
-        bs = stock.quarterly_balance_sheet
-        inc = stock.quarterly_financials
-        cf = stock.quarterly_cashflow
-        info = stock.info
+        bs, inc, cf, info = stock.quarterly_balance_sheet, stock.quarterly_financials, stock.quarterly_cashflow, stock.info
         return bs, inc, cf, info
     except: return None, None, None, None
 
