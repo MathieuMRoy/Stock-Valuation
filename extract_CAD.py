@@ -10,13 +10,13 @@ st.title("📱 Valuation Master")
 st.caption("DCF • Ventes • Rule of 40 • Scénarios")
 
 # --- 1. ENTRÉES UTILISATEUR (INPUTS) ---
-ticker = st.text_input("Symbole (Ticker)", value="DUOL").upper()
+ticker = st.text_input("Symbole (Ticker)", value="NFLX").upper()
 
-with st.expander("⚙️ Modifier les Hypothèses (Cas de Base)", expanded=False):
+with st.expander("⚙️ Modifier les Hypothèses (Scénario Neutral)", expanded=False):
     st.subheader("Hypothèses Générales")
     col1, col2 = st.columns(2)
     with col1:
-        growth_rate = st.number_input("Croissance (5 ans)", value=0.20, step=0.01, format="%.2f")
+        growth_rate = st.number_input("Croissance (5 ans)", value=0.12, step=0.01, format="%.2f")
         wacc = st.number_input("WACC", value=0.09, step=0.005, format="%.3f")
     with col2:
         terminal_growth = st.number_input("Croissance Infinie", value=0.03, step=0.005, format="%.2f")
@@ -24,7 +24,7 @@ with st.expander("⚙️ Modifier les Hypothèses (Cas de Base)", expanded=False
     st.subheader("Spécifique Modèle Ventes")
     col3, col4 = st.columns(2)
     with col3:
-        target_ps = st.number_input("Ratio P/S Cible", value=6.0, step=0.5)
+        target_ps = st.number_input("Ratio P/S Cible", value=5.0, step=0.5)
     with col4:
         discount_rate_sales = st.number_input("Taux Actualisation", value=0.10, step=0.01, format="%.2f")
 
@@ -56,13 +56,44 @@ def get_ttm(df, key):
             return total
     return 0
 
-def get_latest_bs_val(df, key):
+def get_cash_safe(df):
+    """Récupère le Cash de manière sécurisée (Priorité CashAndCashEquivalents)"""
     if df is None or df.empty: return 0
+    
+    # 1. Essai Prioritaire (Le standard Yahoo)
+    keys_to_try = ["CashAndCashEquivalents", "CashCashEquivalentsAndShortTermInvestments", "Cash"]
+    
+    for key in keys_to_try:
+        for idx in df.index:
+            if key.upper() in str(idx).upper():
+                val = df.loc[idx].iloc[0]
+                if val > 0: return val # On retourne dès qu'on trouve un montant positif
+                
+    # 2. Fallback (Recherche large)
     for idx in df.index:
-        if key.upper() in str(idx).upper():
-            if "TOTAL" in key.upper() and "OTHER" in str(idx).upper(): continue
-            return df.loc[idx].iloc[0]
+        if "CASH" in str(idx).upper() and "DEBT" not in str(idx).upper():
+             val = df.loc[idx].iloc[0]
+             if val > 0: return val
     return 0
+
+def get_debt_safe(df):
+    if df is None or df.empty: return 0
+    lt_debt = 0
+    lease = 0
+    
+    # Chercher Long Term Debt
+    for idx in df.index:
+        if "LongTermDebt" in str(idx) or ("Long" in str(idx) and "Debt" in str(idx)):
+             lt_debt = df.loc[idx].iloc[0]
+             break
+             
+    # Chercher Lease (optionnel selon comptabilité)
+    for idx in df.index:
+        if "Lease" in str(idx) and "Liabilities" in str(idx): # Eviter Asset
+             lease = df.loc[idx].iloc[0]
+             break
+             
+    return lt_debt + lease
 
 def get_real_shares(info):
     shares = 0
@@ -87,7 +118,9 @@ def calculate_valuation(growth, wacc_val, ps_target, revenue, fcf, cash, debt, s
     terminal_val = (fcf_projections[-1] * (1 + 0.03)) / (wacc_val - 0.03)
     pv_fcf = sum([val / ((1 + wacc_val)**(i+1)) for i, val in enumerate(fcf_projections)])
     pv_terminal = terminal_val / ((1 + wacc_val)**5)
-    equity_val = (pv_fcf + pv_terminal) + cash - debt
+    
+    enterprise_value = pv_fcf + pv_terminal
+    equity_val = enterprise_value + cash - debt # Cash Net impacte ici
     price_dcf = equity_val / shares
 
     # Ventes
@@ -109,8 +142,12 @@ if ticker:
         cfo_ttm = get_ttm(cf, "Operating Cash Flow")
         capex_ttm = abs(get_ttm(cf, "Capital Expenditure"))
         fcf_ttm = cfo_ttm - capex_ttm
-        cash = get_latest_bs_val(bs, "Cash")
-        debt = get_latest_bs_val(bs, "Long Term Debt") + get_latest_bs_val(bs, "Lease")
+        
+        # Récupération sécurisée Cash & Dette
+        cash = get_cash_safe(bs)
+        debt = get_debt_safe(bs)
+        net_cash_position = cash - debt
+        
         shares = get_real_shares(info)
         if shares == 0: shares = 1
         current_price = info.get('currentPrice', 0)
@@ -134,14 +171,12 @@ if ticker:
                 st.error(f"❌ {rule_40_score:.1f}")
 
         # --- BULL & BEAR SCENARIOS ---
-        # On définit les scénarios automatiquement basés sur les inputs de l'utilisateur
-        
         # Bear: Croissance -20% relatif, P/S -20%
         bear_growth = growth_rate * 0.8
         bear_ps = target_ps * 0.8
         bear_dcf, bear_sales = calculate_valuation(bear_growth, wacc + 0.01, bear_ps, revenue_ttm, fcf_ttm, cash, debt, shares)
         
-        # Base: Tes inputs
+        # Neutral (Base): Tes inputs
         base_dcf, base_sales = calculate_valuation(growth_rate, wacc, target_ps, revenue_ttm, fcf_ttm, cash, debt, shares)
         
         # Bull: Croissance +20% relatif, P/S +20%
@@ -160,20 +195,28 @@ if ticker:
         with tab1:
             col_b1, col_b2, col_b3 = st.columns(3)
             col_b1.metric("🐻 Bear", f"{bear_dcf:.2f} $", delta=f"{bear_dcf-current_price:.1f}", delta_color="normal")
-            col_b2.metric("🎯 Base", f"{base_dcf:.2f} $", delta=f"{base_dcf-current_price:.1f}", delta_color="normal")
-            col_b3.metric("bull Bull", f"{bull_dcf:.2f} $", delta=f"{bull_dcf-current_price:.1f}", delta_color="normal")
+            col_b2.metric("🎯 Neutral", f"{base_dcf:.2f} $", delta=f"{base_dcf-current_price:.1f}", delta_color="normal")
+            col_b3.metric("🐂 Bull", f"{bull_dcf:.2f} $", delta=f"{bull_dcf-current_price:.1f}", delta_color="normal")
             st.caption("Basé sur le Free Cash Flow généré.")
 
         with tab2:
             col_s1, col_s2, col_s3 = st.columns(3)
             col_s1.metric("🐻 Bear", f"{bear_sales:.2f} $", delta=f"{bear_sales-current_price:.1f}", delta_color="normal")
-            col_s2.metric("🎯 Base", f"{base_sales:.2f} $", delta=f"{base_sales-current_price:.1f}", delta_color="normal")
-            col_s3.metric("bull Bull", f"{bull_sales:.2f} $", delta=f"{bull_sales-current_price:.1f}", delta_color="normal")
+            col_s2.metric("🎯 Neutral", f"{base_sales:.2f} $", delta=f"{base_sales-current_price:.1f}", delta_color="normal")
+            col_s3.metric("🐂 Bull", f"{bull_sales:.2f} $", delta=f"{bull_sales-current_price:.1f}", delta_color="normal")
             st.caption("Basé sur la croissance du Chiffre d'Affaires.")
 
         # Détails Financiers
         with st.expander("📊 Voir Données Brutes (TTM)"):
             st.write(f"**Revenus:** {revenue_ttm/1e6:.0f} M$")
             st.write(f"**FCF:** {fcf_ttm/1e6:.0f} M$")
-            st.write(f"**Cash Net:** {(cash-debt)/1e6:.0f} M$")
+            st.write("---")
+            st.write(f"**Trésorerie (Cash Brutf):** {cash/1e6:.0f} M$")
+            st.write(f"**Dette Totale:** {debt/1e6:.0f} M$")
+            
+            # Affichage clair du Net
+            color = "red" if net_cash_position < 0 else "green"
+            st.markdown(f"**Position Nette (Cash - Dette):** :{color}[{net_cash_position/1e6:.0f} M$]")
+            
+            st.write("---")
             st.write(f"**Actions:** {shares/1e6:.1f} M")
