@@ -167,7 +167,6 @@ if ticker:
             
             st.info("ℹ️ **DCF :** Pour les entreprises qui génèrent déjà des profits (Cash Flow).")
             
-            # AJOUT: Thèses Détaillées DCF
             with st.expander("📖 Lire les Thèses d'Investissement (DCF)", expanded=True):
                 st.markdown(f"""
                 🔴 **Bear :** Croissance FCF ralentie à **{gr_fcf_input*0.8*100:.1f}%**, risque accru (WACC **{wacc+0.01:.1%}**).
@@ -183,7 +182,6 @@ if ticker:
             
             st.info("ℹ️ **Ventes :** Pour les entreprises en croissance qui ne font pas encore de profits.")
             
-            # AJOUT: Thèses Détaillées Ventes
             with st.expander("📖 Lire les Thèses d'Investissement (Ventes)", expanded=True):
                 st.markdown(f"""
                 🔴 **Bear :** Croissance Ventes ralentie à **{gr_sales_input*0.8*100:.1f}%**, multiple P/S compressé à **{target_ps*0.8:.1f}x**.
@@ -214,12 +212,24 @@ if ticker:
                 if rule_40 >= 40: st.success(f"✅ Score : {rule_40:.1f}")
                 elif rule_40 >= 20: st.warning(f"⚠️ Score : {rule_40:.1f}")
                 else: st.error(f"❌ Score : {rule_40:.1f}")
-                with st.expander("Explication"): st.write(f"Croissance ({gr_sales_input*100:.1f}%) + Marge FCF ({fcf_margin:.1f}%) > 40")
+                
+                with st.expander("👉 Comprendre ce résultat"):
+                    st.write(f"**Calcul :** Croissance ({gr_sales_input*100:.1f}%) + Marge FCF ({fcf_margin:.1f}%) = **{rule_40:.1f}**")
+                    st.markdown("""
+                    * **> 40 : Excellent.** Croissance saine et efficace. C'est le standard "Best-in-Class".
+                    * **< 20 : Danger.** L'entreprise brûle trop de cash pour sa croissance, ou ne grandit pas assez vite.
+                    """)
 
             with col_score2:
                 st.markdown("#### 🛡️ Pour la Stabilité")
-                st.caption("Rendement Total (Dividende/FCF + Croissance)")
+                st.caption("Rendement Total (Dividende + Croissance)")
                 if total_return >= 12: st.success(f"✅ Score : {total_return:.1f}%")
                 elif total_return >= 8: st.warning(f"⚠️ Score : {total_return:.1f}%")
                 else: st.error(f"❌ Score : {total_return:.1f}%")
-                with st.expander("Explication"): st.write(f"Rendement FCF ({fcf_yield:.1f}%) + Croissance ({gr_fcf_input*100:.1f}%) > 12%")
+                
+                with st.expander("👉 Comprendre ce résultat"):
+                    st.write(f"**Calcul :** Rendement FCF ({fcf_yield:.1f}%) + Croissance ({gr_fcf_input*100:.1f}%) = **{total_return:.1f}%**")
+                    st.markdown("""
+                    * **> 12% : Superbe.** Bat historiquement la moyenne du marché (S&P 500 ~10%).
+                    * **< 8% : Faible.** Risque de sous-performance face à un simple ETF indiciel.
+                    """)
