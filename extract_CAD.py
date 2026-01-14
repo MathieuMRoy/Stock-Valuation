@@ -2,12 +2,12 @@ import streamlit as st
 import yfinance as yf
 import pandas as pd
 
-# --- CONFIGURATION DE LA PAGE ---
+# --- CONFIGURATION ---
 st.set_page_config(page_title="Valuation Master", page_icon="📱", layout="centered")
 st.title("📱 Valuation Master")
-st.caption("Comparables • Pédagogie • Scénarios")
+st.caption("Scénarios • Thèses • Pédagogie")
 
-# --- 0. DATA : COMPARABLES & SECTEURS ---
+# --- 0. DATA : GROUPES & SECTEURS ---
 PEER_GROUPS = {
     "SEMICONDUCTORS": {
         "tickers": ["NVDA", "AMD", "INTC", "TSM", "AVGO", "QCOM"],
@@ -129,7 +129,6 @@ def get_real_shares(info):
     return shares
 
 def calculate_valuation(gr_sales, gr_fcf, wacc_val, ps_target, revenue, fcf, cash, debt, shares):
-    # DCF
     current_fcf = fcf
     fcf_projections = []
     for i in range(5):
@@ -140,8 +139,6 @@ def calculate_valuation(gr_sales, gr_fcf, wacc_val, ps_target, revenue, fcf, cas
     pv_terminal = terminal_val / ((1 + wacc_val)**5)
     equity_val = (pv_fcf + pv_terminal) + cash - debt
     price_dcf = equity_val / shares
-
-    # Ventes
     rev_future = revenue * ((1 + gr_sales)**5)
     mcap_future = rev_future * ps_target
     price_sales = (mcap_future / shares) / ((1 + 0.10)**5)
@@ -156,10 +153,9 @@ if ticker:
     if bs is None or inc.empty:
         st.error("Données introuvables.")
     else:
-        # LOGIQUE COMPARABLES
+        # CONTEXTE
         raw_sector = info.get('sector', 'Default')
         bench_data = get_benchmark_data(ticker, raw_sector)
-        
         help_title = f"💡 Aide : {bench_data['name']}"
         with st.expander(help_title, expanded=True):
             if bench_data['source'] == "Comparables":
@@ -171,8 +167,9 @@ if ticker:
             c2.metric("Croiss. FCF", f"{bench_data['gr_fcf']*100:.0f}%")
             c3.metric("P/S Cible", f"{bench_data['ps']}x")
 
-        # INPUTS
-        with st.expander(f"⚙️ Modifier Hypothèses (Neutral)", expanded=False):
+        # INPUTS & TABLEAU RÉCAPITULATIF
+        with st.expander(f"⚙️ Modifier Hypothèses & Voir Spread", expanded=False):
+            st.markdown("### Vos Hypothèses (Neutral)")
             col1, col2 = st.columns(2)
             with col1:
                 gr_sales_input = st.number_input("Croiss. Ventes (5 ans)", value=bench_data['gr_sales'], step=0.01, format="%.2f")
@@ -181,7 +178,20 @@ if ticker:
                 wacc = st.number_input("CPMC (WACC)", value=bench_data['wacc'], step=0.005, format="%.3f")
                 target_ps = st.number_input("Ratio P/S Cible", value=bench_data['ps'], step=0.5)
 
-        # DATA
+            # --- TABLEAU DE BORD DU SPREAD (Nouveau) ---
+            st.divider()
+            st.markdown("### 📊 Scénarios Calculés (Spread +/- 20%)")
+            st.caption("Voici les chiffres exacts utilisés pour chaque scénario :")
+            
+            spread_data = {
+                "Métrique": ["Croissance Ventes", "Croissance FCF", "P/S Cible", "WACC (Risque)"],
+                "🐻 Bear": [f"{gr_sales_input*0.8*100:.1f}%", f"{gr_fcf_input*0.8*100:.1f}%", f"{target_ps*0.8:.1f}x", f"{wacc+0.01:.1%}"],
+                "🎯 Neutral": [f"{gr_sales_input*100:.1f}%", f"{gr_fcf_input*100:.1f}%", f"{target_ps:.1f}x", f"{wacc:.1%}"],
+                "🐂 Bull": [f"{gr_sales_input*1.2*100:.1f}%", f"{gr_fcf_input*1.2*100:.1f}%", f"{target_ps*1.2:.1f}x", f"{wacc-0.01:.1%}"]
+            }
+            st.table(pd.DataFrame(spread_data))
+
+        # DATA CALCULATION
         revenue_ttm = get_ttm_flexible(inc, ["TotalRevenue", "Total Revenue", "Revenue"])
         cfo_ttm = get_ttm_flexible(cf, ["OperatingCashFlow", "Operating Cash Flow"])
         capex_ttm = abs(get_ttm_flexible(cf, ["CapitalExpenditure", "Capital Expenditure", "Purchase of PPE"]))
@@ -193,12 +203,12 @@ if ticker:
         current_price = info.get('currentPrice', 0)
         market_cap = shares * current_price
 
-        # CALCULS
+        # VALUATION CALLS
         bear_dcf, bear_sales = calculate_valuation(gr_sales_input*0.8, gr_fcf_input*0.8, wacc+0.01, target_ps*0.8, revenue_ttm, fcf_ttm, cash, debt, shares)
         base_dcf, base_sales = calculate_valuation(gr_sales_input, gr_fcf_input, wacc, target_ps, revenue_ttm, fcf_ttm, cash, debt, shares)
         bull_dcf, bull_sales = calculate_valuation(gr_sales_input*1.2, gr_fcf_input*1.2, wacc-0.01, target_ps*1.2, revenue_ttm, fcf_ttm, cash, debt, shares)
 
-        # Ratios
+        # RATIOS
         eps = info.get('trailingEps', 0)
         pe_ratio = current_price / eps if eps > 0 else 0
         pfcf_ratio = market_cap / fcf_ttm if fcf_ttm > 0 else 0
@@ -211,66 +221,59 @@ if ticker:
         ev_ebitda = ev / ebitda_ttm if ebitda_ttm > 0 else 0
 
         # ==========================================
-        # RESULTATS AVEC CONTEXTE DYNAMIQUE
+        # RESULTATS AVEC THÈSES
         # ==========================================
         st.divider()
         
-        # ONGLETS MÉTHODES
         tab_dcf, tab_sales, tab_ratios = st.tabs(["💵 DCF (Cash)", "📈 Ventes (Growth)", "📊 Ratios"])
 
-        # --- ONGLET 1 : DCF ---
+        # --- DCF ---
         with tab_dcf:
-            # HEADER SPÉCIFIQUE DCF
             st.subheader("🏷️ Prix à Payer (DCF)")
-            c_d1, c_d2 = st.columns(2)
-            c_d1.metric("Prix Actuel", f"{current_price:.2f} $")
-            delta_val = base_dcf - current_price
-            c_d2.metric("Valeur Intrinsèque (Neutre)", f"{base_dcf:.2f} $", delta=f"{delta_val:.2f} $", delta_color="normal")
-            
-            # INFO PÉDAGOGIQUE DCF
-            st.info(
-                "ℹ️ **Méthode DCF (Flux de Trésorerie) :** \n\n"
-                "Ce prix représente la valeur de tout le **Cash Flow** que l'entreprise générera dans le futur, "
-                "ramenée à aujourd'hui, ajustée de sa dette nette."
-            )
+            c1, c2 = st.columns(2)
+            c1.metric("Prix Actuel", f"{current_price:.2f} $")
+            c2.metric("Intrinsèque (Neutre)", f"{base_dcf:.2f} $", delta=f"{base_dcf-current_price:.2f} $")
+            st.info("ℹ️ **DCF :** Valeur basée sur la capacité future à générer du cash pour les actionnaires.")
 
-            st.write("#### Scénarios")
             col_d1, col_d2, col_d3 = st.columns(3)
             col_d1.metric("🐻 Bear", f"{bear_dcf:.2f} $", delta=f"{bear_dcf-current_price:.1f}", delta_color="normal")
             col_d2.metric("🎯 Neutral", f"{base_dcf:.2f} $", delta=f"{base_dcf-current_price:.1f}", delta_color="normal")
             col_d3.metric("🐂 Bull", f"{bull_dcf:.2f} $", delta=f"{bull_dcf-current_price:.1f}", delta_color="normal")
             
-            with st.expander("Voir les hypothèses"):
-                st.markdown(f"- **Neutral :** Croiss. FCF {gr_fcf_input*100:.1f}%, WACC {wacc:.1%}")
+            with st.expander("📖 Lire les Thèses d'Investissement (DCF)", expanded=True):
+                st.markdown(f"""
+                🔴 **Thèse Bear (Pessimiste) :** *L'entreprise fait face à des vents contraires.* La croissance du cash flow tombe à **{gr_fcf_input*0.8*100:.1f}%** en raison d'une concurrence accrue ou d'une saturation. Le marché perçoit plus de risque (WACC **{wacc+0.01:.1%}**).
+                
+                🟡 **Thèse Neutre (Base) :** *L'entreprise exécute son plan.* Elle maintient une croissance solide de **{gr_fcf_input*100:.1f}%** avec un profil de risque standard.
+                
+                🟢 **Thèse Bull (Optimiste) :** *L'entreprise domine son secteur.* L'efficacité opérationnelle booste le cash flow de **{gr_fcf_input*1.2*100:.1f}%** par an. Le marché la considère comme une valeur refuge (WACC **{wacc-0.01:.1%}**).
+                """)
 
-        # --- ONGLET 2 : VENTES ---
+        # --- VENTES ---
         with tab_sales:
-            # HEADER SPÉCIFIQUE VENTES
             st.subheader("🏷️ Prix à Payer (Ventes)")
-            c_s1, c_s2 = st.columns(2)
-            c_s1.metric("Prix Actuel", f"{current_price:.2f} $")
-            delta_val_s = base_sales - current_price
-            c_s2.metric("Valeur Intrinsèque (Neutre)", f"{base_sales:.2f} $", delta=f"{delta_val_s:.2f} $", delta_color="normal")
+            c1, c2 = st.columns(2)
+            c1.metric("Prix Actuel", f"{current_price:.2f} $")
+            c2.metric("Intrinsèque (Neutre)", f"{base_sales:.2f} $", delta=f"{base_sales-current_price:.2f} $")
+            st.info("ℹ️ **Ventes :** Valeur basée sur la popularité future (P/S Ratio) et la croissance du C.A.")
 
-            # INFO PÉDAGOGIQUE VENTES
-            st.info(
-                "ℹ️ **Méthode Ventes (P/S Ratio) :** \n\n"
-                "Ce prix projette le **Chiffre d'Affaires** futur (dans 5 ans) et applique un multiplicateur "
-                "que le marché paie généralement pour ce type de revenus."
-            )
-            
-            st.write("#### Scénarios")
             col_s1, col_s2, col_s3 = st.columns(3)
             col_s1.metric("🐻 Bear", f"{bear_sales:.2f} $", delta=f"{bear_sales-current_price:.1f}", delta_color="normal")
             col_s2.metric("🎯 Neutral", f"{base_sales:.2f} $", delta=f"{base_sales-current_price:.1f}", delta_color="normal")
             col_s3.metric("🐂 Bull", f"{bull_sales:.2f} $", delta=f"{bull_sales-current_price:.1f}", delta_color="normal")
 
-            with st.expander("Voir les hypothèses"):
-                st.markdown(f"- **Neutral :** Croiss. Ventes {gr_sales_input*100:.1f}%, P/S {target_ps}x")
+            with st.expander("📖 Lire les Thèses d'Investissement (Ventes)", expanded=True):
+                st.markdown(f"""
+                🔴 **Thèse Bear (Pessimiste) :** *Compression des multiples.* Les investisseurs deviennent frileux et ne paient que **{target_ps*0.8:.1f}x** les ventes, combiné à une croissance décevante de **{gr_sales_input*0.8*100:.1f}%**.
+                
+                🟡 **Thèse Neutre (Base) :** *Valorisation juste.* L'entreprise croît de **{gr_sales_input*100:.1f}%** et se négocie à un multiple historique moyen de **{target_ps:.1f}x**.
+                
+                🟢 **Thèse Bull (Optimiste) :** *Euphorie du marché.* L'engouement pour le secteur propulse le multiple à **{target_ps*1.2:.1f}x**, soutenu par une hyper-croissance de **{gr_sales_input*1.2*100:.1f}%**.
+                """)
 
-        # --- ONGLET 3 : RATIOS ---
+        # --- RATIOS ---
         with tab_ratios:
-            st.subheader("📊 Analyse Fondamentale")
+            st.subheader("📊 Ratios & Santé")
             r1, r2, r3 = st.columns(3)
             r1.metric("P/E", f"{pe_ratio:.1f}x" if pe_ratio > 0 else "N/A")
             r2.metric("P/FCF", f"{pfcf_ratio:.1f}x" if pfcf_ratio > 0 else "N/A")
@@ -291,4 +294,5 @@ if ticker:
                 net = cash - debt
                 color = "red" if net < 0 else "green"
                 st.markdown(f":{color}[{net/1e6:.0f} M$]")
-                st.caption("Cash - Dette")
+                if net < 0: st.caption("Dette Nette")
+                else: st.caption("Cash Net")
