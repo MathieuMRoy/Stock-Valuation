@@ -7,7 +7,7 @@ st.set_page_config(page_title="Valuation Master", page_icon="📱", layout="cent
 st.title("📱 Valuation Master")
 st.caption("3 Modèles : Cash • Ventes • Bénéfices")
 
-# --- 0. DATA : BENCHMARKS ÉTENDUS (Avec P/E et Croissance EPS) ---
+# --- 0. DATA : BENCHMARKS ---
 PEER_GROUPS = {
     "SEMICONDUCTORS": {
         "tickers": ["NVDA", "AMD", "INTC", "TSM", "AVGO", "QCOM"],
@@ -64,7 +64,10 @@ def get_benchmark_data(ticker, sector_info):
 def get_financial_data(ticker):
     try:
         stock = yf.Ticker(ticker)
-        bs, inc, cf, info = stock.quarterly_balance_sheet, stock.quarterly_financials, stock.quarterly_cashflow, stock.info
+        bs = stock.quarterly_balance_sheet
+        inc = stock.quarterly_financials
+        cf = stock.quarterly_cashflow
+        info = stock.info
         return bs, inc, cf, info
     except: return None, None, None, None
 
@@ -101,20 +104,19 @@ def get_real_shares(info):
     if shares == 0: shares = info.get('sharesOutstanding', 0)
     return shares
 
-# --- FONCTION DE CALCUL (3 MODÈLES) ---
+# --- FONCTION CALCUL ---
 def calculate_valuation(gr_sales, gr_fcf, gr_eps, wacc_val, ps_target, pe_target, revenue, fcf, eps, cash, debt, shares):
-    # 1. DCF (Cash Flow)
+    # DCF
     current_fcf = fcf
     fcf_projections = [current_fcf * (1 + gr_fcf)**(i+1) for i in range(5)]
     terminal_val = (fcf_projections[-1] * 1.03) / (wacc_val - 0.03)
     pv_fcf = sum([val / ((1 + wacc_val)**(i+1)) for i, val in enumerate(fcf_projections)])
     price_dcf = ((pv_fcf + (terminal_val / ((1 + wacc_val)**5))) + cash - debt) / shares
     
-    # 2. VENTES (Price to Sales)
+    # Ventes
     price_sales = (((revenue * ((1 + gr_sales)**5)) * ps_target) / shares) / (1.10**5)
     
-    # 3. BÉNÉFICES (Price to Earnings) - NOUVEAU
-    # EPS futur dans 5 ans * Ratio P/E cible, ramené à aujourd'hui à 10%
+    # Bénéfices (P/E)
     eps_future = eps * ((1 + gr_eps)**5)
     price_earnings = (eps_future * pe_target) / (1.10**5)
     
@@ -133,11 +135,10 @@ if ticker:
         raw_sector = info.get('sector', 'Default')
         bench_data = get_benchmark_data(ticker, raw_sector)
         
-        # AIDE CONTEXTUELLE
+        # AIDE
         with st.expander(f"💡 Aide : {bench_data['name']}", expanded=True):
             if bench_data['source'] == "Comparables": st.write(f"**Pairs :** {bench_data['peers']}")
             else: st.write(f"**Secteur :** {raw_sector}")
-            
             c1, c2, c3, c4 = st.columns(4)
             c1.metric("Croiss. Ventes", f"{bench_data['gr_sales']*100:.0f}%")
             c2.metric("Croiss. FCF", f"{bench_data['gr_fcf']*100:.0f}%")
@@ -167,79 +168,96 @@ if ticker:
         shares = get_real_shares(info) if get_real_shares(info) > 0 else 1
         current_price = info.get('currentPrice', 0); market_cap = shares * current_price
         
-        # EPS (Priorité au TTM réel, sinon calculé)
         eps_ttm = info.get('trailingEps')
         if eps_ttm is None:
             net_income = get_ttm_flexible(inc, ["NetIncome", "Net Income Common Stockholders"])
             eps_ttm = net_income / shares if shares > 0 else 0
 
-        # CALCULS SCENARIOS (Bear / Neutral / Bull)
-        # On passe 3 croissances et 2 multiples
+        # CALCULS SCENARIOS
         def run_scenario(factor_growth, factor_mult, risk_adj):
             return calculate_valuation(
-                gr_sales_input * factor_growth, 
-                gr_fcf_input * factor_growth, 
-                gr_eps_input * factor_growth, 
-                wacc + risk_adj, 
-                target_ps * factor_mult, 
-                target_pe * factor_mult, 
+                gr_sales_input * factor_growth, gr_fcf_input * factor_growth, gr_eps_input * factor_growth, 
+                wacc + risk_adj, target_ps * factor_mult, target_pe * factor_mult, 
                 revenue_ttm, fcf_ttm, eps_ttm, cash, debt, shares
             )
 
-        bear_res = run_scenario(0.8, 0.8, 0.01)   # -20% growth/mult, +1% WACC
+        bear_res = run_scenario(0.8, 0.8, 0.01)   # -20%
         base_res = run_scenario(1.0, 1.0, 0.0)    # Neutral
-        bull_res = run_scenario(1.2, 1.2, -0.01)  # +20% growth/mult, -1% WACC
+        bull_res = run_scenario(1.2, 1.2, -0.01)  # +20%
 
-        # RESULTATS HEADER
+        # ==========================================
+        # AFFICHAGE PAR ONGLETS (PRIX DYNAMIQUE)
+        # ==========================================
         st.divider()
-        st.subheader("🏷️ Prix à Payer")
-        c1, c2 = st.columns(2)
-        c1.metric("Prix Actuel", f"{current_price:.2f} $")
-        c2.metric("Intrinsèque (Neutre DCF)", f"{base_res[0]:.2f} $", delta=f"{base_res[0]-current_price:.2f} $")
-
-        # --- ONGLETS ---
         tabs = st.tabs(["💵 DCF (Cash)", "📈 Ventes (P/S)", "💰 Bénéfices (P/E)", "📊 Scorecard"])
 
-        # 1. DCF
+        # --- 1. DCF ---
         with tabs[0]:
-            st.info("ℹ️ **DCF :** Basé sur le cash flow généré (pour les entreprises rentables).")
-            c1, c2, c3 = st.columns(3)
-            c1.metric("🐻 Bear", f"{bear_res[0]:.2f} $", delta=f"{bear_res[0]-current_price:.1f}")
-            c2.metric("🎯 Neutral", f"{base_res[0]:.2f} $", delta=f"{base_res[0]-current_price:.1f}")
-            c3.metric("🐂 Bull", f"{bull_res[0]:.2f} $", delta=f"{bull_res[0]-current_price:.1f}")
+            st.subheader("🏷️ Prix à Payer (DCF)")
+            c1, c2 = st.columns(2)
+            c1.metric("Prix Actuel", f"{current_price:.2f} $")
+            delta = base_res[0] - current_price
+            c2.metric("Intrinsèque (Neutre)", f"{base_res[0]:.2f} $", delta=f"{delta:.2f} $", delta_color="normal")
             
-            with st.expander("📖 Lire les Thèses DCF", expanded=True):
-                st.error(f"**🐻 Bear (-20%) :** Croissance FCF ralentie à **{gr_fcf_input*0.8:.1%}**. Le marché doute de la pérennité des cash flows.")
-                st.info(f"**🎯 Neutral :** Scénario central. Croissance FCF de **{gr_fcf_input:.1%}** et WACC de **{wacc:.1%}**.")
-                st.success(f"**🐂 Bull (+20%) :** Exécution parfaite. Croissance FCF de **{gr_fcf_input*1.2:.1%}**.")
+            st.info("ℹ️ **DCF :** Pour les entreprises rentables (Cash Flow).")
+            
+            # Scénarios
+            c_bear, c_base, c_bull = st.columns(3)
+            c_bear.metric("🐻 Bear", f"{bear_res[0]:.2f} $", delta=f"{bear_res[0]-current_price:.1f}")
+            c_base.metric("🎯 Neutral", f"{base_res[0]:.2f} $", delta=f"{base_res[0]-current_price:.1f}")
+            c_bull.metric("🐂 Bull", f"{bull_res[0]:.2f} $", delta=f"{bull_res[0]-current_price:.1f}")
 
-        # 2. VENTES
+            # Thèses
+            st.markdown("##### 📝 Thèses d'Investissement")
+            st.error(f"**🐻 Bear (-20%) :** Croissance FCF ralentie à **{gr_fcf_input*0.8:.1%}**. Le marché doute de la pérennité des cash flows.")
+            st.info(f"**🎯 Neutral :** Scénario central. Croissance FCF de **{gr_fcf_input:.1%}** et WACC de **{wacc:.1%}**.")
+            st.success(f"**🐂 Bull (+20%) :** Exécution parfaite. Croissance FCF de **{gr_fcf_input*1.2:.1%}**.")
+
+        # --- 2. VENTES ---
         with tabs[1]:
-            st.info("ℹ️ **Ventes :** Basé sur la taille future de l'entreprise (pour l'hyper-croissance).")
-            c1, c2, c3 = st.columns(3)
-            c1.metric("🐻 Bear", f"{bear_res[1]:.2f} $", delta=f"{bear_res[1]-current_price:.1f}")
-            c2.metric("🎯 Neutral", f"{base_res[1]:.2f} $", delta=f"{base_res[1]-current_price:.1f}")
-            c3.metric("🐂 Bull", f"{bull_res[1]:.2f} $", delta=f"{bull_res[1]-current_price:.1f}")
+            st.subheader("🏷️ Prix à Payer (Ventes)")
+            c1, c2 = st.columns(2)
+            c1.metric("Prix Actuel", f"{current_price:.2f} $")
+            delta = base_res[1] - current_price
+            c2.metric("Intrinsèque (Neutre)", f"{base_res[1]:.2f} $", delta=f"{delta:.2f} $", delta_color="normal")
             
-            with st.expander("📖 Lire les Thèses Ventes", expanded=True):
-                st.error(f"**🐻 Bear :** Les multiples se compressent à **{target_ps*0.8:.1f}x** les ventes.")
-                st.info(f"**🎯 Neutral :** L'entreprise maintient son multiple de **{target_ps:.1f}x**.")
-                st.success(f"**🐂 Bull :** Euphorie du marché, multiple de **{target_ps*1.2:.1f}x**.")
+            st.info("ℹ️ **Ventes :** Pour les entreprises en hyper-croissance (pas encore rentables).")
+            
+            # Scénarios
+            c_bear, c_base, c_bull = st.columns(3)
+            c_bear.metric("🐻 Bear", f"{bear_res[1]:.2f} $", delta=f"{bear_res[1]-current_price:.1f}")
+            c_base.metric("🎯 Neutral", f"{base_res[1]:.2f} $", delta=f"{base_res[1]-current_price:.1f}")
+            c_bull.metric("🐂 Bull", f"{bull_res[1]:.2f} $", delta=f"{bull_res[1]-current_price:.1f}")
 
-        # 3. EARNINGS (NOUVEAU)
+            # Thèses
+            st.markdown("##### 📝 Thèses d'Investissement")
+            st.error(f"**🐻 Bear :** Les multiples se compressent à **{target_ps*0.8:.1f}x** les ventes.")
+            st.info(f"**🎯 Neutral :** L'entreprise maintient son multiple de **{target_ps:.1f}x**.")
+            st.success(f"**🐂 Bull :** Euphorie du marché, multiple de **{target_ps*1.2:.1f}x**.")
+
+        # --- 3. EARNINGS ---
         with tabs[2]:
-            st.info("ℹ️ **Bénéfices :** Modèle classique (Peter Lynch). Projette le profit net futur.")
-            c1, c2, c3 = st.columns(3)
-            c1.metric("🐻 Bear", f"{bear_res[2]:.2f} $", delta=f"{bear_res[2]-current_price:.1f}")
-            c2.metric("🎯 Neutral", f"{base_res[2]:.2f} $", delta=f"{base_res[2]-current_price:.1f}")
-            c3.metric("🐂 Bull", f"{bull_res[2]:.2f} $", delta=f"{bull_res[2]-current_price:.1f}")
+            st.subheader("🏷️ Prix à Payer (P/E)")
+            c1, c2 = st.columns(2)
+            c1.metric("Prix Actuel", f"{current_price:.2f} $")
+            delta = base_res[2] - current_price
+            c2.metric("Intrinsèque (Neutre)", f"{base_res[2]:.2f} $", delta=f"{delta:.2f} $", delta_color="normal")
             
-            with st.expander("📖 Lire les Thèses P/E", expanded=True):
-                st.error(f"**🐻 Bear :** Croissance EPS faible (**{gr_eps_input*0.8:.1%}**), P/E chute à **{target_pe*0.8:.1f}x**.")
-                st.info(f"**🎯 Neutral :** Croissance EPS solide (**{gr_eps_input:.1%}**), P/E standard de **{target_pe:.1f}x**.")
-                st.success(f"**🐂 Bull :** Marges en hausse (**{gr_eps_input*1.2:.1%}**), P/E premium de **{target_pe*1.2:.1f}x**.")
+            st.info("ℹ️ **Bénéfices :** Modèle classique (Peter Lynch). Focus sur le bénéfice net.")
+            
+            # Scénarios
+            c_bear, c_base, c_bull = st.columns(3)
+            c_bear.metric("🐻 Bear", f"{bear_res[2]:.2f} $", delta=f"{bear_res[2]-current_price:.1f}")
+            c_base.metric("🎯 Neutral", f"{base_res[2]:.2f} $", delta=f"{base_res[2]-current_price:.1f}")
+            c_bull.metric("🐂 Bull", f"{bull_res[2]:.2f} $", delta=f"{bull_res[2]-current_price:.1f}")
 
-        # 4. SCORECARD
+            # Thèses
+            st.markdown("##### 📝 Thèses d'Investissement")
+            st.error(f"**🐻 Bear :** Croissance EPS faible (**{gr_eps_input*0.8:.1%}**), P/E chute à **{target_pe*0.8:.1f}x**.")
+            st.info(f"**🎯 Neutral :** Croissance EPS solide (**{gr_eps_input:.1%}**), P/E standard de **{target_pe:.1f}x**.")
+            st.success(f"**🐂 Bull :** Marges en hausse (**{gr_eps_input*1.2:.1%}**), P/E premium de **{target_pe*1.2:.1f}x**.")
+
+        # --- 4. SCORECARD ---
         with tabs[3]:
             # Ratios
             pe_ratio = current_price / eps_ttm if eps_ttm > 0 else 0
@@ -258,15 +276,27 @@ if ticker:
             fcf_margin = (fcf_ttm / revenue_ttm) * 100 if revenue_ttm > 0 else 0
             fcf_yield = (fcf_ttm / market_cap) * 100 if market_cap > 0 else 0
             rule_40 = (gr_sales_input * 100) + fcf_margin
-            total_return = (gr_eps_input * 100) + fcf_yield # On utilise EPS growth pour Total Return souvent
+            total_return = (gr_eps_input * 100) + fcf_yield
 
-            c1, c2 = st.columns(2)
-            with c1:
-                st.write("**Rule of 40 (Growth)**")
+            col_score1, col_score2 = st.columns(2)
+            with col_score1:
+                st.markdown("#### 🚀 Croissance")
+                st.caption("Rule of 40 (SaaS)")
                 if rule_40 >= 40: st.success(f"✅ {rule_40:.1f}")
-                else: st.warning(f"⚠️ {rule_40:.1f}")
-            with c2:
-                st.write("**Total Return (Stable)**")
+                elif rule_40 >= 20: st.warning(f"⚠️ {rule_40:.1f}")
+                else: st.error(f"❌ {rule_40:.1f}")
+                
+                with st.expander("Comprendre"):
+                    st.write(f"Croissance ({gr_sales_input*100:.1f}%) + Marge FCF ({fcf_margin:.1f}%)")
+                    st.write("Si > 40 : Excellent équilibre.")
+
+            with col_score2:
+                st.markdown("#### 🛡️ Stabilité")
+                st.caption("Rendement Total")
                 if total_return >= 12: st.success(f"✅ {total_return:.1f}%")
-                else: st.warning(f"⚠️ {total_return:.1f}%")
-                st.caption(f"Croiss. EPS + FCF Yield")
+                elif total_return >= 8: st.warning(f"⚠️ {total_return:.1f}%")
+                else: st.error(f"❌ {total_return:.1f}%")
+                
+                with st.expander("Comprendre"):
+                    st.write(f"Rendement FCF ({fcf_yield:.1f}%) + Croissance ({gr_fcf_input*100:.1f}%)")
+                    st.write("Si > 12% : Bat souvent le marché.")
