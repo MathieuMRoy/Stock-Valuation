@@ -5,21 +5,38 @@ import pandas as pd
 # --- CONFIGURATION DE LA PAGE ---
 st.set_page_config(page_title="Valuation Master", page_icon="📱", layout="centered")
 st.title("📱 Valuation Master")
-st.caption("Valuation • Ratios • Benchmarks Sectoriels")
+st.caption("Double Croissance • DCF vs Ventes • Ratios")
 
-# --- 0. DICTIONNAIRE DE BENCHMARKS (SUGGESTIONS) ---
+# --- 0. BENCHMARKS DÉCOUPLÉS (Ventes vs FCF) ---
+# Note : Dans la Tech, le FCF croît souvent plus vite que les ventes (Levier Opérationnel)
 SECTOR_BENCHMARKS = {
-    "Technology": {"growth": 0.15, "ps": 6.0, "desc": "Croissance élevée, Marges fortes"},
-    "Communication Services": {"growth": 0.10, "ps": 4.0, "desc": "Média/Télécom (Ex: Netflix/Google)"},
-    "Consumer Cyclical": {"growth": 0.08, "ps": 2.5, "desc": "Auto/Luxe (Ex: Tesla/Amazon)"},
-    "Healthcare": {"growth": 0.06, "ps": 4.0, "desc": "Défensif, R&D élevée"},
-    "Financial Services": {"growth": 0.05, "ps": 2.0, "desc": "Banques/Assurances"},
-    "Energy": {"growth": 0.03, "ps": 1.5, "desc": "Pétrole/Gaz (Volatile)"},
-    "Industrials": {"growth": 0.04, "ps": 1.8, "desc": "Construction/Aérospatial"},
-    "Utilities": {"growth": 0.03, "ps": 2.0, "desc": "Dividendes stables, Croissance faible"},
-    "Basic Materials": {"growth": 0.03, "ps": 1.2, "desc": "Mines/Chimie"},
-    "Real Estate": {"growth": 0.04, "ps": 5.0, "desc": "Immobilier (REITs)"},
-    "Default": {"growth": 0.08, "ps": 3.0, "desc": "Moyenne du marché"}
+    "Technology": {
+        "gr_sales": 0.15, "gr_fcf": 0.18, 
+        "ps": 6.0, "wacc": 0.095, "desc": "Levier opérationnel fort"},
+    "Communication Services": {
+        "gr_sales": 0.10, "gr_fcf": 0.15, 
+        "ps": 4.0, "wacc": 0.09, "desc": "Média/Streaming (Ex: Netflix)"},
+    "Consumer Cyclical": {
+        "gr_sales": 0.08, "gr_fcf": 0.10, 
+        "ps": 2.5, "wacc": 0.10, "desc": "Marges s'améliorent avec volume"},
+    "Healthcare": {
+        "gr_sales": 0.06, "gr_fcf": 0.07, 
+        "ps": 4.0, "wacc": 0.08, "desc": "Stable"},
+    "Financial Services": {
+        "gr_sales": 0.05, "gr_fcf": 0.05, 
+        "ps": 2.0, "wacc": 0.10, "desc": "Croissance alignée"},
+    "Energy": {
+        "gr_sales": 0.03, "gr_fcf": 0.05, 
+        "ps": 1.5, "wacc": 0.11, "desc": "Rachats d'actions boostent le FCF/Action"},
+    "Industrials": {
+        "gr_sales": 0.04, "gr_fcf": 0.05, 
+        "ps": 1.8, "wacc": 0.09, "desc": "Cycle long"},
+    "Utilities": {
+        "gr_sales": 0.03, "gr_fcf": 0.03, 
+        "ps": 2.0, "wacc": 0.065, "desc": "Très stable"},
+    "Default": {
+        "gr_sales": 0.08, "gr_fcf": 0.10, 
+        "ps": 3.0, "wacc": 0.09, "desc": "Moyenne"}
 }
 
 # --- 1. FONCTIONS DATA ---
@@ -81,6 +98,27 @@ def get_real_shares(info):
     if shares == 0: shares = info.get('sharesOutstanding', 0)
     return shares
 
+# --- FONCTION CALCUL SEPARÉ ---
+def calculate_valuation(gr_sales, gr_fcf, wacc_val, ps_target, revenue, fcf, cash, debt, shares):
+    # DCF (Utilise la Croissance FCF)
+    current_fcf = fcf
+    fcf_projections = []
+    for i in range(5):
+        current_fcf = current_fcf * (1 + gr_fcf)
+        fcf_projections.append(current_fcf)
+    
+    terminal_val = (fcf_projections[-1] * (1 + 0.03)) / (wacc_val - 0.03)
+    pv_fcf = sum([val / ((1 + wacc_val)**(i+1)) for i, val in enumerate(fcf_projections)])
+    pv_terminal = terminal_val / ((1 + wacc_val)**5)
+    equity_val = (pv_fcf + pv_terminal) + cash - debt
+    price_dcf = equity_val / shares
+
+    # Ventes (Utilise la Croissance Ventes)
+    rev_future = revenue * ((1 + gr_sales)**5)
+    mcap_future = rev_future * ps_target
+    price_sales = (mcap_future / shares) / ((1 + 0.10)**5)
+    return price_dcf, price_sales
+
 # --- 2. INTERFACE & LOGIQUE ---
 ticker = st.text_input("Symbole (Ticker)", value="NFLX").upper()
 
@@ -90,34 +128,34 @@ if ticker:
     if bs is None or inc.empty:
         st.error("Données introuvables.")
     else:
-        # --- DÉTECTION SECTEUR & SUGGESTIONS ---
+        # --- SECTEUR & AIDE DÉTAILLÉE ---
         sector = info.get('sector', 'Default')
-        industry = info.get('industry', 'Inconnu')
-        
-        # Trouver le benchmark
         bench = SECTOR_BENCHMARKS.get(sector, SECTOR_BENCHMARKS["Default"])
         
-        # Affichage Infos Secteur
-        st.info(f"🏢 **Secteur détecté : {sector}** ({industry})")
+        st.info(f"🏢 **Secteur : {sector}**")
         
-        with st.expander(f"💡 Aide à la décision pour {sector}", expanded=True):
-            st.markdown(f"""
-            Pour ce secteur (**{bench['desc']}**), les analystes utilisent souvent :
-            * 📈 **Croissance :** env. **{bench['growth']*100:.0f}%**
-            * 🏷️ **Ratio P/S :** env. **{bench['ps']}x**
-            """)
+        with st.expander(f"💡 Aide Hypothèses (Secteur : {sector})", expanded=True):
+            c1, c2, c3 = st.columns(3)
+            c1.metric("Croiss. Ventes", f"{bench['gr_sales']*100:.0f}%", help="Pour le modèle P/S")
+            c2.metric("Croiss. FCF", f"{bench['gr_fcf']*100:.0f}%", help="Pour le DCF (souvent plus élevé)")
+            c3.metric("P/S Cible", f"{bench['ps']}x")
+            st.caption(f"Profil type : {bench['desc']}")
 
-        # --- INPUTS ---
+        # --- INPUTS SÉPARÉS ---
         st.subheader("⚙️ Vos Hypothèses (Neutral)")
+        
         col1, col2 = st.columns(2)
         with col1:
-            growth_rate = st.number_input("Croissance (5 ans)", value=bench['growth'], step=0.01, format="%.2f")
-            wacc = st.number_input("WACC", value=0.09, step=0.005, format="%.3f")
+            st.markdown("**Croissance**")
+            gr_sales_input = st.number_input("Croiss. Ventes (5 ans)", value=bench['gr_sales'], step=0.01, format="%.2f")
+            gr_fcf_input = st.number_input("Croiss. FCF (5 ans)", value=bench['gr_fcf'], step=0.01, format="%.2f")
+        
         with col2:
+            st.markdown("**Valuation**")
+            wacc = st.number_input("CPMC (WACC)", value=bench['wacc'], step=0.005, format="%.3f")
             target_ps = st.number_input("Ratio P/S Cible", value=bench['ps'], step=0.5)
-            terminal_growth = st.number_input("Croissance Infinie", value=0.03, step=0.005, format="%.2f")
 
-        # --- CALCULS FINANCIERS ---
+        # --- CALCULS DONNÉES ---
         revenue_ttm = get_ttm(inc, "Total Revenue")
         cfo_ttm = get_ttm(cf, "Operating Cash Flow")
         capex_ttm = abs(get_ttm(cf, "Capital Expenditure"))
@@ -128,31 +166,11 @@ if ticker:
         if shares == 0: shares = 1
         current_price = info.get('currentPrice', 0)
         market_cap = shares * current_price
-        
-        # EBITDA (Calcul simplifié pour ratio)
+
+        # Ratios pour onglet 3
         op_income = get_ttm(inc, "OperatingIncome")
         dep_amort = get_ttm(cf, "DepreciationAndAmortization")
         ebitda = op_income + dep_amort
-
-        # --- CALCULS VALORISATION ---
-        # 1. DCF
-        current_fcf = fcf_ttm
-        fcf_projections = []
-        for i in range(5):
-            current_fcf = current_fcf * (1 + growth_rate)
-            fcf_projections.append(current_fcf)
-        
-        terminal_val = (fcf_projections[-1] * (1 + 0.03)) / (wacc - 0.03)
-        pv_fcf = sum([val / ((1 + wacc)**(i+1)) for i, val in enumerate(fcf_projections)])
-        pv_terminal = terminal_val / ((1 + wacc)**5)
-        equity_val_dcf = (pv_fcf + pv_terminal) + cash - debt
-        price_dcf = equity_val_dcf / shares
-
-        # 2. VENTES
-        rev_future = revenue_ttm * ((1 + growth_rate)**5)
-        price_sales = ((rev_future * target_ps) / shares) / ((1 + 0.10)**5)
-
-        # 3. RATIOS ACTUELS
         eps = info.get('trailingEps', 0)
         pe_ratio = current_price / eps if eps > 0 else 0
         pfcf_ratio = market_cap / fcf_ttm if fcf_ttm > 0 else 0
@@ -160,47 +178,72 @@ if ticker:
         ev_ebitda = ev / ebitda if ebitda > 0 else 0
         ps_current = market_cap / revenue_ttm if revenue_ttm > 0 else 0
 
-        # --- AFFICHAGE RÉSULTATS ---
+        # --- SCÉNARIOS (Applique les variations sur LES DEUX croissances) ---
+        # Bear : -20% sur tout
+        bear_dcf, bear_sales = calculate_valuation(
+            gr_sales_input*0.8, gr_fcf_input*0.8, 
+            wacc+0.01, target_ps*0.8, 
+            revenue_ttm, fcf_ttm, cash, debt, shares
+        )
+        
+        # Base
+        base_dcf, base_sales = calculate_valuation(
+            gr_sales_input, gr_fcf_input, 
+            wacc, target_ps, 
+            revenue_ttm, fcf_ttm, cash, debt, shares
+        )
+        
+        # Bull : +20% sur tout
+        bull_dcf, bull_sales = calculate_valuation(
+            gr_sales_input*1.2, gr_fcf_input*1.2, 
+            wacc-0.01, target_ps*1.2, 
+            revenue_ttm, fcf_ttm, cash, debt, shares
+        )
+
+        # --- AFFICHAGE ---
         st.divider()
-        st.subheader("🎯 Objectifs de Prix")
+        st.write(f"Prix Actuel : **{current_price:.2f} $**")
         
-        c1, c2, c3 = st.columns(3)
-        c1.metric("Prix Actuel", f"{current_price:.2f} $")
-        c2.metric("Cible DCF", f"{price_dcf:.2f} $", delta=f"{price_dcf-current_price:.2f}")
-        c3.metric("Cible Ventes", f"{price_sales:.2f} $", delta=f"{price_sales-current_price:.2f}")
+        tab1, tab2, tab3 = st.tabs(["💵 DCF (Cash)", "📈 Ventes (Growth)", "📊 Ratios"])
 
-        # --- NOUVELLE SECTION : RATIOS ---
-        st.divider()
-        st.subheader("📊 Ratios de Valorisation (Actuel)")
-        
-        r1, r2, r3, r4 = st.columns(4)
-        
-        # P/E
-        r1.metric("P/E (Price/Earnings)", f"{pe_ratio:.1f}x" if pe_ratio > 0 else "N/A", help="Prix payé pour 1$ de bénéfice. Moyenne marché ~20x.")
-        
-        # P/FCF
-        r2.metric("P/FCF (Free Cash Flow)", f"{pfcf_ratio:.1f}x" if pfcf_ratio > 0 else "N/A", help="Prix payé pour 1$ de vrai cash généré. <15x est souvent bon marché.")
-        
-        # EV/EBITDA
-        r3.metric("EV / EBITDA", f"{ev_ebitda:.1f}x" if ev_ebitda > 0 else "N/A", help="Valorisation dette incluse. <10x est souvent bon marché.")
-        
-        # P/S
-        r4.metric("P/S (Ventes)", f"{ps_current:.1f}x", help="Prix payé pour 1$ de ventes.")
+        with tab1:
+            st.subheader("Modèle DCF")
+            c1, c2, c3 = st.columns(3)
+            c1.metric("🐻 Bear", f"{bear_dcf:.2f} $", delta=f"{bear_dcf-current_price:.1f}", delta_color="normal")
+            c2.metric("🎯 Neutral", f"{base_dcf:.2f} $", delta=f"{base_dcf-current_price:.1f}", delta_color="normal")
+            c3.metric("🐂 Bull", f"{bull_dcf:.2f} $", delta=f"{bull_dcf-current_price:.1f}", delta_color="normal")
+            st.caption(f"Basé sur une croissance FCF de {gr_fcf_input*100:.1f}%")
 
-        # --- RULE OF 40 ---
-        fcf_margin = (fcf_ttm / revenue_ttm) * 100 if revenue_ttm > 0 else 0
-        rule_40_score = (growth_rate * 100) + fcf_margin
-        
-        st.write("") # Spacer
-        if rule_40_score >= 40:
-            st.success(f"✅ Rule of 40 Score: {rule_40_score:.1f} (Excellent)")
-        else:
-            st.warning(f"⚠️ Rule of 40 Score: {rule_40_score:.1f} (Moyen/Faible)")
+        with tab2:
+            st.subheader("Modèle Ventes")
+            c1, c2, c3 = st.columns(3)
+            c1.metric("🐻 Bear", f"{bear_sales:.2f} $", delta=f"{bear_sales-current_price:.1f}", delta_color="normal")
+            c2.metric("🎯 Neutral", f"{base_sales:.2f} $", delta=f"{base_sales-current_price:.1f}", delta_color="normal")
+            c3.metric("🐂 Bull", f"{bull_sales:.2f} $", delta=f"{bull_sales-current_price:.1f}", delta_color="normal")
+            st.caption(f"Basé sur une croissance Ventes de {gr_sales_input*100:.1f}%")
 
-        # Détails Financiers (Cachés)
-        with st.expander("Voir Données Brutes"):
-            st.write(f"**Revenus TTM:** {revenue_ttm/1e6:.0f} M$")
-            st.write(f"**FCF TTM:** {fcf_ttm/1e6:.0f} M$")
-            st.write(f"**EBITDA TTM:** {ebitda/1e6:.0f} M$")
-            color = "red" if (cash-debt) < 0 else "green"
-            st.markdown(f"**Position Nette:** :{color}[{(cash-debt)/1e6:.0f} M$]")
+        with tab3:
+            st.subheader("Analyse Fondamentale")
+            r1, r2, r3 = st.columns(3)
+            r1.metric("P/E", f"{pe_ratio:.1f}x" if pe_ratio > 0 else "N/A")
+            r2.metric("P/FCF", f"{pfcf_ratio:.1f}x" if pfcf_ratio > 0 else "N/A")
+            r3.metric("EV/EBITDA", f"{ev_ebitda:.1f}x" if ev_ebitda > 0 else "N/A")
+            
+            st.divider()
+            # Rule of 40 utilise la Croissance VENTES (Standard industrie)
+            fcf_margin = (fcf_ttm / revenue_ttm) * 100 if revenue_ttm > 0 else 0
+            rule_40_score = (gr_sales_input * 100) + fcf_margin
+            
+            c_rule, c_net = st.columns(2)
+            with c_rule:
+                st.write("**Rule of 40**")
+                if rule_40_score >= 40: st.success(f"✅ {rule_40_score:.1f}")
+                elif rule_40_score >= 20: st.warning(f"⚠️ {rule_40_score:.1f}")
+                else: st.error(f"❌ {rule_40_score:.1f}")
+                st.caption(f"Croiss. Ventes {gr_sales_input*100:.0f}% + Marge FCF {fcf_margin:.0f}%")
+            
+            with c_net:
+                st.write("**Position Nette**")
+                net = cash - debt
+                color = "red" if net < 0 else "green"
+                st.markdown(f":{color}[{net/1e6:.0f} M$]")
