@@ -5,12 +5,12 @@ import pandas as pd
 # --- CONFIGURATION ---
 st.set_page_config(page_title="Valuation Master", page_icon="📱", layout="centered")
 
-# --- SIDEBAR : BOUTON DE SECOURS ---
+# --- SIDEBAR : BOUTON RESET ---
 with st.sidebar:
     if st.button("🗑️ Reset Cache (Fix Bugs)"):
         st.cache_data.clear()
         st.rerun()
-    st.caption("Si erreur 'Unserializable' ou données bizarres.")
+    st.caption("Utilisez ce bouton si vous voyez une erreur rouge ou 'Data not found'.")
 
 st.title("📱 Valuation Master")
 st.caption("3 Models: Cash • Sales • Earnings")
@@ -78,7 +78,7 @@ def get_benchmark_data(ticker, sector_info):
     bench = SECTOR_BENCHMARKS.get("Default")
     return {**bench, "source": "Sector", "name": sector_info or "General", "peers": "Sector Avg"}
 
-# --- 2. DATA FUNCTIONS (SECURE & COMPLETE) ---
+# --- 2. DATA FUNCTIONS (SECURE) ---
 @st.cache_data(ttl=3600)
 def get_financial_data_secure(ticker):
     try:
@@ -102,10 +102,11 @@ def get_financial_data_secure(ticker):
         
         if bs is None or bs.empty: return None
 
-        # 3. INFO
+        # 3. INFO (Extraction Sécurisée)
         try:
             full_info = stock.info
             sector = full_info.get('sector', 'Default')
+            # Extraction des données de croissance
             rev_growth = full_info.get('revenueGrowth', 0)
             eps_growth = full_info.get('earningsGrowth', 0)
             trailing_eps = full_info.get('trailingEps', None)
@@ -120,9 +121,9 @@ def get_financial_data_secure(ticker):
         return {
             "bs": bs, "inc": inc, "cf": cf, 
             "price": current_price, "shares_calc": shares_calc,
-            "sector": sector, "rev_growth": rev_growth, 
-            "eps_growth": eps_growth, "trailing_eps": trailing_eps,
-            "shares_info": shares_info
+            "sector": sector, 
+            "rev_growth": rev_growth, "eps_growth": eps_growth, 
+            "trailing_eps": trailing_eps, "shares_info": shares_info
         }
         
     except Exception:
@@ -154,7 +155,7 @@ def calculate_valuation(gr_sales, gr_fcf, gr_eps, wacc_val, ps_target, pe_target
     terminal_val = (fcf_projections[-1] * 1.03) / (wacc_val - 0.03)
     pv_fcf = sum([val / ((1 + wacc_val)**(i+1)) for i, val in enumerate(fcf_projections)])
     pv_tv = terminal_val / ((1 + wacc_val)**5)
-    price_dcf = (pv_fcf + pv_tv + cash - debt) / shares
+    price_dcf = ((pv_fcf + (terminal_val / ((1 + wacc_val)**5))) + cash - debt) / shares
     
     # Sales & Earnings
     price_sales = (((revenue * ((1 + gr_sales)**5)) * ps_target) / shares) / (1.10**5)
@@ -229,26 +230,26 @@ if ticker_final:
         if eps_ttm is None:
             eps_ttm = net_income / shares if shares > 0 else 0
 
-        # RATIOS & GROWTH
+        # RATIOS & GROWTH (POUR COMPARAISON)
         ps_current = market_cap / revenue_ttm if revenue_ttm > 0 else 0
         pe_current = current_price / eps_ttm if eps_ttm > 0 else 0
         pfcf_current = market_cap / fcf_ttm if fcf_ttm > 0 else 0
         
-        cur_sales_gr = info.get('revenueGrowth', 0)
-        cur_eps_gr = info.get('earningsGrowth', 0)
-        if cur_sales_gr is None: cur_sales_gr = 0
-        if cur_eps_gr is None: cur_eps_gr = 0
+        # Correction du bug NameError ici : on utilise le dictionnaire 'data'
+        cur_sales_gr = data['rev_growth'] if data['rev_growth'] else 0
+        cur_eps_gr = data['eps_growth'] if data['eps_growth'] else 0
 
         # BENCHMARKS
         bench_data = get_benchmark_data(ticker_final, data['sector'])
         
-        # --- DISPLAY HELP ---
+        # --- DISPLAY HELP (AVEC COMPARAISON - NEUTRE) ---
         with st.expander(f"💡 Help: {bench_data['name']} vs {ticker_final}", expanded=True):
             st.write(f"**Peers:** {bench_data['peers']}")
             
             c1, c2, c3, c4 = st.columns(4)
+            # Affichage: Benchmark (Gros) vs Réel (Petit, sans couleur)
             c1.metric("Sales Gr.", f"{bench_data['gr_sales']*100:.0f}%", delta=f"{cur_sales_gr*100:.1f}% Actual", delta_color="off")
-            c2.metric("EPS Gr.", f"{bench_data['gr_eps']*100:.0f}%", delta=f"{cur_eps_gr*100:.1f}% Actual", delta_color="off")
+            c2.metric("FCF/EPS Gr.", f"{bench_data['gr_fcf']*100:.0f}%", delta=f"{cur_eps_gr*100:.1f}% Actual", delta_color="off")
             c3.metric("Target P/S", f"{bench_data['ps']}x", delta=f"{ps_current:.1f}x Actual", delta_color="off")
             c4.metric("Target P/E", f"{bench_data.get('pe', 20)}x", delta=f"{pe_current:.1f}x Actual", delta_color="off")
 
@@ -283,15 +284,14 @@ if ticker_final:
         bull_res = run_scenario(1.2, 1.2, -0.01)
 
         # ==========================================
-        # SMART ADVISOR (NOUVEAU)
+        # SMART ADVISOR (NOUVEAU - AVEC DCF)
         # ==========================================
         st.divider()
         
-        # Logique simple : Si pas de profit, on regarde les ventes. Sinon, les profits.
         if eps_ttm <= 0:
-            advice_msg = f"💡 **Analyst Tip for {ticker_final}:** This company has **negative earnings** (unprofitable). The best metric to use is likely **Price-to-Sales (P/S)** in the Sales tab."
+            advice_msg = f"💡 **Analyst Tip for {ticker_final}:** This company is **unprofitable** (Negative Earnings). The best metric to use is likely **Price-to-Sales (P/S)** in the Sales tab."
         else:
-            advice_msg = f"💡 **Analyst Tip for {ticker_final}:** This company is **profitable**. You can use **Price-to-Earnings (P/E)** or **DCF** for a robust valuation."
+            advice_msg = f"💡 **Analyst Tip for {ticker_final}:** This company is **profitable**. We recommend using **Price-to-Earnings (P/E)** or the **DCF (Cash Flow)** model for the most accurate valuation."
             
         st.info(advice_msg)
 
@@ -308,7 +308,7 @@ if ticker_final:
             c1, c2 = st.columns(2)
             c1.metric("Current Price", f"{current_price:.2f} $")
             delta = base_res[0] - current_price
-            c2.metric("Intrinsic (Neutral)", f"{base_res[0]:.2f} $", delta=f"{delta:.2f} $", delta_color="normal", help=f"Fair value based on DCF model for {ticker_final}.")
+            c2.metric("Intrinsic (Neutral)", f"{base_res[0]:.2f} $", delta=f"{delta:.2f} $", delta_color="normal", help=f"Fair value based on DCF model.")
             
             st.write("")
             display_relative_analysis(pfcf_current, bench_data.get('p_fcf', 20.0), "P/FCF", bench_data['name'])
@@ -332,7 +332,7 @@ if ticker_final:
             c1, c2 = st.columns(2)
             c1.metric("Current Price", f"{current_price:.2f} $")
             delta = base_res[1] - current_price
-            c2.metric("Intrinsic (Neutral)", f"{base_res[1]:.2f} $", delta=f"{delta:.2f} $", delta_color="normal", help=f"Fair value based on Price/Sales for {ticker_final}.")
+            c2.metric("Intrinsic (Neutral)", f"{base_res[1]:.2f} $", delta=f"{delta:.2f} $", delta_color="normal", help=f"Fair value based on Price/Sales.")
             
             st.write("")
             display_relative_analysis(ps_current, bench_data['ps'], "P/S", bench_data['name'])
@@ -356,7 +356,7 @@ if ticker_final:
             c1, c2 = st.columns(2)
             c1.metric("Current Price", f"{current_price:.2f} $")
             delta = base_res[2] - current_price
-            c2.metric("Intrinsic (Neutral)", f"{base_res[2]:.2f} $", delta=f"{delta:.2f} $", delta_color="normal", help=f"Fair value based on Price/Earnings for {ticker_final}.")
+            c2.metric("Intrinsic (Neutral)", f"{base_res[2]:.2f} $", delta=f"{delta:.2f} $", delta_color="normal", help=f"Fair value based on Price/Earnings.")
             
             st.write("")
             display_relative_analysis(pe_current, bench_data.get('pe', 20), "P/E", bench_data['name'])
@@ -374,6 +374,7 @@ if ticker_final:
 
         # --- 4. SCORECARD ---
         with tabs[3]:
+            # Scores
             fcf_margin = (fcf_ttm / revenue_ttm) * 100 if revenue_ttm > 0 else 0
             fcf_yield = (fcf_ttm / market_cap) * 100 if market_cap > 0 else 0
             rule_40 = gr_sales_input + fcf_margin
