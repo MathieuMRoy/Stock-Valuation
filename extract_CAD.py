@@ -224,19 +224,21 @@ if ticker_final:
             c3.metric("Target P/S", f"{bench_data['ps']}x")
             c4.metric("Target P/E", f"{bench_data.get('pe', 20)}x")
 
-        # INPUTS
+        # INPUTS (CONVERTED TO PERCENTAGE INPUTS)
         with st.expander("⚙️ Edit Assumptions (Neutral)", expanded=False):
             st.markdown("##### 1. Growth (5y CAGR)")
             c1, c2, c3 = st.columns(3)
-            gr_sales_input = c1.number_input("Sales Growth", value=bench_data['gr_sales'], step=0.01)
-            gr_fcf_input = c2.number_input("FCF Growth", value=bench_data['gr_fcf'], step=0.01)
-            gr_eps_input = c3.number_input("EPS Growth", value=bench_data.get('gr_eps', 0.10), step=0.01)
+            # On multiplie par 100 pour afficher en % (ex: 0.12 -> 12.0)
+            gr_sales_input = c1.number_input("Sales Growth (%)", value=bench_data['gr_sales']*100, step=0.5, format="%.1f")
+            gr_fcf_input = c2.number_input("FCF Growth (%)", value=bench_data['gr_fcf']*100, step=0.5, format="%.1f")
+            gr_eps_input = c3.number_input("EPS Growth (%)", value=bench_data.get('gr_eps', 0.10)*100, step=0.5, format="%.1f")
             
             st.markdown("##### 2. Exit Multiples & Risk")
             c4, c5, c6 = st.columns(3)
-            target_ps = c4.number_input("Target P/S", value=bench_data['ps'], step=0.5)
-            target_pe = c5.number_input("Target P/E", value=float(bench_data.get('pe', 20.0)), step=0.5)
-            wacc = c6.number_input("WACC (Discount)", value=bench_data['wacc'], step=0.005)
+            target_ps = c4.number_input("Target P/S (x)", value=bench_data['ps'], step=0.5)
+            target_pe = c5.number_input("Target P/E (x)", value=float(bench_data.get('pe', 20.0)), step=0.5)
+            # WACC en %
+            wacc_input = c6.number_input("WACC / Discount (%)", value=bench_data['wacc']*100, step=0.5, format="%.1f")
 
         # DATA EXTRACT
         revenue_ttm = get_ttm_flexible(inc, ["TotalRevenue", "Total Revenue", "Revenue"])
@@ -257,11 +259,16 @@ if ticker_final:
         pe_current = current_price / eps_ttm if eps_ttm > 0 else 0
         pfcf_current = market_cap / fcf_ttm if fcf_ttm > 0 else 0
 
-        # CALCULATE SCENARIOS
+        # CALCULATE SCENARIOS (DIVIDE INPUTS BY 100 TO GET DECIMALS)
         def run_scenario(factor_growth, factor_mult, risk_adj):
+            # On divise par 100 ici pour remettre en décimale pour le calcul
             return calculate_valuation(
-                gr_sales_input * factor_growth, gr_fcf_input * factor_growth, gr_eps_input * factor_growth, 
-                wacc + risk_adj, target_ps * factor_mult, target_pe * factor_mult, 
+                (gr_sales_input/100.0) * factor_growth, 
+                (gr_fcf_input/100.0) * factor_growth, 
+                (gr_eps_input/100.0) * factor_growth, 
+                (wacc_input/100.0) + risk_adj, 
+                target_ps * factor_mult, 
+                target_pe * factor_mult, 
                 revenue_ttm, fcf_ttm, eps_ttm, cash, debt, shares
             )
 
@@ -293,9 +300,9 @@ if ticker_final:
             c_bull.metric("🐂 Bull", f"{bull_res[0]:.2f} $", delta=f"{bull_res[0]-current_price:.1f}")
 
             st.markdown("##### 📝 Investment Theses")
-            st.error(f"**🐻 Bear (-20%):** FCF Growth slows to **{gr_fcf_input*0.8:.1%}**. Market doubts cash flow sustainability.")
-            st.info(f"**🎯 Neutral:** Base case. FCF Growth **{gr_fcf_input:.1%}**, WACC **{wacc:.1%}**.")
-            st.success(f"**🐂 Bull (+20%):** Perfect execution. FCF Growth accelerates to **{gr_fcf_input*1.2:.1%}**.")
+            st.error(f"**🐻 Bear (-20%):** FCF Growth slows to **{gr_fcf_input*0.8:.1f}%**. Market doubts cash flow sustainability.")
+            st.info(f"**🎯 Neutral:** Base case. FCF Growth **{gr_fcf_input:.1f}%**, WACC **{wacc_input:.1f}%**.")
+            st.success(f"**🐂 Bull (+20%):** Perfect execution. FCF Growth accelerates to **{gr_fcf_input*1.2:.1f}%**.")
 
         # --- 2. SALES ---
         with tabs[1]:
@@ -337,17 +344,18 @@ if ticker_final:
             c_bull.metric("🐂 Bull", f"{bull_res[2]:.2f} $")
 
             st.markdown("##### 📝 Investment Theses")
-            st.error(f"**🐻 Bear:** EPS Growth **{gr_eps_input*0.8:.1%}**, P/E drops to **{target_pe*0.8:.1f}x**.")
-            st.info(f"**🎯 Neutral:** EPS Growth **{gr_eps_input:.1%}**, Standard P/E of **{target_pe:.1f}x**.")
-            st.success(f"**🐂 Bull:** Margin expansion (**{gr_eps_input*1.2:.1%}**), Premium P/E of **{target_pe*1.2:.1f}x**.")
+            st.error(f"**🐻 Bear:** EPS Growth **{gr_eps_input*0.8:.1f}%**, P/E drops to **{target_pe*0.8:.1f}x**.")
+            st.info(f"**🎯 Neutral:** EPS Growth **{gr_eps_input:.1f}%**, Standard P/E of **{target_pe:.1f}x**.")
+            st.success(f"**🐂 Bull:** Margin expansion (**{gr_eps_input*1.2:.1f}%**), Premium P/E of **{target_pe*1.2:.1f}x**.")
 
         # --- 4. SCORECARD ---
         with tabs[3]:
             # Scores
             fcf_margin = (fcf_ttm / revenue_ttm) * 100 if revenue_ttm > 0 else 0
             fcf_yield = (fcf_ttm / market_cap) * 100 if market_cap > 0 else 0
-            rule_40 = (gr_sales_input * 100) + fcf_margin
-            total_return = (gr_eps_input * 100) + fcf_yield
+            # On utilise les inputs en % directement (pas besoin de x100)
+            rule_40 = gr_sales_input + fcf_margin
+            total_return = gr_eps_input + fcf_yield
 
             st.subheader("Current Fundamentals")
             r1, r2, r3 = st.columns(3)
@@ -366,7 +374,7 @@ if ticker_final:
                 if rule_40 >= 40: st.success(f"✅ {rule_40:.1f}")
                 else: st.warning(f"⚠️ {rule_40:.1f}")
                 with st.expander("Interpretation Guide"):
-                    st.write(f"**Calc:** Growth {gr_sales_input*100:.1f}% + Margin {fcf_margin:.1f}%")
+                    st.write(f"**Calc:** Growth {gr_sales_input:.1f}% + Margin {fcf_margin:.1f}%")
                     st.markdown("""
                     * 🟢 **> 40: Excellent** (Efficient Hyper-growth)
                     * 🟡 **20 - 40: Average** (Watch closely)
@@ -379,7 +387,7 @@ if ticker_final:
                 if total_return >= 12: st.success(f"✅ {total_return:.1f}%")
                 else: st.warning(f"⚠️ {total_return:.1f}%")
                 with st.expander("Interpretation Guide"):
-                    st.write(f"**Calc:** Yield {fcf_yield:.1f}% + Growth {gr_eps_input*100:.1f}%")
+                    st.write(f"**Calc:** Yield {fcf_yield:.1f}% + Growth {gr_eps_input:.1f}%")
                     st.markdown("""
                     * 🟢 **> 12%: Excellent** (Beats Market)
                     * 🟡 **8 - 12%: Fair** (Market Average)
