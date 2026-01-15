@@ -26,24 +26,26 @@ TICKER_DB = [
     "AMZN - Amazon.com",
     "META - Meta Platforms (Facebook)",
     "TSLA - Tesla Inc.",
-    "--- POPULAR & SPACE ---",
+    "--- POPULAR & CONSUMER ---",
+    "DUOL - Duolingo",
+    "UBER - Uber Technologies",
+    "ABNB - Airbnb",
+    "SPOT - Spotify",
+    "NFLX - Netflix",
+    "COST - Costco Wholesale",
+    "LLY - Eli Lilly (Pharma)",
+    "--- SPACE & DEFENSE ---",
     "MDA.TO - MDA Space (Canada)",
     "RKLB - Rocket Lab USA",
     "ASTS - AST SpaceMobile",
     "PLTR - Palantir Technologies",
-    "NFLX - Netflix",
-    "SPOT - Spotify",
-    "DUOL - Duolingo",
-    "UBER - Uber Technologies",
-    "ABNB - Airbnb",
+    "LMT - Lockheed Martin",
     "--- CANADA (TSX) ---",
     "RY.TO - Royal Bank (RBC)",
     "TD.TO - TD Bank",
     "SHOP.TO - Shopify (CAD)",
     "CNR.TO - CN Rail",
     "ENB.TO - Enbridge",
-    "BCE.TO - BCE Inc. (Bell)",
-    "DOL.TO - Dollarama",
     "ATD.TO - Alimentation Couche-Tard",
     "CSU.TO - Constellation Software",
     "--- CRYPTO & FINTECH ---",
@@ -54,15 +56,20 @@ TICKER_DB = [
     "MSTR - MicroStrategy"
 ]
 
-# --- 1. DATA: SECTOR BENCHMARKS (AMÉLIORÉ) ---
+# --- 1. DATA: SECTOR BENCHMARKS (MASSIVE UPDATE) ---
 PEER_GROUPS = {
     "SPACE_TECH": {
         "tickers": ["MDA", "RKLB", "ASTS", "LUNR", "PL", "SPIR", "SPCE"],
         "gr_sales": 20.0, "gr_fcf": 25.0, "gr_eps": 25.0, "ps": 6.0, "pe": 40.0, "p_fcf": 35.0, "wacc": 11.0,
         "name": "Space Tech & Satellites"
     },
+    "CYBERSECURITY": { # NOUVEAU
+        "tickers": ["PANW", "CRWD", "FTNT", "ZS", "OKTA", "NET", "CYBR"],
+        "gr_sales": 22.0, "gr_fcf": 25.0, "gr_eps": 25.0, "ps": 9.0, "pe": 45.0, "p_fcf": 35.0, "wacc": 10.0,
+        "name": "Cybersecurity & Network"
+    },
     "SEMICONDUCTORS": {
-        "tickers": ["NVDA", "AMD", "INTC", "TSM", "AVGO", "QCOM", "MU"],
+        "tickers": ["NVDA", "AMD", "INTC", "TSM", "AVGO", "QCOM", "MU", "TXN"],
         "gr_sales": 18.0, "gr_fcf": 20.0, "gr_eps": 20.0, "ps": 8.0, "pe": 35.0, "p_fcf": 30.0, "wacc": 10.0,
         "name": "Semiconductors & AI"
     },
@@ -71,15 +78,40 @@ PEER_GROUPS = {
         "gr_sales": 12.0, "gr_fcf": 15.0, "gr_eps": 15.0, "ps": 6.5, "pe": 25.0, "p_fcf": 28.0, "wacc": 9.0,
         "name": "Big Tech / GAFAM"
     },
-    "CONSUMER_APPS": { # NOUVEAU GROUPE POUR DUOLINGO
+    "CONSUMER_APPS": {
         "tickers": ["DUOL", "UBER", "ABNB", "SPOT", "DASH", "BKNG", "PINS", "SNAP"],
         "gr_sales": 18.0, "gr_fcf": 25.0, "gr_eps": 25.0, "ps": 5.0, "pe": 30.0, "p_fcf": 25.0, "wacc": 10.0,
         "name": "Consumer Apps & Platforms"
     },
     "SAAS_CLOUD": {
-        "tickers": ["CRM", "ADBE", "SNOW", "DDOG", "PLTR", "NOW", "SHOP", "WDAY"],
+        "tickers": ["CRM", "ADBE", "SNOW", "DDOG", "PLTR", "NOW", "SHOP", "WDAY", "MDB"],
         "gr_sales": 20.0, "gr_fcf": 22.0, "gr_eps": 25.0, "ps": 9.0, "pe": 40.0, "p_fcf": 35.0, "wacc": 10.0,
         "name": "SaaS & Enterprise Cloud"
+    },
+    "PHARMA_BIO": { # NOUVEAU
+        "tickers": ["LLY", "NVO", "JNJ", "PFE", "MRK", "ABBV", "AMGN"],
+        "gr_sales": 8.0, "gr_fcf": 10.0, "gr_eps": 12.0, "ps": 5.0, "pe": 25.0, "p_fcf": 22.0, "wacc": 8.5,
+        "name": "Pharma & Biotech"
+    },
+    "RETAIL_GIANTS": { # NOUVEAU
+        "tickers": ["WMT", "COST", "TGT", "HD", "LOW", "MCD", "SBUX"],
+        "gr_sales": 5.0, "gr_fcf": 7.0, "gr_eps": 8.0, "ps": 1.5, "pe": 22.0, "p_fcf": 20.0, "wacc": 8.0,
+        "name": "Retail & Consumer Giants"
+    },
+    "FINANCE_US": { # NOUVEAU
+        "tickers": ["JPM", "BAC", "V", "MA", "AXP", "GS", "MS"],
+        "gr_sales": 6.0, "gr_fcf": 8.0, "gr_eps": 10.0, "ps": 3.0, "pe": 15.0, "p_fcf": 15.0, "wacc": 9.0,
+        "name": "US Finance & Payments"
+    },
+    "ENERGY_OIL": { # NOUVEAU
+        "tickers": ["XOM", "CVX", "SHEL", "TTE", "BP", "COP"],
+        "gr_sales": 3.0, "gr_fcf": 5.0, "gr_eps": 5.0, "ps": 1.5, "pe": 12.0, "p_fcf": 10.0, "wacc": 10.0,
+        "name": "Energy & Oil Majors"
+    },
+    "AEROSPACE_DEF": { # NOUVEAU
+        "tickers": ["LMT", "RTX", "BA", "GD", "NOC", "GE"],
+        "gr_sales": 5.0, "gr_fcf": 8.0, "gr_eps": 8.0, "ps": 2.0, "pe": 18.0, "p_fcf": 18.0, "wacc": 8.5,
+        "name": "Aerospace & Defense"
     },
     "STREAMING": {
         "tickers": ["NFLX", "DIS", "WBD", "PARA", "ROKU"],
@@ -108,11 +140,8 @@ def get_benchmark_data(ticker, sector_info):
     
     # 1. Recherche dans les groupes spécifiques
     for group_key, data in PEER_GROUPS.items():
-        # On vérifie si le ticker est DANS la liste des tickers du groupe
-        # (Utilisation de 'in list' strict pour éviter les faux positifs)
         clean_list = [t.upper() for t in data['tickers']]
         
-        # On cherche si le ticker (ex: DUOL) est dans la liste ou contient une partie
         match = False
         for t in clean_list:
             if t == ticker_clean or (len(ticker_clean) > 3 and t in ticker_clean):
@@ -120,9 +149,9 @@ def get_benchmark_data(ticker, sector_info):
                 break
         
         if match:
-            # Création de la liste des pairs en EXCLUANT l'action actuelle
+            # On exclut l'action elle-même de la liste des pairs pour l'affichage
             peers_list = [t for t in data['tickers'] if t.upper() not in ticker_clean]
-            peers_str = ", ".join(peers_list[:5]) # On en montre 5
+            peers_str = ", ".join(peers_list[:5])
             
             return {**data, "source": "Comparables", "peers": peers_str}
             
@@ -285,7 +314,7 @@ if ticker_final:
         # BENCHMARKS
         bench_data = get_benchmark_data(ticker_final, data['sector'])
         
-        # --- DISPLAY HELP ---
+        # --- DISPLAY HELP (BIG COMPARISON) ---
         with st.expander(f"💡 Help: {bench_data['name']} vs {ticker_final}", expanded=True):
             st.write(f"**Peers:** {bench_data['peers']}")
             
@@ -302,7 +331,6 @@ if ticker_final:
             # 2. ACTUAL COMPANY METRICS
             st.markdown(f"### 📍 {ticker_final} Current Metrics (Actual)")
             c5, c6, c7, c8 = st.columns(4)
-            # Pas de couleur (delta_color="off") pour rester neutre comme demandé
             c5.metric("Actual Sales Gr.", f"{cur_sales_gr*100:.1f}%", delta_color="off")
             c6.metric("Actual EPS Gr.", f"{cur_eps_gr*100:.1f}%", delta_color="off")
             c7.metric("Actual P/S", f"{ps_current:.1f}x", delta_color="off")
