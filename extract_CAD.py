@@ -10,7 +10,7 @@ with st.sidebar:
     if st.button("🗑️ Reset Cache"):
         st.cache_data.clear()
         st.rerun()
-    st.caption("À utiliser si l'application semble bloquée.")
+    st.caption("À utiliser si les données semblent incorrectes.")
 
 st.title("📱 Valuation Master")
 st.caption("3 Models: Cash • Sales • Earnings")
@@ -40,7 +40,7 @@ TICKER_DB = [
     "ASTS - AST SpaceMobile",
     "PLTR - Palantir Technologies",
     "LMT - Lockheed Martin",
-    "--- CANADA (TSX) ---",
+    "--- CANADA (TSX/TSX-V) ---",
     "RY.TO - Royal Bank (RBC)",
     "TD.TO - TD Bank",
     "SHOP.TO - Shopify (CAD)",
@@ -48,6 +48,8 @@ TICKER_DB = [
     "ENB.TO - Enbridge",
     "ATD.TO - Alimentation Couche-Tard",
     "CSU.TO - Constellation Software",
+    "PNG.V - Kraken Robotics",
+    "VLE.TO - Valeura Energy",
     "--- CRYPTO & FINTECH ---",
     "COIN - Coinbase",
     "HOOD - Robinhood",
@@ -56,14 +58,14 @@ TICKER_DB = [
     "MSTR - MicroStrategy"
 ]
 
-# --- 1. DATA: SECTOR BENCHMARKS (MASSIVE UPDATE) ---
+# --- 1. DATA: SPECIFIC PEER GROUPS (PRIORITY) ---
 PEER_GROUPS = {
     "SPACE_TECH": {
         "tickers": ["MDA", "RKLB", "ASTS", "LUNR", "PL", "SPIR", "SPCE"],
         "gr_sales": 20.0, "gr_fcf": 25.0, "gr_eps": 25.0, "ps": 6.0, "pe": 40.0, "p_fcf": 35.0, "wacc": 11.0,
         "name": "Space Tech & Satellites"
     },
-    "CYBERSECURITY": { # NOUVEAU
+    "CYBERSECURITY": {
         "tickers": ["PANW", "CRWD", "FTNT", "ZS", "OKTA", "NET", "CYBR"],
         "gr_sales": 22.0, "gr_fcf": 25.0, "gr_eps": 25.0, "ps": 9.0, "pe": 45.0, "p_fcf": 35.0, "wacc": 10.0,
         "name": "Cybersecurity & Network"
@@ -88,27 +90,22 @@ PEER_GROUPS = {
         "gr_sales": 20.0, "gr_fcf": 22.0, "gr_eps": 25.0, "ps": 9.0, "pe": 40.0, "p_fcf": 35.0, "wacc": 10.0,
         "name": "SaaS & Enterprise Cloud"
     },
-    "PHARMA_BIO": { # NOUVEAU
+    "PHARMA_BIO": {
         "tickers": ["LLY", "NVO", "JNJ", "PFE", "MRK", "ABBV", "AMGN"],
         "gr_sales": 8.0, "gr_fcf": 10.0, "gr_eps": 12.0, "ps": 5.0, "pe": 25.0, "p_fcf": 22.0, "wacc": 8.5,
         "name": "Pharma & Biotech"
     },
-    "RETAIL_GIANTS": { # NOUVEAU
-        "tickers": ["WMT", "COST", "TGT", "HD", "LOW", "MCD", "SBUX"],
-        "gr_sales": 5.0, "gr_fcf": 7.0, "gr_eps": 8.0, "ps": 1.5, "pe": 22.0, "p_fcf": 20.0, "wacc": 8.0,
-        "name": "Retail & Consumer Giants"
-    },
-    "FINANCE_US": { # NOUVEAU
+    "FINANCE_US": {
         "tickers": ["JPM", "BAC", "V", "MA", "AXP", "GS", "MS"],
         "gr_sales": 6.0, "gr_fcf": 8.0, "gr_eps": 10.0, "ps": 3.0, "pe": 15.0, "p_fcf": 15.0, "wacc": 9.0,
         "name": "US Finance & Payments"
     },
-    "ENERGY_OIL": { # NOUVEAU
-        "tickers": ["XOM", "CVX", "SHEL", "TTE", "BP", "COP"],
+    "ENERGY_OIL": {
+        "tickers": ["XOM", "CVX", "SHEL", "TTE", "BP", "COP", "VLE", "SU", "CNQ"],
         "gr_sales": 3.0, "gr_fcf": 5.0, "gr_eps": 5.0, "ps": 1.5, "pe": 12.0, "p_fcf": 10.0, "wacc": 10.0,
         "name": "Energy & Oil Majors"
     },
-    "AEROSPACE_DEF": { # NOUVEAU
+    "AEROSPACE_DEF": {
         "tickers": ["LMT", "RTX", "BA", "GD", "NOC", "GE"],
         "gr_sales": 5.0, "gr_fcf": 8.0, "gr_eps": 8.0, "ps": 2.0, "pe": 18.0, "p_fcf": 18.0, "wacc": 8.5,
         "name": "Aerospace & Defense"
@@ -130,36 +127,42 @@ PEER_GROUPS = {
     }
 }
 
+# --- 2. DATA: GENERIC SECTOR FALLBACKS (SAFETY NET) ---
 SECTOR_BENCHMARKS = {
     "Technology": {"gr_sales": 12.0, "gr_fcf": 15.0, "gr_eps": 15.0, "ps": 5.0, "pe": 25.0, "p_fcf": 25.0, "wacc": 9.5},
+    "Communication Services": {"gr_sales": 8.0, "gr_fcf": 10.0, "gr_eps": 10.0, "ps": 3.0, "pe": 18.0, "p_fcf": 18.0, "wacc": 9.0},
+    "Consumer Cyclical": {"gr_sales": 6.0, "gr_fcf": 8.0, "gr_eps": 10.0, "ps": 2.0, "pe": 18.0, "p_fcf": 15.0, "wacc": 10.0},
+    "Consumer Defensive": {"gr_sales": 4.0, "gr_fcf": 5.0, "gr_eps": 6.0, "ps": 1.5, "pe": 20.0, "p_fcf": 18.0, "wacc": 7.5},
+    "Financial Services": {"gr_sales": 5.0, "gr_fcf": 6.0, "gr_eps": 8.0, "ps": 2.5, "pe": 12.0, "p_fcf": 12.0, "wacc": 9.0},
+    "Healthcare": {"gr_sales": 5.0, "gr_fcf": 7.0, "gr_eps": 8.0, "ps": 4.0, "pe": 22.0, "p_fcf": 20.0, "wacc": 8.0},
+    "Energy": {"gr_sales": 3.0, "gr_fcf": 5.0, "gr_eps": 5.0, "ps": 1.5, "pe": 10.0, "p_fcf": 8.0, "wacc": 10.0},
+    "Industrials": {"gr_sales": 4.0, "gr_fcf": 6.0, "gr_eps": 7.0, "ps": 1.8, "pe": 18.0, "p_fcf": 15.0, "wacc": 9.0},
+    "Basic Materials": {"gr_sales": 3.0, "gr_fcf": 5.0, "gr_eps": 5.0, "ps": 1.5, "pe": 15.0, "p_fcf": 12.0, "wacc": 10.0},
+    "Real Estate": {"gr_sales": 4.0, "gr_fcf": 5.0, "gr_eps": 5.0, "ps": 5.0, "pe": 25.0, "p_fcf": 20.0, "wacc": 8.5},
+    "Utilities": {"gr_sales": 3.0, "gr_fcf": 4.0, "gr_eps": 4.0, "ps": 2.0, "pe": 18.0, "p_fcf": 15.0, "wacc": 7.0},
     "Default": {"gr_sales": 7.0, "gr_fcf": 8.0, "gr_eps": 8.0, "ps": 2.5, "pe": 15.0, "p_fcf": 15.0, "wacc": 9.0}
 }
 
 def get_benchmark_data(ticker, sector_info):
-    ticker_clean = ticker.upper().replace(".TO", "").replace("-B", "").replace(".UN", "")
+    # Nettoyage strict pour éviter les faux positifs (ex: PNG.V avec Visa "V")
+    ticker_clean = ticker.upper().replace(".TO", "").replace("-B", "").replace(".UN", "").replace(".V", "").replace(".NE", "").replace(".CN", "").strip()
     
-    # 1. Recherche dans les groupes spécifiques
+    # 1. Recherche EXACTE dans les groupes spécifiques (Priorité)
     for group_key, data in PEER_GROUPS.items():
         clean_list = [t.upper() for t in data['tickers']]
         
-        match = False
-        for t in clean_list:
-            if t == ticker_clean or (len(ticker_clean) > 3 and t in ticker_clean):
-                match = True
-                break
-        
-        if match:
-            # On exclut l'action elle-même de la liste des pairs pour l'affichage
-            peers_list = [t for t in data['tickers'] if t.upper() not in ticker_clean]
+        if ticker_clean in clean_list:
+            # On exclut l'action elle-même de la liste des pairs
+            peers_list = [t for t in data['tickers'] if t.upper() != ticker_clean]
             peers_str = ", ".join(peers_list[:5])
-            
             return {**data, "source": "Comparables", "peers": peers_str}
             
-    # 2. Fallback Secteur
-    bench = SECTOR_BENCHMARKS.get("Default")
+    # 2. Fallback Secteur Générique (si pas dans la liste manuelle)
+    # On utilise le secteur renvoyé par Yahoo (ex: "Industrials" pour Kraken)
+    bench = SECTOR_BENCHMARKS.get(sector_info, SECTOR_BENCHMARKS["Default"])
     return {**bench, "source": "Sector", "name": sector_info or "General", "peers": "Sector Average"}
 
-# --- 2. DATA FUNCTIONS (SECURE) ---
+# --- 3. DATA FUNCTIONS (SECURE) ---
 @st.cache_data(ttl=3600)
 def get_financial_data_secure(ticker):
     try:
@@ -227,14 +230,12 @@ def get_item_safe(df, search_terms):
 
 # --- CALCULATION ENGINE ---
 def calculate_valuation(gr_sales, gr_fcf, gr_eps, wacc_val, ps_target, pe_target, revenue, fcf, eps, cash, debt, shares):
-    # DCF
     current_fcf = fcf
     fcf_projections = [current_fcf * (1 + gr_fcf)**(i+1) for i in range(5)]
     terminal_val = (fcf_projections[-1] * 1.03) / (wacc_val - 0.03)
     pv_fcf = sum([val / ((1 + wacc_val)**(i+1)) for i, val in enumerate(fcf_projections)])
     price_dcf = ((pv_fcf + (terminal_val / ((1 + wacc_val)**5))) + cash - debt) / shares
     
-    # Sales & Earnings
     price_sales = (((revenue * ((1 + gr_sales)**5)) * ps_target) / shares) / (1.10**5)
     eps_future = eps * ((1 + gr_eps)**5)
     price_earnings = (eps_future * pe_target) / (1.10**5)
@@ -314,7 +315,7 @@ if ticker_final:
         # BENCHMARKS
         bench_data = get_benchmark_data(ticker_final, data['sector'])
         
-        # --- DISPLAY HELP (BIG COMPARISON) ---
+        # --- DISPLAY HELP ---
         with st.expander(f"💡 Help: {bench_data['name']} vs {ticker_final}", expanded=True):
             st.write(f"**Peers:** {bench_data['peers']}")
             
