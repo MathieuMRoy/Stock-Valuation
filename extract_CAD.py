@@ -7,10 +7,10 @@ st.set_page_config(page_title="Valuation Master", page_icon="📱", layout="cent
 
 # --- SIDEBAR : BOUTON RESET ---
 with st.sidebar:
-    if st.button("🗑️ Reset Cache (Fix Bugs)"):
+    if st.button("🗑️ Reset Cache"):
         st.cache_data.clear()
         st.rerun()
-    st.caption("Utilisez ce bouton si vous voyez une erreur rouge ou 'Data not found'.")
+    st.caption("À utiliser si l'application semble bloquée.")
 
 st.title("📱 Valuation Master")
 st.caption("3 Models: Cash • Sales • Earnings")
@@ -102,11 +102,10 @@ def get_financial_data_secure(ticker):
         
         if bs is None or bs.empty: return None
 
-        # 3. INFO (Extraction Sécurisée)
+        # 3. INFO
         try:
             full_info = stock.info
             sector = full_info.get('sector', 'Default')
-            # Extraction des données de croissance
             rev_growth = full_info.get('revenueGrowth', 0)
             eps_growth = full_info.get('earningsGrowth', 0)
             trailing_eps = full_info.get('trailingEps', None)
@@ -121,13 +120,11 @@ def get_financial_data_secure(ticker):
         return {
             "bs": bs, "inc": inc, "cf": cf, 
             "price": current_price, "shares_calc": shares_calc,
-            "sector": sector, 
-            "rev_growth": rev_growth, "eps_growth": eps_growth, 
-            "trailing_eps": trailing_eps, "shares_info": shares_info
+            "sector": sector, "rev_growth": rev_growth, 
+            "eps_growth": eps_growth, "trailing_eps": trailing_eps,
+            "shares_info": shares_info
         }
-        
-    except Exception:
-        return None
+    except: return None
 
 def get_ttm_flexible(df, keys_list):
     if df is None or df.empty: return 0
@@ -149,15 +146,12 @@ def get_item_safe(df, search_terms):
 
 # --- CALCULATION ENGINE ---
 def calculate_valuation(gr_sales, gr_fcf, gr_eps, wacc_val, ps_target, pe_target, revenue, fcf, eps, cash, debt, shares):
-    # DCF
     current_fcf = fcf
     fcf_projections = [current_fcf * (1 + gr_fcf)**(i+1) for i in range(5)]
     terminal_val = (fcf_projections[-1] * 1.03) / (wacc_val - 0.03)
     pv_fcf = sum([val / ((1 + wacc_val)**(i+1)) for i, val in enumerate(fcf_projections)])
-    pv_tv = terminal_val / ((1 + wacc_val)**5)
     price_dcf = ((pv_fcf + (terminal_val / ((1 + wacc_val)**5))) + cash - debt) / shares
     
-    # Sales & Earnings
     price_sales = (((revenue * ((1 + gr_sales)**5)) * ps_target) / shares) / (1.10**5)
     eps_future = eps * ((1 + gr_eps)**5)
     price_earnings = (eps_future * pe_target) / (1.10**5)
@@ -194,20 +188,16 @@ st.divider()
 
 # --- EXECUTION ---
 if ticker_final:
-    # 1. FETCH DATA (SECURE WAY)
     data = get_financial_data_secure(ticker_final)
     
     if data is None:
         st.error(f"Data not found for {ticker_final}. Check ticker or try again later.")
-        if st.button("Retry Connection"):
-            st.cache_data.clear()
-            st.rerun()
     else:
-        # UNPACKING
+        # UNPACK
         bs = data['bs']; inc = data['inc']; cf = data['cf']
         current_price = data['price']
         
-        # 2. SHARES LOGIC (ANTI-BUG)
+        # SHARES LOGIC
         shares = data['shares_calc']
         if shares <= 1: shares = data['shares_info']
         if shares <= 1: 
@@ -216,7 +206,7 @@ if ticker_final:
 
         market_cap = shares * current_price
 
-        # 3. METRICS
+        # METRICS
         revenue_ttm = get_ttm_flexible(inc, ["TotalRevenue", "Revenue"])
         cfo_ttm = get_ttm_flexible(cf, ["OperatingCashFlow", "Operating Cash Flow"])
         capex_ttm = abs(get_item_safe(cf, ["CapitalExpenditure", "PurchaseOfPPE"]))
@@ -230,28 +220,38 @@ if ticker_final:
         if eps_ttm is None:
             eps_ttm = net_income / shares if shares > 0 else 0
 
-        # RATIOS & GROWTH (POUR COMPARAISON)
+        # RATIOS & GROWTH (SAFE FETCH)
         ps_current = market_cap / revenue_ttm if revenue_ttm > 0 else 0
         pe_current = current_price / eps_ttm if eps_ttm > 0 else 0
         pfcf_current = market_cap / fcf_ttm if fcf_ttm > 0 else 0
         
-        # Correction du bug NameError ici : on utilise le dictionnaire 'data'
         cur_sales_gr = data['rev_growth'] if data['rev_growth'] else 0
         cur_eps_gr = data['eps_growth'] if data['eps_growth'] else 0
 
         # BENCHMARKS
         bench_data = get_benchmark_data(ticker_final, data['sector'])
         
-        # --- DISPLAY HELP (AVEC COMPARAISON - NEUTRE) ---
+        # --- DISPLAY HELP (BIG COMPARISON) ---
         with st.expander(f"💡 Help: {bench_data['name']} vs {ticker_final}", expanded=True):
             st.write(f"**Peers:** {bench_data['peers']}")
             
+            # SECTION 1: SECTEUR (GROS CHIFFRES)
+            st.markdown("### 🏢 Sector / Peer Averages")
             c1, c2, c3, c4 = st.columns(4)
-            # Affichage: Benchmark (Gros) vs Réel (Petit, sans couleur)
-            c1.metric("Sales Gr.", f"{bench_data['gr_sales']*100:.0f}%", delta=f"{cur_sales_gr*100:.1f}% Actual", delta_color="off")
-            c2.metric("FCF/EPS Gr.", f"{bench_data['gr_fcf']*100:.0f}%", delta=f"{cur_eps_gr*100:.1f}% Actual", delta_color="off")
-            c3.metric("Target P/S", f"{bench_data['ps']}x", delta=f"{ps_current:.1f}x Actual", delta_color="off")
-            c4.metric("Target P/E", f"{bench_data.get('pe', 20)}x", delta=f"{pe_current:.1f}x Actual", delta_color="off")
+            c1.metric("Peer Sales Gr.", f"{bench_data['gr_sales']*100:.0f}%")
+            c2.metric("Peer EPS Gr.", f"{bench_data['gr_eps']*100:.0f}%")
+            c3.metric("Peer Target P/S", f"{bench_data['ps']}x")
+            c4.metric("Peer Target P/E", f"{bench_data.get('pe', 20)}x")
+
+            st.divider()
+
+            # SECTION 2: ACTUEL (GROS CHIFFRES AUSSI)
+            st.markdown(f"### 📍 {ticker_final} Current Metrics (Actual)")
+            c5, c6, c7, c8 = st.columns(4)
+            c5.metric("Actual Sales Gr.", f"{cur_sales_gr*100:.1f}%")
+            c6.metric("Actual EPS Gr.", f"{cur_eps_gr*100:.1f}%")
+            c7.metric("Actual P/S", f"{ps_current:.1f}x")
+            c8.metric("Actual P/E", f"{pe_current:.1f}x")
 
         # --- INPUTS ---
         with st.expander("⚙️ Edit Assumptions (Neutral)", expanded=False):
@@ -284,10 +284,9 @@ if ticker_final:
         bull_res = run_scenario(1.2, 1.2, -0.01)
 
         # ==========================================
-        # SMART ADVISOR (NOUVEAU - AVEC DCF)
+        # SMART ADVISOR
         # ==========================================
         st.divider()
-        
         if eps_ttm <= 0:
             advice_msg = f"💡 **Analyst Tip for {ticker_final}:** This company is **unprofitable** (Negative Earnings). The best metric to use is likely **Price-to-Sales (P/S)** in the Sales tab."
         else:
