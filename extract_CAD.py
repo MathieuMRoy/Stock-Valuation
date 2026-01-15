@@ -54,29 +54,81 @@ TICKER_DB = [
     "MSTR - MicroStrategy"
 ]
 
-# --- 1. DATA: SECTOR BENCHMARKS ---
+# --- 1. DATA: SECTOR BENCHMARKS (AMÉLIORÉ) ---
 PEER_GROUPS = {
-    "SPACE_TECH": {"tickers": ["MDA", "RKLB", "ASTS", "LUNR", "PL"], "gr_sales": 0.20, "gr_fcf": 0.25, "gr_eps": 0.25, "ps": 6.0, "pe": 40.0, "p_fcf": 35.0, "wacc": 0.11, "name": "Space Tech"},
-    "SEMICONDUCTORS": {"tickers": ["NVDA", "AMD", "INTC", "TSM", "AVGO"], "gr_sales": 0.18, "gr_fcf": 0.20, "gr_eps": 0.20, "ps": 8.0, "pe": 35.0, "p_fcf": 30.0, "wacc": 0.10, "name": "Semiconductors"},
-    "BIG_TECH": {"tickers": ["AAPL", "MSFT", "GOOG", "AMZN", "META"], "gr_sales": 0.12, "gr_fcf": 0.15, "gr_eps": 0.15, "ps": 6.5, "pe": 25.0, "p_fcf": 28.0, "wacc": 0.09, "name": "Big Tech"},
-    "SAAS_CLOUD": {"tickers": ["CRM", "ADBE", "SNOW", "DDOG", "PLTR"], "gr_sales": 0.20, "gr_fcf": 0.22, "gr_eps": 0.25, "ps": 10.0, "pe": 40.0, "p_fcf": 35.0, "wacc": 0.10, "name": "SaaS Cloud"},
-    "STREAMING": {"tickers": ["NFLX", "DIS", "WBD", "SPOT"], "gr_sales": 0.10, "gr_fcf": 0.15, "gr_eps": 0.18, "ps": 4.0, "pe": 25.0, "p_fcf": 20.0, "wacc": 0.09, "name": "Streaming"},
-    "EV_AUTO": {"tickers": ["TSLA", "RIVN", "BYD", "F", "GM"], "gr_sales": 0.15, "gr_fcf": 0.12, "gr_eps": 0.15, "ps": 3.0, "pe": 30.0, "p_fcf": 25.0, "wacc": 0.11, "name": "EV & Auto"},
-    "BANKS_CA": {"tickers": ["RY", "TD", "BMO", "BNS", "CM"], "gr_sales": 0.04, "gr_fcf": 0.05, "gr_eps": 0.06, "ps": 2.5, "pe": 11.0, "p_fcf": 12.0, "wacc": 0.08, "name": "Canadian Banks"}
+    "SPACE_TECH": {
+        "tickers": ["MDA", "RKLB", "ASTS", "LUNR", "PL", "SPIR", "SPCE"],
+        "gr_sales": 20.0, "gr_fcf": 25.0, "gr_eps": 25.0, "ps": 6.0, "pe": 40.0, "p_fcf": 35.0, "wacc": 11.0,
+        "name": "Space Tech & Satellites"
+    },
+    "SEMICONDUCTORS": {
+        "tickers": ["NVDA", "AMD", "INTC", "TSM", "AVGO", "QCOM", "MU"],
+        "gr_sales": 18.0, "gr_fcf": 20.0, "gr_eps": 20.0, "ps": 8.0, "pe": 35.0, "p_fcf": 30.0, "wacc": 10.0,
+        "name": "Semiconductors & AI"
+    },
+    "BIG_TECH": {
+        "tickers": ["AAPL", "MSFT", "GOOG", "GOOGL", "AMZN", "META"],
+        "gr_sales": 12.0, "gr_fcf": 15.0, "gr_eps": 15.0, "ps": 6.5, "pe": 25.0, "p_fcf": 28.0, "wacc": 9.0,
+        "name": "Big Tech / GAFAM"
+    },
+    "CONSUMER_APPS": { # NOUVEAU GROUPE POUR DUOLINGO
+        "tickers": ["DUOL", "UBER", "ABNB", "SPOT", "DASH", "BKNG", "PINS", "SNAP"],
+        "gr_sales": 18.0, "gr_fcf": 25.0, "gr_eps": 25.0, "ps": 5.0, "pe": 30.0, "p_fcf": 25.0, "wacc": 10.0,
+        "name": "Consumer Apps & Platforms"
+    },
+    "SAAS_CLOUD": {
+        "tickers": ["CRM", "ADBE", "SNOW", "DDOG", "PLTR", "NOW", "SHOP", "WDAY"],
+        "gr_sales": 20.0, "gr_fcf": 22.0, "gr_eps": 25.0, "ps": 9.0, "pe": 40.0, "p_fcf": 35.0, "wacc": 10.0,
+        "name": "SaaS & Enterprise Cloud"
+    },
+    "STREAMING": {
+        "tickers": ["NFLX", "DIS", "WBD", "PARA", "ROKU"],
+        "gr_sales": 10.0, "gr_fcf": 15.0, "gr_eps": 18.0, "ps": 4.0, "pe": 25.0, "p_fcf": 20.0, "wacc": 9.0,
+        "name": "Streaming & Media"
+    },
+    "EV_AUTO": {
+        "tickers": ["TSLA", "RIVN", "LCID", "BYD", "F", "GM"],
+        "gr_sales": 15.0, "gr_fcf": 12.0, "gr_eps": 15.0, "ps": 3.0, "pe": 30.0, "p_fcf": 25.0, "wacc": 11.0,
+        "name": "Electric Vehicles"
+    },
+    "BANKS_CA": {
+        "tickers": ["RY", "TD", "BMO", "BNS", "CM", "NA"],
+        "gr_sales": 4.0, "gr_fcf": 5.0, "gr_eps": 6.0, "ps": 2.5, "pe": 11.0, "p_fcf": 12.0, "wacc": 8.0,
+        "name": "Canadian Banks"
+    }
 }
 
 SECTOR_BENCHMARKS = {
-    "Technology": {"gr_sales": 0.12, "gr_fcf": 0.15, "gr_eps": 0.15, "ps": 5.0, "pe": 25.0, "p_fcf": 25.0, "wacc": 0.095},
-    "Default": {"gr_sales": 0.07, "gr_fcf": 0.08, "gr_eps": 0.08, "ps": 2.5, "pe": 15.0, "p_fcf": 15.0, "wacc": 0.09}
+    "Technology": {"gr_sales": 12.0, "gr_fcf": 15.0, "gr_eps": 15.0, "ps": 5.0, "pe": 25.0, "p_fcf": 25.0, "wacc": 9.5},
+    "Default": {"gr_sales": 7.0, "gr_fcf": 8.0, "gr_eps": 8.0, "ps": 2.5, "pe": 15.0, "p_fcf": 15.0, "wacc": 9.0}
 }
 
 def get_benchmark_data(ticker, sector_info):
     ticker_clean = ticker.upper().replace(".TO", "").replace("-B", "").replace(".UN", "")
-    for _, data in PEER_GROUPS.items():
-        if any(t in ticker_clean for t in data['tickers']):
-            return {**data, "source": "Comparables", "peers": ", ".join(data['tickers'][:4])}
+    
+    # 1. Recherche dans les groupes spécifiques
+    for group_key, data in PEER_GROUPS.items():
+        # On vérifie si le ticker est DANS la liste des tickers du groupe
+        # (Utilisation de 'in list' strict pour éviter les faux positifs)
+        clean_list = [t.upper() for t in data['tickers']]
+        
+        # On cherche si le ticker (ex: DUOL) est dans la liste ou contient une partie
+        match = False
+        for t in clean_list:
+            if t == ticker_clean or (len(ticker_clean) > 3 and t in ticker_clean):
+                match = True
+                break
+        
+        if match:
+            # Création de la liste des pairs en EXCLUANT l'action actuelle
+            peers_list = [t for t in data['tickers'] if t.upper() not in ticker_clean]
+            peers_str = ", ".join(peers_list[:5]) # On en montre 5
+            
+            return {**data, "source": "Comparables", "peers": peers_str}
+            
+    # 2. Fallback Secteur
     bench = SECTOR_BENCHMARKS.get("Default")
-    return {**bench, "source": "Sector", "name": sector_info or "General", "peers": "Sector Avg"}
+    return {**bench, "source": "Sector", "name": sector_info or "General", "peers": "Sector Average"}
 
 # --- 2. DATA FUNCTIONS (SECURE) ---
 @st.cache_data(ttl=3600)
@@ -84,7 +136,7 @@ def get_financial_data_secure(ticker):
     try:
         stock = yf.Ticker(ticker)
         
-        # 1. PRIX & SHARES (Méthode Rapide)
+        # 1. PRIX & SHARES
         try:
             current_price = stock.fast_info['last_price']
             market_cap = stock.fast_info['market_cap']
@@ -146,12 +198,14 @@ def get_item_safe(df, search_terms):
 
 # --- CALCULATION ENGINE ---
 def calculate_valuation(gr_sales, gr_fcf, gr_eps, wacc_val, ps_target, pe_target, revenue, fcf, eps, cash, debt, shares):
+    # DCF
     current_fcf = fcf
     fcf_projections = [current_fcf * (1 + gr_fcf)**(i+1) for i in range(5)]
     terminal_val = (fcf_projections[-1] * 1.03) / (wacc_val - 0.03)
     pv_fcf = sum([val / ((1 + wacc_val)**(i+1)) for i, val in enumerate(fcf_projections)])
     price_dcf = ((pv_fcf + (terminal_val / ((1 + wacc_val)**5))) + cash - debt) / shares
     
+    # Sales & Earnings
     price_sales = (((revenue * ((1 + gr_sales)**5)) * ps_target) / shares) / (1.10**5)
     eps_future = eps * ((1 + gr_eps)**5)
     price_earnings = (eps_future * pe_target) / (1.10**5)
@@ -220,7 +274,7 @@ if ticker_final:
         if eps_ttm is None:
             eps_ttm = net_income / shares if shares > 0 else 0
 
-        # RATIOS & GROWTH (SAFE FETCH)
+        # RATIOS & GROWTH
         ps_current = market_cap / revenue_ttm if revenue_ttm > 0 else 0
         pe_current = current_price / eps_ttm if eps_ttm > 0 else 0
         pfcf_current = market_cap / fcf_ttm if fcf_ttm > 0 else 0
@@ -231,41 +285,42 @@ if ticker_final:
         # BENCHMARKS
         bench_data = get_benchmark_data(ticker_final, data['sector'])
         
-        # --- DISPLAY HELP (BIG COMPARISON) ---
+        # --- DISPLAY HELP ---
         with st.expander(f"💡 Help: {bench_data['name']} vs {ticker_final}", expanded=True):
             st.write(f"**Peers:** {bench_data['peers']}")
             
-            # SECTION 1: SECTEUR (GROS CHIFFRES)
+            # 1. SECTOR AVERAGES
             st.markdown("### 🏢 Sector / Peer Averages")
             c1, c2, c3, c4 = st.columns(4)
-            c1.metric("Peer Sales Gr.", f"{bench_data['gr_sales']*100:.0f}%")
-            c2.metric("Peer EPS Gr.", f"{bench_data['gr_eps']*100:.0f}%")
+            c1.metric("Peer Sales Gr.", f"{bench_data['gr_sales']:.0f}%")
+            c2.metric("Peer EPS Gr.", f"{bench_data['gr_eps']:.0f}%")
             c3.metric("Peer Target P/S", f"{bench_data['ps']}x")
             c4.metric("Peer Target P/E", f"{bench_data.get('pe', 20)}x")
 
             st.divider()
 
-            # SECTION 2: ACTUEL (GROS CHIFFRES AUSSI)
+            # 2. ACTUAL COMPANY METRICS
             st.markdown(f"### 📍 {ticker_final} Current Metrics (Actual)")
             c5, c6, c7, c8 = st.columns(4)
-            c5.metric("Actual Sales Gr.", f"{cur_sales_gr*100:.1f}%")
-            c6.metric("Actual EPS Gr.", f"{cur_eps_gr*100:.1f}%")
-            c7.metric("Actual P/S", f"{ps_current:.1f}x")
-            c8.metric("Actual P/E", f"{pe_current:.1f}x")
+            # Pas de couleur (delta_color="off") pour rester neutre comme demandé
+            c5.metric("Actual Sales Gr.", f"{cur_sales_gr*100:.1f}%", delta_color="off")
+            c6.metric("Actual EPS Gr.", f"{cur_eps_gr*100:.1f}%", delta_color="off")
+            c7.metric("Actual P/S", f"{ps_current:.1f}x", delta_color="off")
+            c8.metric("Actual P/E", f"{pe_current:.1f}x", delta_color="off")
 
         # --- INPUTS ---
         with st.expander("⚙️ Edit Assumptions (Neutral)", expanded=False):
             st.markdown("##### 1. Growth (5y CAGR)")
             c1, c2, c3 = st.columns(3)
-            gr_sales_input = c1.number_input("Sales Growth (%)", value=bench_data['gr_sales']*100, step=0.5, format="%.1f")
-            gr_fcf_input = c2.number_input("FCF Growth (%)", value=bench_data['gr_fcf']*100, step=0.5, format="%.1f")
-            gr_eps_input = c3.number_input("EPS Growth (%)", value=bench_data.get('gr_eps', 0.10)*100, step=0.5, format="%.1f")
+            gr_sales_input = c1.number_input("Sales Growth (%)", value=bench_data['gr_sales'], step=0.5, format="%.1f")
+            gr_fcf_input = c2.number_input("FCF Growth (%)", value=bench_data['gr_fcf'], step=0.5, format="%.1f")
+            gr_eps_input = c3.number_input("EPS Growth (%)", value=bench_data.get('gr_eps', 10.0), step=0.5, format="%.1f")
             
             st.markdown("##### 2. Exit Multiples & Risk")
             c4, c5, c6 = st.columns(3)
             target_ps = c4.number_input("Target P/S (x)", value=bench_data['ps'], step=0.5)
             target_pe = c5.number_input("Target P/E (x)", value=float(bench_data.get('pe', 20.0)), step=0.5)
-            wacc_input = c6.number_input("WACC / Discount (%)", value=bench_data['wacc']*100, step=0.5, format="%.1f")
+            wacc_input = c6.number_input("WACC / Discount (%)", value=bench_data['wacc'], step=0.5, format="%.1f")
 
         # --- SCENARIOS ---
         def run_scenario(factor_growth, factor_mult, risk_adj):
