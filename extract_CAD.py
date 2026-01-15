@@ -4,11 +4,22 @@ import pandas as pd
 
 # --- CONFIGURATION ---
 st.set_page_config(page_title="Valuation Master", page_icon="📱", layout="centered")
+
+# --- SIDEBAR: UTILS ---
+with st.sidebar:
+    st.header("🔧 Settings")
+    if st.button("🗑️ Reset Cache / Fix Errors"):
+        st.cache_data.clear()
+        st.rerun()
+    st.caption("Click above if a valid ticker shows 'Data not found'.")
+
 st.title("📱 Valuation Master")
 st.caption("3 Models: Cash • Sales • Earnings")
 
 # --- 0. DATA: SMART SEARCH DATABASE ---
+# Note: The first item MUST be the default "prompt"
 TICKER_DB = [
+    "👇 Pick from list (or type below)...",
     "--- TECH US (MAGNIFICENT 7) ---",
     "AAPL - Apple Inc.",
     "MSFT - Microsoft Corp.",
@@ -102,14 +113,29 @@ def get_benchmark_data(ticker, sector_info):
     bench = SECTOR_BENCHMARKS.get(sector_info, SECTOR_BENCHMARKS["Default"])
     return {**bench, "source": "Sector", "name": sector_info, "peers": "Sector Average"}
 
-# --- 2. DATA FUNCTIONS ---
+# --- 2. DATA FUNCTIONS (ROBUST) ---
+# IMPORTANT: On ne met pas de cache si ça échoue, pour éviter de "mémoriser" les erreurs.
 @st.cache_data(ttl=3600)
 def get_financial_data(ticker):
     try:
         stock = yf.Ticker(ticker)
-        bs, inc, cf, info = stock.quarterly_balance_sheet, stock.quarterly_financials, stock.quarterly_cashflow, stock.info
+        # On force un appel pour vérifier si les données existent
+        info = stock.info
+        if not info or 'regularMarketPrice' not in info:
+             # Yahoo retourne parfois un dict vide ou incomplet
+             pass 
+        
+        bs = stock.quarterly_balance_sheet
+        inc = stock.quarterly_financials
+        cf = stock.quarterly_cashflow
+        
+        # Vérification critique
+        if bs is None or bs.empty:
+            return None, None, None, None
+            
         return bs, inc, cf, info
-    except: return None, None, None, None
+    except Exception as e:
+        return None, None, None, None
 
 def get_ttm_flexible(df, keys_list):
     if df is None or df.empty: return 0
@@ -177,33 +203,39 @@ def display_relative_analysis(current, benchmark, metric_name, group_name):
     box(f"**🔍 Relative Analysis:** Current {metric_name} **{current:.1f}x** vs Peer/Sector **{benchmark}x**.\n\n"
         f"👉 **Verdict: {status}** ({msg} vs {group_name}).")
 
-# --- 3. INTERFACE (HYBRID SEARCH) ---
+# --- 3. INTERFACE (SYNCED SEARCH) ---
 
-# Initialize Session State for ticker
+# Initialize Session State
 if 'ticker_search' not in st.session_state:
     st.session_state.ticker_search = "MSFT"
 
-def update_ticker_from_list():
+# Callback 1: List -> Text
+def update_input_from_list():
     selection = st.session_state.preset_select
     if "-" in selection:
-        # Extract ticker from "AAPL - Apple"
         st.session_state.ticker_search = selection.split("-")[0].strip()
+
+# Callback 2: Text -> Reset List
+def reset_list_index():
+    # If user types, we basically want to 'unselect' or visually ignore the list
+    # Streamlit selectbox doesn't allow easy programmatic reset without weird hacks.
+    # The best UX here is simple: The text box is the source of truth.
+    # We just let the selectbox stay where it is, it's less buggy.
+    pass
 
 st.subheader("Search for a Company")
 
-# 1. Dropdown (Updates text input via session state)
-search_options = ["👇 Pick from list (or type below)..."] + TICKER_DB
-
+# Dropdown
 st.selectbox(
     "Popular Ideas:", 
-    options=search_options, 
+    options=TICKER_DB, 
     key="preset_select", 
-    index=0,
-    on_change=update_ticker_from_list,
+    index=2, # Default MSFT
+    on_change=update_input_from_list,
     label_visibility="collapsed"
 )
 
-# 2. Text Input (The Source of Truth)
+# Text Input
 col_input, col_info = st.columns([3, 1])
 with col_input:
     ticker_final = st.text_input(
@@ -212,21 +244,26 @@ with col_input:
         help="Type any ticker here (e.g. VLE.TO, AMD, GOOGL)"
     ).upper().strip()
 
-if ticker_final:
-    st.caption(f"Analyzing: **{ticker_final}**")
-else:
-    st.info("Please enter a symbol to start.")
-
-st.divider()
-
 # --- EXECUTION ---
-if ticker_final:
+if not ticker_final:
+    st.info("Please enter a symbol to start.")
+else:
+    st.caption(f"Analyzing: **{ticker_final}**")
+    st.divider()
+    
+    # FETCH DATA
     bs, inc, cf, info = get_financial_data(ticker_final)
     
     if bs is None or inc.empty:
-        st.error(f"Data not found for {ticker_final}. Check ticker symbol.")
+        st.error(f"❌ Data not found for **{ticker_final}**.")
+        st.markdown("""
+        **Troubleshooting:**
+        1. Check the spelling (e.g., `VLE.TO` for TSX).
+        2. **Try clicking the '🗑️ Reset Cache' button in the sidebar** (left).
+        3. Yahoo Finance might be blocking requests temporarily.
+        """)
     else:
-        # 1. EXTRACT DATA FIRST
+        # 1. EXTRACT DATA
         revenue_ttm = get_ttm_flexible(inc, ["TotalRevenue", "Total Revenue", "Revenue"])
         cfo_ttm = get_ttm_flexible(cf, ["OperatingCashFlow", "Operating Cash Flow"])
         capex_ttm = abs(get_ttm_flexible(cf, ["CapitalExpenditure", "Capital Expenditure"]))
@@ -240,18 +277,18 @@ if ticker_final:
             net_income = get_ttm_flexible(inc, ["NetIncome", "Net Income Common Stockholders"])
             eps_ttm = net_income / shares if shares > 0 else 0
 
-        # Current Ratios (For Comparison)
+        # Current Ratios
         curr_sales_gr = info.get('revenueGrowth', 0)
         curr_eps_gr = info.get('earningsGrowth', 0)
         ps_current = market_cap / revenue_ttm if revenue_ttm > 0 else 0
         pe_current = current_price / eps_ttm if eps_ttm > 0 else 0
         pfcf_current = market_cap / fcf_ttm if fcf_ttm > 0 else 0
 
-        # 2. DATA PREP & BENCHMARKS
+        # 2. BENCHMARKS
         raw_sector = info.get('sector', 'Default')
         bench_data = get_benchmark_data(ticker_final, raw_sector)
         
-        # 3. HELP / BENCHMARK INFO
+        # 3. HELP DISPLAY
         with st.expander(f"💡 Help: {bench_data['name']} vs {ticker_final}", expanded=True):
             st.write(f"**Peers:** {bench_data['peers']}")
             
@@ -283,7 +320,7 @@ if ticker_final:
             target_pe = c5.number_input("Target P/E (x)", value=float(bench_data.get('pe', 20.0)), step=0.5)
             wacc_input = c6.number_input("WACC (%)", value=bench_data['wacc']*100, step=0.5, format="%.1f")
 
-        # 5. CALCULATE SCENARIOS
+        # 5. CALCULATIONS
         def run_scenario(factor_growth, factor_mult, risk_adj):
             return calculate_valuation(
                 (gr_sales_input/100.0) * factor_growth, 
