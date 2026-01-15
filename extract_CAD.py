@@ -103,8 +103,7 @@ def get_benchmark_data(ticker, sector_info):
     bench = SECTOR_BENCHMARKS.get(sector_info, SECTOR_BENCHMARKS["Default"])
     return {**bench, "source": "Sector", "name": sector_info, "peers": "Sector Average"}
 
-# --- 2. DATA FUNCTIONS ---
-@st.cache_data(ttl=3600)
+# --- 2. DATA FUNCTIONS (SANS CACHE - POUR ÉVITER LES ERREURS) ---
 def get_financial_data(ticker):
     try:
         stock = yf.Ticker(ticker)
@@ -353,7 +352,6 @@ if ticker_final:
             # Scores
             fcf_margin = (fcf_ttm / revenue_ttm) * 100 if revenue_ttm > 0 else 0
             fcf_yield = (fcf_ttm / market_cap) * 100 if market_cap > 0 else 0
-            # On utilise les inputs en % directement (pas besoin de x100)
             rule_40 = gr_sales_input + fcf_margin
             total_return = gr_eps_input + fcf_yield
 
