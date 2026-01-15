@@ -4,6 +4,14 @@ import pandas as pd
 
 # --- CONFIGURATION ---
 st.set_page_config(page_title="Valuation Master", page_icon="📱", layout="centered")
+
+# --- SIDEBAR : BOUTON DE SECOURS ---
+with st.sidebar:
+    if st.button("🗑️ Reset Cache (Fix Bugs)"):
+        st.cache_data.clear()
+        st.rerun()
+    st.caption("Si erreur 'Unserializable' ou données bizarres.")
+
 st.title("📱 Valuation Master")
 st.caption("3 Models: Cash • Sales • Earnings")
 
@@ -48,69 +56,77 @@ TICKER_DB = [
 
 # --- 1. DATA: SECTOR BENCHMARKS ---
 PEER_GROUPS = {
-    "SPACE_TECH": {
-        "tickers": ["MDA", "RKLB", "ASTS", "LUNR", "PL", "SPIR", "SPCE"],
-        "gr_sales": 0.20, "gr_fcf": 0.25, "gr_eps": 0.25, "ps": 6.0, "pe": 40.0, "p_fcf": 35.0, "wacc": 0.11,
-        "name": "Space Tech & Satellites"
-    },
-    "SEMICONDUCTORS": {
-        "tickers": ["NVDA", "AMD", "INTC", "TSM", "AVGO", "QCOM"],
-        "gr_sales": 0.18, "gr_fcf": 0.20, "gr_eps": 0.20, "ps": 8.0, "pe": 35.0, "p_fcf": 30.0, "wacc": 0.10,
-        "name": "Semiconductors & AI"
-    },
-    "BIG_TECH": {
-        "tickers": ["AAPL", "MSFT", "GOOG", "GOOGL", "AMZN", "META"],
-        "gr_sales": 0.12, "gr_fcf": 0.15, "gr_eps": 0.15, "ps": 6.5, "pe": 25.0, "p_fcf": 28.0, "wacc": 0.09,
-        "name": "Big Tech / GAFAM"
-    },
-    "SAAS_CLOUD": {
-        "tickers": ["CRM", "ADBE", "SNOW", "DDOG", "PLTR", "NOW", "SHOP", "DUOL"],
-        "gr_sales": 0.20, "gr_fcf": 0.22, "gr_eps": 0.25, "ps": 10.0, "pe": 40.0, "p_fcf": 35.0, "wacc": 0.10,
-        "name": "SaaS & Cloud Software"
-    },
-    "STREAMING": {
-        "tickers": ["NFLX", "DIS", "WBD", "PARA", "SPOT"],
-        "gr_sales": 0.10, "gr_fcf": 0.15, "gr_eps": 0.18, "ps": 4.0, "pe": 25.0, "p_fcf": 20.0, "wacc": 0.09,
-        "name": "Streaming & Media"
-    },
-    "EV_AUTO": {
-        "tickers": ["TSLA", "RIVN", "LCID", "BYD", "F", "GM"],
-        "gr_sales": 0.15, "gr_fcf": 0.12, "gr_eps": 0.15, "ps": 3.0, "pe": 30.0, "p_fcf": 25.0, "wacc": 0.11,
-        "name": "Electric Vehicles"
-    },
-    "BANKS_CA": {
-        "tickers": ["RY", "TD", "BMO", "BNS", "CM", "NA"],
-        "gr_sales": 0.04, "gr_fcf": 0.05, "gr_eps": 0.06, "ps": 2.5, "pe": 11.0, "p_fcf": 12.0, "wacc": 0.08,
-        "name": "Canadian Banks"
-    }
+    "SPACE_TECH": {"tickers": ["MDA", "RKLB", "ASTS", "LUNR", "PL"], "gr_sales": 0.20, "gr_fcf": 0.25, "gr_eps": 0.25, "ps": 6.0, "pe": 40.0, "p_fcf": 35.0, "wacc": 0.11, "name": "Space Tech"},
+    "SEMICONDUCTORS": {"tickers": ["NVDA", "AMD", "INTC", "TSM", "AVGO"], "gr_sales": 0.18, "gr_fcf": 0.20, "gr_eps": 0.20, "ps": 8.0, "pe": 35.0, "p_fcf": 30.0, "wacc": 0.10, "name": "Semiconductors"},
+    "BIG_TECH": {"tickers": ["AAPL", "MSFT", "GOOG", "AMZN", "META"], "gr_sales": 0.12, "gr_fcf": 0.15, "gr_eps": 0.15, "ps": 6.5, "pe": 25.0, "p_fcf": 28.0, "wacc": 0.09, "name": "Big Tech"},
+    "SAAS_CLOUD": {"tickers": ["CRM", "ADBE", "SNOW", "DDOG", "PLTR"], "gr_sales": 0.20, "gr_fcf": 0.22, "gr_eps": 0.25, "ps": 10.0, "pe": 40.0, "p_fcf": 35.0, "wacc": 0.10, "name": "SaaS Cloud"},
+    "STREAMING": {"tickers": ["NFLX", "DIS", "WBD", "SPOT"], "gr_sales": 0.10, "gr_fcf": 0.15, "gr_eps": 0.18, "ps": 4.0, "pe": 25.0, "p_fcf": 20.0, "wacc": 0.09, "name": "Streaming"},
+    "EV_AUTO": {"tickers": ["TSLA", "RIVN", "BYD", "F", "GM"], "gr_sales": 0.15, "gr_fcf": 0.12, "gr_eps": 0.15, "ps": 3.0, "pe": 30.0, "p_fcf": 25.0, "wacc": 0.11, "name": "EV & Auto"},
+    "BANKS_CA": {"tickers": ["RY", "TD", "BMO", "BNS", "CM"], "gr_sales": 0.04, "gr_fcf": 0.05, "gr_eps": 0.06, "ps": 2.5, "pe": 11.0, "p_fcf": 12.0, "wacc": 0.08, "name": "Canadian Banks"}
 }
 
 SECTOR_BENCHMARKS = {
     "Technology": {"gr_sales": 0.12, "gr_fcf": 0.15, "gr_eps": 0.15, "ps": 5.0, "pe": 25.0, "p_fcf": 25.0, "wacc": 0.095},
-    "Communication Services": {"gr_sales": 0.08, "gr_fcf": 0.10, "gr_eps": 0.12, "ps": 3.5, "pe": 20.0, "p_fcf": 18.0, "wacc": 0.09},
-    "Consumer Cyclical": {"gr_sales": 0.06, "gr_fcf": 0.08, "gr_eps": 0.10, "ps": 2.0, "pe": 18.0, "p_fcf": 15.0, "wacc": 0.10},
-    "Healthcare": {"gr_sales": 0.05, "gr_fcf": 0.06, "gr_eps": 0.08, "ps": 4.0, "pe": 22.0, "p_fcf": 20.0, "wacc": 0.08},
-    "Financial Services": {"gr_sales": 0.05, "gr_fcf": 0.05, "gr_eps": 0.06, "ps": 2.5, "pe": 12.0, "p_fcf": 12.0, "wacc": 0.09},
-    "Energy": {"gr_sales": 0.03, "gr_fcf": 0.05, "gr_eps": 0.05, "ps": 1.5, "pe": 10.0, "p_fcf": 8.0, "wacc": 0.10},
     "Default": {"gr_sales": 0.07, "gr_fcf": 0.08, "gr_eps": 0.08, "ps": 2.5, "pe": 15.0, "p_fcf": 15.0, "wacc": 0.09}
 }
 
 def get_benchmark_data(ticker, sector_info):
     ticker_clean = ticker.upper().replace(".TO", "").replace("-B", "").replace(".UN", "")
-    for group_key, data in PEER_GROUPS.items():
+    for _, data in PEER_GROUPS.items():
         if any(t in ticker_clean for t in data['tickers']):
             return {**data, "source": "Comparables", "peers": ", ".join(data['tickers'][:4])}
-    bench = SECTOR_BENCHMARKS.get(sector_info, SECTOR_BENCHMARKS["Default"])
-    return {**bench, "source": "Sector", "name": sector_info, "peers": "Sector Average"}
+    bench = SECTOR_BENCHMARKS.get("Default")
+    return {**bench, "source": "Sector", "name": sector_info or "General", "peers": "Sector Avg"}
 
-# --- 2. DATA FUNCTIONS ---
+# --- 2. DATA FUNCTIONS (SECURE & COMPLETE) ---
 @st.cache_data(ttl=3600)
-def get_financial_data(ticker):
+def get_financial_data_secure(ticker):
     try:
         stock = yf.Ticker(ticker)
-        bs, inc, cf, info = stock.quarterly_balance_sheet, stock.quarterly_financials, stock.quarterly_cashflow, stock.info
-        return bs, inc, cf, info
-    except: return None, None, None, None
+        
+        # 1. PRIX & SHARES (Méthode Rapide)
+        try:
+            current_price = stock.fast_info['last_price']
+            market_cap = stock.fast_info['market_cap']
+            shares_calc = market_cap / current_price if current_price > 0 else 0
+        except:
+            hist = stock.history(period="1d")
+            if hist.empty: return None
+            current_price = hist['Close'].iloc[-1]
+            shares_calc = 0 
+
+        # 2. ÉTATS FINANCIERS
+        bs = stock.quarterly_balance_sheet
+        inc = stock.quarterly_financials
+        cf = stock.quarterly_cashflow
+        
+        if bs is None or bs.empty: return None
+
+        # 3. INFO
+        try:
+            full_info = stock.info
+            sector = full_info.get('sector', 'Default')
+            rev_growth = full_info.get('revenueGrowth', 0)
+            eps_growth = full_info.get('earningsGrowth', 0)
+            trailing_eps = full_info.get('trailingEps', None)
+            shares_info = full_info.get('sharesOutstanding', 0)
+        except:
+            sector = "Default"
+            rev_growth = 0
+            eps_growth = 0
+            trailing_eps = None
+            shares_info = 0
+        
+        return {
+            "bs": bs, "inc": inc, "cf": cf, 
+            "price": current_price, "shares_calc": shares_calc,
+            "sector": sector, "rev_growth": rev_growth, 
+            "eps_growth": eps_growth, "trailing_eps": trailing_eps,
+            "shares_info": shares_info
+        }
+        
+    except Exception:
+        return None
 
 def get_ttm_flexible(df, keys_list):
     if df is None or df.empty: return 0
@@ -118,32 +134,17 @@ def get_ttm_flexible(df, keys_list):
         for idx in df.index:
             if key.upper().replace(" ", "") in str(idx).upper().replace(" ", ""):
                 row = df.loc[idx]
-                total = sum([val for val in row if pd.api.types.is_number(val)][:4])
-                if total != 0: return total
+                vals = [v for v in row if pd.api.types.is_number(v)]
+                return sum(vals[:4]) if len(vals) >= 1 else 0
     return 0
 
-def get_cash_safe(df):
+def get_item_safe(df, search_terms):
     if df is None or df.empty: return 0
-    keys = ["CashAndCashEquivalents", "CashCashEquivalentsAndShortTermInvestments", "Cash"]
-    for key in keys:
+    for term in search_terms:
         for idx in df.index:
-            if key.upper().replace(" ","") in str(idx).upper().replace(" ",""): return df.loc[idx].iloc[0]
+            if term.upper() in str(idx).upper().replace(" ", ""):
+                return df.loc[idx].iloc[0]
     return 0
-
-def get_debt_safe(df):
-    if df is None or df.empty: return 0
-    lt_debt, lease = 0, 0
-    for idx in df.index:
-        if "LONGTERMDEBT" in str(idx).upper().replace(" ", ""): lt_debt = df.loc[idx].iloc[0]; break
-    for idx in df.index:
-        if "LEASE" in str(idx).upper() and "LIABILITIES" in str(idx).upper(): lease = df.loc[idx].iloc[0]; break
-    return lt_debt + lease
-
-def get_real_shares(info):
-    shares = info.get('impliedSharesOutstanding', 0)
-    if shares == 0 and info.get('marketCap', 0) > 0: shares = info.get('marketCap') / info.get('currentPrice', 1)
-    if shares == 0: shares = info.get('sharesOutstanding', 0)
-    return shares
 
 # --- CALCULATION ENGINE ---
 def calculate_valuation(gr_sales, gr_fcf, gr_eps, wacc_val, ps_target, pe_target, revenue, fcf, eps, cash, debt, shares):
@@ -152,7 +153,8 @@ def calculate_valuation(gr_sales, gr_fcf, gr_eps, wacc_val, ps_target, pe_target
     fcf_projections = [current_fcf * (1 + gr_fcf)**(i+1) for i in range(5)]
     terminal_val = (fcf_projections[-1] * 1.03) / (wacc_val - 0.03)
     pv_fcf = sum([val / ((1 + wacc_val)**(i+1)) for i, val in enumerate(fcf_projections)])
-    price_dcf = ((pv_fcf + (terminal_val / ((1 + wacc_val)**5))) + cash - debt) / shares
+    pv_tv = terminal_val / ((1 + wacc_val)**5)
+    price_dcf = (pv_fcf + pv_tv + cash - debt) / shares
     
     # Sales & Earnings
     price_sales = (((revenue * ((1 + gr_sales)**5)) * ps_target) / shares) / (1.10**5)
@@ -161,20 +163,14 @@ def calculate_valuation(gr_sales, gr_fcf, gr_eps, wacc_val, ps_target, pe_target
     
     return price_dcf, price_sales, price_earnings
 
-# --- RELATIVE ANALYSIS HELPER ---
 def display_relative_analysis(current, benchmark, metric_name, group_name):
     if current <= 0:
-        st.caption(f"Relative analysis unavailable (negative or zero {metric_name}).")
+        st.caption(f"Relative analysis unavailable.")
         return
-
     diff = ((current - benchmark) / benchmark) * 100
-    if diff < -10:
-        box = st.success; status = "Undervalued 🟢"; msg = f"discount of {abs(diff):.0f}%"
-    elif diff > 10:
-        box = st.error; status = "Overvalued 🔴"; msg = f"premium of {diff:.0f}%"
-    else:
-        box = st.warning; status = "Fair Value 🟡"; msg = "aligned"
-    
+    if diff < -10: box = st.success; status = "Undervalued 🟢"; msg = f"discount of {abs(diff):.0f}%"
+    elif diff > 10: box = st.error; status = "Overvalued 🔴"; msg = f"premium of {diff:.0f}%"
+    else: box = st.warning; status = "Fair Value 🟡"; msg = "aligned"
     box(f"**🔍 Relative Analysis:** Current {metric_name} **{current:.1f}x** vs Peer/Sector **{benchmark}x**.\n\n"
         f"👉 **Verdict: {status}** ({msg} vs {group_name}).")
 
@@ -184,51 +180,56 @@ st.subheader("Search for a Company")
 col_search, col_manual = st.columns([2, 1])
 
 # Smart Search
-choice = st.selectbox(
-    "Choose a popular stock:", 
-    TICKER_DB, 
-    index=2 
-)
-
+choice = st.selectbox("Choose a popular stock:", TICKER_DB, index=2)
 ticker_final = "MSFT" 
-
 if "Other" in choice:
     ticker_input = st.text_input("Or type ticker here (e.g. AMD, GOOGL)", value="").upper()
-    if ticker_input:
-        ticker_final = ticker_input
-else:
-    if "-" in choice:
-        ticker_final = choice.split("-")[0].strip()
+    if ticker_input: ticker_final = ticker_input
+elif "-" in choice:
+    ticker_final = choice.split("-")[0].strip()
 
 st.caption(f"Analyzing: **{ticker_final}**")
 st.divider()
 
 # --- EXECUTION ---
 if ticker_final:
-    bs, inc, cf, info = get_financial_data(ticker_final)
+    # 1. FETCH DATA (SECURE WAY)
+    data = get_financial_data_secure(ticker_final)
     
-    if bs is None or inc.empty:
-        st.error(f"Data not found for {ticker_final}. Check ticker symbol.")
+    if data is None:
+        st.error(f"Data not found for {ticker_final}. Check ticker or try again later.")
+        if st.button("Retry Connection"):
+            st.cache_data.clear()
+            st.rerun()
     else:
-        # DATA PREP
-        raw_sector = info.get('sector', 'Default')
-        bench_data = get_benchmark_data(ticker_final, raw_sector)
+        # UNPACKING
+        bs = data['bs']; inc = data['inc']; cf = data['cf']
+        current_price = data['price']
         
-        # DATA EXTRACT
-        revenue_ttm = get_ttm_flexible(inc, ["TotalRevenue", "Total Revenue", "Revenue"])
+        # 2. SHARES LOGIC (ANTI-BUG)
+        shares = data['shares_calc']
+        if shares <= 1: shares = data['shares_info']
+        if shares <= 1: 
+            shares = 1 
+            st.warning("⚠️ Warning: Share count unavailable.")
+
+        market_cap = shares * current_price
+
+        # 3. METRICS
+        revenue_ttm = get_ttm_flexible(inc, ["TotalRevenue", "Revenue"])
         cfo_ttm = get_ttm_flexible(cf, ["OperatingCashFlow", "Operating Cash Flow"])
-        capex_ttm = abs(get_ttm_flexible(cf, ["CapitalExpenditure", "Capital Expenditure"]))
+        capex_ttm = abs(get_item_safe(cf, ["CapitalExpenditure", "PurchaseOfPPE"]))
         fcf_ttm = cfo_ttm - capex_ttm
-        cash = get_cash_safe(bs); debt = get_debt_safe(bs)
-        shares = get_real_shares(info) if get_real_shares(info) > 0 else 1
-        current_price = info.get('currentPrice', 0); market_cap = shares * current_price
+        cash = get_item_safe(bs, ["CashAndCashEquivalents", "Cash"])
+        debt = get_item_safe(bs, ["LongTermDebt"]) + get_item_safe(bs, ["LeaseLiabilities"])
         
-        eps_ttm = info.get('trailingEps')
+        # EPS
+        net_income = get_ttm_flexible(inc, ["NetIncome", "Net Income Common Stockholders"])
+        eps_ttm = data['trailing_eps']
         if eps_ttm is None:
-            net_income = get_ttm_flexible(inc, ["NetIncome", "Net Income Common Stockholders"])
             eps_ttm = net_income / shares if shares > 0 else 0
 
-        # RATIOS & GROWTH (POUR COMPARAISON)
+        # RATIOS & GROWTH
         ps_current = market_cap / revenue_ttm if revenue_ttm > 0 else 0
         pe_current = current_price / eps_ttm if eps_ttm > 0 else 0
         pfcf_current = market_cap / fcf_ttm if fcf_ttm > 0 else 0
@@ -238,23 +239,23 @@ if ticker_final:
         if cur_sales_gr is None: cur_sales_gr = 0
         if cur_eps_gr is None: cur_eps_gr = 0
 
-        # HELP / BENCHMARK INFO (AVEC COMPARAISON - SANS COULEUR)
+        # BENCHMARKS
+        bench_data = get_benchmark_data(ticker_final, data['sector'])
+        
+        # --- DISPLAY HELP ---
         with st.expander(f"💡 Help: {bench_data['name']} vs {ticker_final}", expanded=True):
-            if bench_data['source'] == "Comparables": st.write(f"**Peers:** {bench_data['peers']}")
-            else: st.write(f"**Sector:** {raw_sector}")
+            st.write(f"**Peers:** {bench_data['peers']}")
             
             c1, c2, c3, c4 = st.columns(4)
-            # Affichage: Benchmark (Gros) vs Réel (Petit, sans couleur)
             c1.metric("Sales Gr.", f"{bench_data['gr_sales']*100:.0f}%", delta=f"{cur_sales_gr*100:.1f}% Actual", delta_color="off")
-            c2.metric("FCF/EPS Gr.", f"{bench_data['gr_fcf']*100:.0f}%", delta=f"{cur_eps_gr*100:.1f}% Actual", delta_color="off")
+            c2.metric("EPS Gr.", f"{bench_data['gr_eps']*100:.0f}%", delta=f"{cur_eps_gr*100:.1f}% Actual", delta_color="off")
             c3.metric("Target P/S", f"{bench_data['ps']}x", delta=f"{ps_current:.1f}x Actual", delta_color="off")
             c4.metric("Target P/E", f"{bench_data.get('pe', 20)}x", delta=f"{pe_current:.1f}x Actual", delta_color="off")
 
-        # INPUTS (CONVERTED TO PERCENTAGE INPUTS)
+        # --- INPUTS ---
         with st.expander("⚙️ Edit Assumptions (Neutral)", expanded=False):
             st.markdown("##### 1. Growth (5y CAGR)")
             c1, c2, c3 = st.columns(3)
-            # On multiplie par 100 pour afficher en % (ex: 0.12 -> 12.0)
             gr_sales_input = c1.number_input("Sales Growth (%)", value=bench_data['gr_sales']*100, step=0.5, format="%.1f")
             gr_fcf_input = c2.number_input("FCF Growth (%)", value=bench_data['gr_fcf']*100, step=0.5, format="%.1f")
             gr_eps_input = c3.number_input("EPS Growth (%)", value=bench_data.get('gr_eps', 0.10)*100, step=0.5, format="%.1f")
@@ -263,12 +264,10 @@ if ticker_final:
             c4, c5, c6 = st.columns(3)
             target_ps = c4.number_input("Target P/S (x)", value=bench_data['ps'], step=0.5)
             target_pe = c5.number_input("Target P/E (x)", value=float(bench_data.get('pe', 20.0)), step=0.5)
-            # WACC en %
             wacc_input = c6.number_input("WACC / Discount (%)", value=bench_data['wacc']*100, step=0.5, format="%.1f")
 
-        # CALCULATE SCENARIOS (DIVIDE INPUTS BY 100 TO GET DECIMALS)
+        # --- SCENARIOS ---
         def run_scenario(factor_growth, factor_mult, risk_adj):
-            # On divise par 100 ici pour remettre en décimale pour le calcul
             return calculate_valuation(
                 (gr_sales_input/100.0) * factor_growth, 
                 (gr_fcf_input/100.0) * factor_growth, 
@@ -284,9 +283,21 @@ if ticker_final:
         bull_res = run_scenario(1.2, 1.2, -0.01)
 
         # ==========================================
-        # RESULTS TABS
+        # SMART ADVISOR (NOUVEAU)
         # ==========================================
         st.divider()
+        
+        # Logique simple : Si pas de profit, on regarde les ventes. Sinon, les profits.
+        if eps_ttm <= 0:
+            advice_msg = f"💡 **Analyst Tip for {ticker_final}:** This company has **negative earnings** (unprofitable). The best metric to use is likely **Price-to-Sales (P/S)** in the Sales tab."
+        else:
+            advice_msg = f"💡 **Analyst Tip for {ticker_final}:** This company is **profitable**. You can use **Price-to-Earnings (P/E)** or **DCF** for a robust valuation."
+            
+        st.info(advice_msg)
+
+        # ==========================================
+        # RESULTS TABS
+        # ==========================================
         tabs = st.tabs(["💵 DCF (Cash)", "📈 Sales (P/S)", "💰 Earnings (P/E)", "📊 Scorecard"])
 
         # --- 1. DCF ---
@@ -297,15 +308,7 @@ if ticker_final:
             c1, c2 = st.columns(2)
             c1.metric("Current Price", f"{current_price:.2f} $")
             delta = base_res[0] - current_price
-            
-            # TOOLTIP AJOUTÉ ICI
-            c2.metric(
-                "Intrinsic (Neutral)", 
-                f"{base_res[0]:.2f} $", 
-                delta=f"{delta:.2f} $", 
-                delta_color="normal",
-                help=f"It means {ticker_final} is supposed to be this price based on the DCF (Cash Flow) model."
-            )
+            c2.metric("Intrinsic (Neutral)", f"{base_res[0]:.2f} $", delta=f"{delta:.2f} $", delta_color="normal", help=f"Fair value based on DCF model for {ticker_final}.")
             
             st.write("")
             display_relative_analysis(pfcf_current, bench_data.get('p_fcf', 20.0), "P/FCF", bench_data['name'])
@@ -329,15 +332,7 @@ if ticker_final:
             c1, c2 = st.columns(2)
             c1.metric("Current Price", f"{current_price:.2f} $")
             delta = base_res[1] - current_price
-            
-            # TOOLTIP AJOUTÉ ICI
-            c2.metric(
-                "Intrinsic (Neutral)", 
-                f"{base_res[1]:.2f} $", 
-                delta=f"{delta:.2f} $", 
-                delta_color="normal",
-                help=f"It means {ticker_final} is supposed to be this price based on the Price/Sales model."
-            )
+            c2.metric("Intrinsic (Neutral)", f"{base_res[1]:.2f} $", delta=f"{delta:.2f} $", delta_color="normal", help=f"Fair value based on Price/Sales for {ticker_final}.")
             
             st.write("")
             display_relative_analysis(ps_current, bench_data['ps'], "P/S", bench_data['name'])
@@ -361,15 +356,7 @@ if ticker_final:
             c1, c2 = st.columns(2)
             c1.metric("Current Price", f"{current_price:.2f} $")
             delta = base_res[2] - current_price
-            
-            # TOOLTIP AJOUTÉ ICI
-            c2.metric(
-                "Intrinsic (Neutral)", 
-                f"{base_res[2]:.2f} $", 
-                delta=f"{delta:.2f} $", 
-                delta_color="normal",
-                help=f"It means {ticker_final} is supposed to be this price based on the Price/Earnings model."
-            )
+            c2.metric("Intrinsic (Neutral)", f"{base_res[2]:.2f} $", delta=f"{delta:.2f} $", delta_color="normal", help=f"Fair value based on Price/Earnings for {ticker_final}.")
             
             st.write("")
             display_relative_analysis(pe_current, bench_data.get('pe', 20), "P/E", bench_data['name'])
@@ -387,10 +374,8 @@ if ticker_final:
 
         # --- 4. SCORECARD ---
         with tabs[3]:
-            # Scores
             fcf_margin = (fcf_ttm / revenue_ttm) * 100 if revenue_ttm > 0 else 0
             fcf_yield = (fcf_ttm / market_cap) * 100 if market_cap > 0 else 0
-            # On utilise les inputs en % directement (pas besoin de x100)
             rule_40 = gr_sales_input + fcf_margin
             total_return = gr_eps_input + fcf_yield
 
