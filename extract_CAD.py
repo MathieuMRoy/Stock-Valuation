@@ -103,7 +103,8 @@ def get_benchmark_data(ticker, sector_info):
     bench = SECTOR_BENCHMARKS.get(sector_info, SECTOR_BENCHMARKS["Default"])
     return {**bench, "source": "Sector", "name": sector_info, "peers": "Sector Average"}
 
-# --- 2. DATA FUNCTIONS (SANS CACHE - POUR ÉVITER LES ERREURS) ---
+# --- 2. DATA FUNCTIONS ---
+@st.cache_data(ttl=3600)
 def get_financial_data(ticker):
     try:
         stock = yf.Ticker(ticker)
@@ -160,7 +161,6 @@ def calculate_valuation(gr_sales, gr_fcf, gr_eps, wacc_val, ps_target, pe_target
     
     return price_dcf, price_sales, price_earnings
 
-# --- RELATIVE ANALYSIS HELPER ---
 def display_relative_analysis(current, benchmark, metric_name, group_name):
     if current <= 0:
         st.caption(f"Relative analysis unavailable (negative or zero {metric_name}).")
@@ -183,21 +183,13 @@ st.subheader("Search for a Company")
 col_search, col_manual = st.columns([2, 1])
 
 # Smart Search
-choice = st.selectbox(
-    "Choose a popular stock:", 
-    TICKER_DB, 
-    index=2 
-)
-
+choice = st.selectbox("Choose a popular stock:", TICKER_DB, index=2)
 ticker_final = "MSFT" 
-
 if "Other" in choice:
     ticker_input = st.text_input("Or type ticker here (e.g. AMD, GOOGL)", value="").upper()
-    if ticker_input:
-        ticker_final = ticker_input
-else:
-    if "-" in choice:
-        ticker_final = choice.split("-")[0].strip()
+    if ticker_input: ticker_final = ticker_input
+elif "-" in choice:
+    ticker_final = choice.split("-")[0].strip()
 
 st.caption(f"Analyzing: **{ticker_final}**")
 st.divider()
@@ -209,37 +201,7 @@ if ticker_final:
     if bs is None or inc.empty:
         st.error(f"Data not found for {ticker_final}. Check ticker symbol.")
     else:
-        # DATA PREP
-        raw_sector = info.get('sector', 'Default')
-        bench_data = get_benchmark_data(ticker_final, raw_sector)
-        
-        # HELP / BENCHMARK INFO
-        with st.expander(f"💡 Help: {bench_data['name']}", expanded=True):
-            if bench_data['source'] == "Comparables": st.write(f"**Peers:** {bench_data['peers']}")
-            else: st.write(f"**Sector:** {raw_sector}")
-            c1, c2, c3, c4 = st.columns(4)
-            c1.metric("Sales Growth", f"{bench_data['gr_sales']*100:.0f}%")
-            c2.metric("FCF Growth", f"{bench_data['gr_fcf']*100:.0f}%")
-            c3.metric("Target P/S", f"{bench_data['ps']}x")
-            c4.metric("Target P/E", f"{bench_data.get('pe', 20)}x")
-
-        # INPUTS (CONVERTED TO PERCENTAGE INPUTS)
-        with st.expander("⚙️ Edit Assumptions (Neutral)", expanded=False):
-            st.markdown("##### 1. Growth (5y CAGR)")
-            c1, c2, c3 = st.columns(3)
-            # On multiplie par 100 pour afficher en % (ex: 0.12 -> 12.0)
-            gr_sales_input = c1.number_input("Sales Growth (%)", value=bench_data['gr_sales']*100, step=0.5, format="%.1f")
-            gr_fcf_input = c2.number_input("FCF Growth (%)", value=bench_data['gr_fcf']*100, step=0.5, format="%.1f")
-            gr_eps_input = c3.number_input("EPS Growth (%)", value=bench_data.get('gr_eps', 0.10)*100, step=0.5, format="%.1f")
-            
-            st.markdown("##### 2. Exit Multiples & Risk")
-            c4, c5, c6 = st.columns(3)
-            target_ps = c4.number_input("Target P/S (x)", value=bench_data['ps'], step=0.5)
-            target_pe = c5.number_input("Target P/E (x)", value=float(bench_data.get('pe', 20.0)), step=0.5)
-            # WACC en %
-            wacc_input = c6.number_input("WACC / Discount (%)", value=bench_data['wacc']*100, step=0.5, format="%.1f")
-
-        # DATA EXTRACT
+        # 1. EXTRACT DATA FIRST
         revenue_ttm = get_ttm_flexible(inc, ["TotalRevenue", "Total Revenue", "Revenue"])
         cfo_ttm = get_ttm_flexible(cf, ["OperatingCashFlow", "Operating Cash Flow"])
         capex_ttm = abs(get_ttm_flexible(cf, ["CapitalExpenditure", "Capital Expenditure"]))
@@ -253,14 +215,58 @@ if ticker_final:
             net_income = get_ttm_flexible(inc, ["NetIncome", "Net Income Common Stockholders"])
             eps_ttm = net_income / shares if shares > 0 else 0
 
-        # RATIOS
+        # Current Ratios (For Comparison)
         ps_current = market_cap / revenue_ttm if revenue_ttm > 0 else 0
         pe_current = current_price / eps_ttm if eps_ttm > 0 else 0
         pfcf_current = market_cap / fcf_ttm if fcf_ttm > 0 else 0
+        
+        # --- NEW: CURRENT METRICS EXTRACTION ---
+        curr_sales_gr = info.get('revenueGrowth', 0)
+        if curr_sales_gr is None: curr_sales_gr = 0
+        
+        curr_eps_gr = info.get('earningsGrowth', 0)
+        if curr_eps_gr is None: curr_eps_gr = 0
 
-        # CALCULATE SCENARIOS (DIVIDE INPUTS BY 100 TO GET DECIMALS)
+        # 2. DATA PREP & BENCHMARKS
+        raw_sector = info.get('sector', 'Default')
+        bench_data = get_benchmark_data(ticker_final, raw_sector)
+        
+        # 3. HELP / BENCHMARK INFO (AVEC COMPARAISON)
+        with st.expander(f"💡 Help: {bench_data['name']} vs {ticker_final}", expanded=True):
+            st.write(f"**Peers:** {bench_data['peers']}")
+            
+            # Ligne 1 : Moyennes du Secteur
+            st.markdown("### 🏢 Industry Averages (Benchmarks)")
+            c1, c2, c3, c4 = st.columns(4)
+            c1.metric("Sales Gr.", f"{bench_data['gr_sales']*100:.0f}%")
+            c2.metric("EPS Gr.", f"{bench_data['gr_eps']*100:.0f}%")
+            c3.metric("Target P/S", f"{bench_data['ps']}x")
+            c4.metric("Target P/E", f"{bench_data.get('pe', 20)}x")
+
+            # Ligne 2 : Chiffres Actuels de l'Action (NOUVEAU)
+            st.markdown(f"### 📍 Current {ticker_final} Metrics (Actual)")
+            c5, c6, c7, c8 = st.columns(4)
+            c5.metric("Sales Gr. (YoY)", f"{curr_sales_gr*100:.1f}%")
+            c6.metric("EPS Gr. (YoY)", f"{curr_eps_gr*100:.1f}%")
+            c7.metric("Current P/S", f"{ps_current:.1f}x")
+            c8.metric("Current P/E", f"{pe_current:.1f}x")
+
+        # 4. INPUTS
+        with st.expander("⚙️ Edit Assumptions (Neutral)", expanded=False):
+            st.markdown("##### 1. Growth (5y CAGR)")
+            c1, c2, c3 = st.columns(3)
+            gr_sales_input = c1.number_input("Sales Growth (%)", value=bench_data['gr_sales']*100, step=0.5, format="%.1f")
+            gr_fcf_input = c2.number_input("FCF Growth (%)", value=bench_data['gr_fcf']*100, step=0.5, format="%.1f")
+            gr_eps_input = c3.number_input("EPS Growth (%)", value=bench_data.get('gr_eps', 0.10)*100, step=0.5, format="%.1f")
+            
+            st.markdown("##### 2. Exit Multiples & Risk")
+            c4, c5, c6 = st.columns(3)
+            target_ps = c4.number_input("Target P/S (x)", value=bench_data['ps'], step=0.5)
+            target_pe = c5.number_input("Target P/E (x)", value=float(bench_data.get('pe', 20.0)), step=0.5)
+            wacc_input = c6.number_input("WACC (%)", value=bench_data['wacc']*100, step=0.5, format="%.1f")
+
+        # 5. CALCULATE SCENARIOS
         def run_scenario(factor_growth, factor_mult, risk_adj):
-            # On divise par 100 ici pour remettre en décimale pour le calcul
             return calculate_valuation(
                 (gr_sales_input/100.0) * factor_growth, 
                 (gr_fcf_input/100.0) * factor_growth, 
@@ -371,7 +377,7 @@ if ticker_final:
                 st.caption("Rule of 40")
                 if rule_40 >= 40: st.success(f"✅ {rule_40:.1f}")
                 else: st.warning(f"⚠️ {rule_40:.1f}")
-                with st.expander("Interpretation Guide"):
+                with st.expander("Guide"):
                     st.write(f"**Calc:** Growth {gr_sales_input:.1f}% + Margin {fcf_margin:.1f}%")
                     st.markdown("""
                     * 🟢 **> 40: Excellent** (Efficient Hyper-growth)
@@ -384,7 +390,7 @@ if ticker_final:
                 st.caption("Total Return")
                 if total_return >= 12: st.success(f"✅ {total_return:.1f}%")
                 else: st.warning(f"⚠️ {total_return:.1f}%")
-                with st.expander("Interpretation Guide"):
+                with st.expander("Guide"):
                     st.write(f"**Calc:** Yield {fcf_yield:.1f}% + Growth {gr_eps_input:.1f}%")
                     st.markdown("""
                     * 🟢 **> 12%: Excellent** (Beats Market)
