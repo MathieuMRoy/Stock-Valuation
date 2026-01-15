@@ -103,8 +103,7 @@ def get_benchmark_data(ticker, sector_info):
     bench = SECTOR_BENCHMARKS.get(sector_info, SECTOR_BENCHMARKS["Default"])
     return {**bench, "source": "Sector", "name": sector_info, "peers": "Sector Average"}
 
-# --- 2. DATA FUNCTIONS ---
-@st.cache_data(ttl=3600)
+# --- 2. DATA FUNCTIONS (SANS CACHE - POUR ÉVITER LES ERREURS) ---
 def get_financial_data(ticker):
     try:
         stock = yf.Ticker(ticker)
@@ -214,39 +213,15 @@ if ticker_final:
         raw_sector = info.get('sector', 'Default')
         bench_data = get_benchmark_data(ticker_final, raw_sector)
         
-        # DATA EXTRACT
-        revenue_ttm = get_ttm_flexible(inc, ["TotalRevenue", "Total Revenue", "Revenue"])
-        cfo_ttm = get_ttm_flexible(cf, ["OperatingCashFlow", "Operating Cash Flow"])
-        capex_ttm = abs(get_ttm_flexible(cf, ["CapitalExpenditure", "Capital Expenditure"]))
-        fcf_ttm = cfo_ttm - capex_ttm
-        cash = get_cash_safe(bs); debt = get_debt_safe(bs)
-        shares = get_real_shares(info) if get_real_shares(info) > 0 else 1
-        current_price = info.get('currentPrice', 0); market_cap = shares * current_price
-        
-        eps_ttm = info.get('trailingEps')
-        if eps_ttm is None:
-            net_income = get_ttm_flexible(inc, ["NetIncome", "Net Income Common Stockholders"])
-            eps_ttm = net_income / shares if shares > 0 else 0
-
-        # RATIOS & GROWTH (POUR COMPARAISON)
-        ps_current = market_cap / revenue_ttm if revenue_ttm > 0 else 0
-        pe_current = current_price / eps_ttm if eps_ttm > 0 else 0
-        pfcf_current = market_cap / fcf_ttm if fcf_ttm > 0 else 0
-        
-        cur_sales_gr = info.get('revenueGrowth', 0)
-        cur_eps_gr = info.get('earningsGrowth', 0)
-
-        # HELP / BENCHMARK INFO (AVEC COMPARAISON)
-        with st.expander(f"💡 Help: {bench_data['name']} vs {ticker_final}", expanded=True):
+        # HELP / BENCHMARK INFO
+        with st.expander(f"💡 Help: {bench_data['name']}", expanded=True):
             if bench_data['source'] == "Comparables": st.write(f"**Peers:** {bench_data['peers']}")
             else: st.write(f"**Sector:** {raw_sector}")
-            
             c1, c2, c3, c4 = st.columns(4)
-            # Affichage: Benchmark (Gros) vs Réel (Petit)
-            c1.metric("Sales Gr.", f"{bench_data['gr_sales']*100:.0f}%", delta=f"{cur_sales_gr*100:.1f}% Actual")
-            c2.metric("FCF/EPS Gr.", f"{bench_data['gr_fcf']*100:.0f}%", delta=f"{cur_eps_gr*100:.1f}% Actual")
-            c3.metric("Target P/S", f"{bench_data['ps']}x", delta=f"{ps_current:.1f}x Actual", delta_color="inverse")
-            c4.metric("Target P/E", f"{bench_data.get('pe', 20)}x", delta=f"{pe_current:.1f}x Actual", delta_color="inverse")
+            c1.metric("Sales Growth", f"{bench_data['gr_sales']*100:.0f}%")
+            c2.metric("FCF Growth", f"{bench_data['gr_fcf']*100:.0f}%")
+            c3.metric("Target P/S", f"{bench_data['ps']}x")
+            c4.metric("Target P/E", f"{bench_data.get('pe', 20)}x")
 
         # INPUTS (CONVERTED TO PERCENTAGE INPUTS)
         with st.expander("⚙️ Edit Assumptions (Neutral)", expanded=False):
@@ -263,6 +238,25 @@ if ticker_final:
             target_pe = c5.number_input("Target P/E (x)", value=float(bench_data.get('pe', 20.0)), step=0.5)
             # WACC en %
             wacc_input = c6.number_input("WACC / Discount (%)", value=bench_data['wacc']*100, step=0.5, format="%.1f")
+
+        # DATA EXTRACT
+        revenue_ttm = get_ttm_flexible(inc, ["TotalRevenue", "Total Revenue", "Revenue"])
+        cfo_ttm = get_ttm_flexible(cf, ["OperatingCashFlow", "Operating Cash Flow"])
+        capex_ttm = abs(get_ttm_flexible(cf, ["CapitalExpenditure", "Capital Expenditure"]))
+        fcf_ttm = cfo_ttm - capex_ttm
+        cash = get_cash_safe(bs); debt = get_debt_safe(bs)
+        shares = get_real_shares(info) if get_real_shares(info) > 0 else 1
+        current_price = info.get('currentPrice', 0); market_cap = shares * current_price
+        
+        eps_ttm = info.get('trailingEps')
+        if eps_ttm is None:
+            net_income = get_ttm_flexible(inc, ["NetIncome", "Net Income Common Stockholders"])
+            eps_ttm = net_income / shares if shares > 0 else 0
+
+        # RATIOS
+        ps_current = market_cap / revenue_ttm if revenue_ttm > 0 else 0
+        pe_current = current_price / eps_ttm if eps_ttm > 0 else 0
+        pfcf_current = market_cap / fcf_ttm if fcf_ttm > 0 else 0
 
         # CALCULATE SCENARIOS (DIVIDE INPUTS BY 100 TO GET DECIMALS)
         def run_scenario(factor_growth, factor_mult, risk_adj):
@@ -358,7 +352,6 @@ if ticker_final:
             # Scores
             fcf_margin = (fcf_ttm / revenue_ttm) * 100 if revenue_ttm > 0 else 0
             fcf_yield = (fcf_ttm / market_cap) * 100 if market_cap > 0 else 0
-            # On utilise les inputs en % directement (pas besoin de x100)
             rule_40 = gr_sales_input + fcf_margin
             total_return = gr_eps_input + fcf_yield
 
