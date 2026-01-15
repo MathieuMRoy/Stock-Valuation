@@ -7,6 +7,45 @@ st.set_page_config(page_title="Valuation Master", page_icon="📱", layout="cent
 st.title("📱 Valuation Master")
 st.caption("3 Models: Cash • Sales • Earnings")
 
+# --- 0. DATA: SMART SEARCH DATABASE ---
+TICKER_DB = [
+    "🔍 Other (Manual Entry)",
+    "--- TECH US (MAGNIFICENT 7) ---",
+    "AAPL - Apple Inc.",
+    "MSFT - Microsoft Corp.",
+    "NVDA - NVIDIA Corp.",
+    "GOOG - Alphabet Inc. (Google)",
+    "AMZN - Amazon.com",
+    "META - Meta Platforms (Facebook)",
+    "TSLA - Tesla Inc.",
+    "--- POPULAR & SPACE ---",
+    "MDA.TO - MDA Space (Canada)",
+    "RKLB - Rocket Lab USA",
+    "ASTS - AST SpaceMobile",
+    "PLTR - Palantir Technologies",
+    "NFLX - Netflix",
+    "SPOT - Spotify",
+    "DUOL - Duolingo",
+    "UBER - Uber Technologies",
+    "ABNB - Airbnb",
+    "--- CANADA (TSX) ---",
+    "RY.TO - Royal Bank (RBC)",
+    "TD.TO - TD Bank",
+    "SHOP.TO - Shopify (CAD)",
+    "CNR.TO - CN Rail",
+    "ENB.TO - Enbridge",
+    "BCE.TO - BCE Inc. (Bell)",
+    "DOL.TO - Dollarama",
+    "ATD.TO - Alimentation Couche-Tard",
+    "CSU.TO - Constellation Software",
+    "--- CRYPTO & FINTECH ---",
+    "COIN - Coinbase",
+    "HOOD - Robinhood",
+    "PYPL - PayPal",
+    "SQ - Block (Square)",
+    "MSTR - MicroStrategy"
+]
+
 # --- 1. DATA: SECTOR BENCHMARKS ---
 PEER_GROUPS = {
     "SPACE_TECH": {
@@ -126,38 +165,38 @@ def display_relative_analysis(current, benchmark, metric_name, group_name):
     if current <= 0:
         st.caption(f"Relative analysis unavailable (negative or zero {metric_name}).")
         return
-
     diff = ((current - benchmark) / benchmark) * 100
-    if diff < -10:
-        box = st.success; status = "Undervalued 🟢"; msg = f"discount of {abs(diff):.0f}%"
-    elif diff > 10:
-        box = st.error; status = "Overvalued 🔴"; msg = f"premium of {diff:.0f}%"
-    else:
-        box = st.warning; status = "Fair Value 🟡"; msg = "aligned"
-    
+    if diff < -10: box = st.success; status = "Undervalued 🟢"; msg = f"discount of {abs(diff):.0f}%"
+    elif diff > 10: box = st.error; status = "Overvalued 🔴"; msg = f"premium of {diff:.0f}%"
+    else: box = st.warning; status = "Fair Value 🟡"; msg = "aligned"
     box(f"**🔍 Relative Analysis:** Current {metric_name} **{current:.1f}x** vs Peer/Sector **{benchmark}x**.\n\n"
         f"👉 **Verdict: {status}** ({msg} vs {group_name}).")
 
 # --- 3. INTERFACE ---
 
 st.subheader("Search for a Company")
+col_search, col_manual = st.columns([2, 1])
 
-ticker_input = st.text_input("Symbol (Ticker)", help="Type any ticker here (e.g. VLE.TO, AMD, GOOGL)").upper().strip()
+# Smart Search
+choice = st.selectbox("Choose a popular stock:", TICKER_DB, index=2)
+ticker_final = "MSFT" 
+if "Other" in choice:
+    ticker_input = st.text_input("Or type ticker here (e.g. AMD, GOOGL)", value="").upper()
+    if ticker_input: ticker_final = ticker_input
+elif "-" in choice:
+    ticker_final = choice.split("-")[0].strip()
+
+st.caption(f"Analyzing: **{ticker_final}**")
+st.divider()
 
 # --- EXECUTION ---
-if not ticker_input:
-    st.info("Please enter a symbol to start.")
-else:
-    ticker_final = ticker_input
-    st.caption(f"Analyzing: **{ticker_final}**")
-    st.divider()
-    
+if ticker_final:
     bs, inc, cf, info = get_financial_data(ticker_final)
     
     if bs is None or inc.empty:
         st.error(f"Data not found for {ticker_final}. Check ticker symbol.")
     else:
-        # 1. EXTRACT DATA FIRST
+        # 1. EXTRACT DATA FIRST (Moved up to display in Help)
         revenue_ttm = get_ttm_flexible(inc, ["TotalRevenue", "Total Revenue", "Revenue"])
         cfo_ttm = get_ttm_flexible(cf, ["OperatingCashFlow", "Operating Cash Flow"])
         capex_ttm = abs(get_ttm_flexible(cf, ["CapitalExpenditure", "Capital Expenditure"]))
@@ -171,14 +210,14 @@ else:
             net_income = get_ttm_flexible(inc, ["NetIncome", "Net Income Common Stockholders"])
             eps_ttm = net_income / shares if shares > 0 else 0
 
-        # Current Ratios (For Comparison)
-        curr_sales_gr = info.get('revenueGrowth', 0)
-        curr_eps_gr = info.get('earningsGrowth', 0)
+        # Current Growth & Ratios (For Comparison)
+        curr_sales_gr = info.get('revenueGrowth', 0) # Quarterly YoY
+        curr_eps_gr = info.get('earningsGrowth', 0) # Quarterly YoY
         ps_current = market_cap / revenue_ttm if revenue_ttm > 0 else 0
         pe_current = current_price / eps_ttm if eps_ttm > 0 else 0
         pfcf_current = market_cap / fcf_ttm if fcf_ttm > 0 else 0
 
-        # 2. BENCHMARKS
+        # 2. DATA PREP & BENCHMARKS
         raw_sector = info.get('sector', 'Default')
         bench_data = get_benchmark_data(ticker_final, raw_sector)
         
@@ -326,7 +365,7 @@ else:
                 st.caption("Rule of 40")
                 if rule_40 >= 40: st.success(f"✅ {rule_40:.1f}")
                 else: st.warning(f"⚠️ {rule_40:.1f}")
-                with st.expander("Interpretation Guide"):
+                with st.expander("Guide"):
                     st.write(f"**Calc:** Growth {gr_sales_input:.1f}% + Margin {fcf_margin:.1f}%")
                     st.markdown("""
                     * 🟢 **> 40: Excellent** (Efficient Hyper-growth)
@@ -339,7 +378,7 @@ else:
                 st.caption("Total Return")
                 if total_return >= 12: st.success(f"✅ {total_return:.1f}%")
                 else: st.warning(f"⚠️ {total_return:.1f}%")
-                with st.expander("Interpretation Guide"):
+                with st.expander("Guide"):
                     st.write(f"**Calc:** Yield {fcf_yield:.1f}% + Growth {gr_eps_input:.1f}%")
                     st.markdown("""
                     * 🟢 **> 12%: Excellent** (Beats Market)
