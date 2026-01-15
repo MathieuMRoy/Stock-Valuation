@@ -4,6 +4,15 @@ import pandas as pd
 
 # --- CONFIGURATION ---
 st.set_page_config(page_title="Valuation Master", page_icon="📱", layout="centered")
+
+# --- SIDEBAR : BOUTON DE SECOURS ---
+with st.sidebar:
+    st.header("🔧 Outils")
+    if st.button("🗑️ Réinitialiser / Fixer Bug"):
+        st.cache_data.clear()
+        st.rerun()
+    st.caption("Cliquez ici si une action valide affiche 'Data not found'.")
+
 st.title("📱 Valuation Master")
 st.caption("3 Models: Cash • Sales • Earnings")
 
@@ -103,14 +112,43 @@ def get_benchmark_data(ticker, sector_info):
     bench = SECTOR_BENCHMARKS.get(sector_info, SECTOR_BENCHMARKS["Default"])
     return {**bench, "source": "Sector", "name": sector_info, "peers": "Sector Average"}
 
-# --- 2. DATA FUNCTIONS ---
-@st.cache_data(ttl=3600)
+# --- 2. DATA FUNCTIONS (ROBUSTES) ---
+# Si ça plante, on ne met pas en cache pour pouvoir réessayer
+@st.cache_data(ttl=1800) 
 def get_financial_data(ticker):
     try:
         stock = yf.Ticker(ticker)
-        bs, inc, cf, info = stock.quarterly_balance_sheet, stock.quarterly_financials, stock.quarterly_cashflow, stock.info
-        return bs, inc, cf, info
-    except: return None, None, None, None
+        
+        # Astuce : On essaie d'abord d'obtenir les infos rapides
+        try:
+            current_price = stock.fast_info['last_price']
+        except:
+            # Plan B si fast_info plante
+            hist = stock.history(period="1d")
+            if hist.empty: return None
+            current_price = hist['Close'].iloc[-1]
+
+        bs = stock.quarterly_balance_sheet
+        inc = stock.quarterly_financials
+        cf = stock.quarterly_cashflow
+        
+        # Protection critique : Info plante souvent, on le met dans un try/except
+        try:
+            info = stock.info
+        except:
+            info = {} # On continue même sans info, on a le prix
+            
+        # On force le prix dans info pour que le reste du code marche
+        info['currentPrice'] = current_price
+        
+        if bs is None or bs.empty:
+            return None
+            
+        # On retourne un dictionnaire pour être plus propre
+        return {"bs": bs, "inc": inc, "cf": cf, "info": info}
+        
+    except Exception as e:
+        return None
 
 def get_ttm_flexible(df, keys_list):
     if df is None or df.empty: return 0
@@ -191,12 +229,20 @@ st.divider()
 
 # --- EXECUTION ---
 if ticker_final:
-    bs, inc, cf, info = get_financial_data(ticker_final)
+    data_pack = get_financial_data(ticker_final)
     
-    if bs is None or inc.empty:
-        st.error(f"Data not found for {ticker_final}. Check ticker symbol.")
+    # On vérifie si data_pack est None (l'erreur est gérée dans la fonction maintenant)
+    if data_pack is None:
+        st.error(f"❌ Data not found for **{ticker_final}**.")
+        st.info("💡 Astuce : Si l'action existe, essayez de cliquer sur le bouton **'🗑️ Réinitialiser'** dans le menu de gauche (flèche en haut à gauche > Settings).")
     else:
-        # 1. EXTRACT DATA FIRST (Moved up to display in Help)
+        # On déballe les données proprement
+        bs = data_pack['bs']
+        inc = data_pack['inc']
+        cf = data_pack['cf']
+        info = data_pack['info']
+        
+        # 1. EXTRACT DATA FIRST
         revenue_ttm = get_ttm_flexible(inc, ["TotalRevenue", "Total Revenue", "Revenue"])
         cfo_ttm = get_ttm_flexible(cf, ["OperatingCashFlow", "Operating Cash Flow"])
         capex_ttm = abs(get_ttm_flexible(cf, ["CapitalExpenditure", "Capital Expenditure"]))
@@ -210,9 +256,9 @@ if ticker_final:
             net_income = get_ttm_flexible(inc, ["NetIncome", "Net Income Common Stockholders"])
             eps_ttm = net_income / shares if shares > 0 else 0
 
-        # Current Growth & Ratios (For Comparison)
-        curr_sales_gr = info.get('revenueGrowth', 0) # Quarterly YoY
-        curr_eps_gr = info.get('earningsGrowth', 0) # Quarterly YoY
+        # Current Growth & Ratios
+        curr_sales_gr = info.get('revenueGrowth', 0)
+        curr_eps_gr = info.get('earningsGrowth', 0)
         ps_current = market_cap / revenue_ttm if revenue_ttm > 0 else 0
         pe_current = current_price / eps_ttm if eps_ttm > 0 else 0
         pfcf_current = market_cap / fcf_ttm if fcf_ttm > 0 else 0
@@ -221,7 +267,7 @@ if ticker_final:
         raw_sector = info.get('sector', 'Default')
         bench_data = get_benchmark_data(ticker_final, raw_sector)
         
-        # 3. HELP / BENCHMARK INFO (With Comparison)
+        # 3. HELP / BENCHMARK INFO
         with st.expander(f"💡 Help: {bench_data['name']} vs {ticker_final}", expanded=True):
             st.write(f"**Peers:** {bench_data['peers']}")
             
@@ -365,7 +411,7 @@ if ticker_final:
                 st.caption("Rule of 40")
                 if rule_40 >= 40: st.success(f"✅ {rule_40:.1f}")
                 else: st.warning(f"⚠️ {rule_40:.1f}")
-                with st.expander("Guide"):
+                with st.expander("Interpretation Guide"):
                     st.write(f"**Calc:** Growth {gr_sales_input:.1f}% + Margin {fcf_margin:.1f}%")
                     st.markdown("""
                     * 🟢 **> 40: Excellent** (Efficient Hyper-growth)
@@ -378,7 +424,7 @@ if ticker_final:
                 st.caption("Total Return")
                 if total_return >= 12: st.success(f"✅ {total_return:.1f}%")
                 else: st.warning(f"⚠️ {total_return:.1f}%")
-                with st.expander("Guide"):
+                with st.expander("Interpretation Guide"):
                     st.write(f"**Calc:** Yield {fcf_yield:.1f}% + Growth {gr_eps_input:.1f}%")
                     st.markdown("""
                     * 🟢 **> 12%: Excellent** (Beats Market)
