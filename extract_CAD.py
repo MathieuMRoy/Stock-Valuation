@@ -10,7 +10,7 @@ with st.sidebar:
     if st.button("🗑️ Reset Cache"):
         st.cache_data.clear()
         st.rerun()
-    st.caption("À utiliser si les données semblent incorrectes.")
+    st.caption("À utiliser si les données semblent incorrectes ou manquantes.")
 
 st.title("📱 Valuation Master")
 st.caption("3 Models: Cash • Sales • Earnings")
@@ -40,16 +40,16 @@ TICKER_DB = [
     "ASTS - AST SpaceMobile",
     "PLTR - Palantir Technologies",
     "LMT - Lockheed Martin",
-    "--- CANADA (TSX/TSX-V) ---",
+    "PNG.V - Kraken Robotics",
+    "--- CANADA (TSX) ---",
     "RY.TO - Royal Bank (RBC)",
     "TD.TO - TD Bank",
     "SHOP.TO - Shopify (CAD)",
     "CNR.TO - CN Rail",
     "ENB.TO - Enbridge",
+    "VLE.TO - Valeura Energy",
     "ATD.TO - Alimentation Couche-Tard",
     "CSU.TO - Constellation Software",
-    "PNG.V - Kraken Robotics",
-    "VLE.TO - Valeura Energy",
     "--- CRYPTO & FINTECH ---",
     "COIN - Coinbase",
     "HOOD - Robinhood",
@@ -58,12 +58,12 @@ TICKER_DB = [
     "MSTR - MicroStrategy"
 ]
 
-# --- 1. DATA: SPECIFIC PEER GROUPS (PRIORITY) ---
+# --- 1. DATA: SECTOR BENCHMARKS ---
 PEER_GROUPS = {
     "SPACE_TECH": {
-        "tickers": ["MDA", "RKLB", "ASTS", "LUNR", "PL", "SPIR", "SPCE"],
+        "tickers": ["MDA", "RKLB", "ASTS", "LUNR", "PL", "SPIR", "SPCE", "PNG"],
         "gr_sales": 20.0, "gr_fcf": 25.0, "gr_eps": 25.0, "ps": 6.0, "pe": 40.0, "p_fcf": 35.0, "wacc": 11.0,
-        "name": "Space Tech & Satellites"
+        "name": "Space Tech & Robotics"
     },
     "CYBERSECURITY": {
         "tickers": ["PANW", "CRWD", "FTNT", "ZS", "OKTA", "NET", "CYBR"],
@@ -102,7 +102,7 @@ PEER_GROUPS = {
     },
     "ENERGY_OIL": {
         "tickers": ["XOM", "CVX", "SHEL", "TTE", "BP", "COP", "VLE", "SU", "CNQ"],
-        "gr_sales": 3.0, "gr_fcf": 5.0, "gr_eps": 5.0, "ps": 1.5, "pe": 12.0, "p_fcf": 10.0, "wacc": 10.0,
+        "gr_sales": 3.0, "gr_fcf": 5.0, "gr_eps": 5.0, "ps": 1.5, "pe": 10.0, "p_fcf": 8.0, "wacc": 10.0,
         "name": "Energy & Oil Majors"
     },
     "AEROSPACE_DEF": {
@@ -127,42 +127,59 @@ PEER_GROUPS = {
     }
 }
 
-# --- 2. DATA: GENERIC SECTOR FALLBACKS (SAFETY NET) ---
 SECTOR_BENCHMARKS = {
     "Technology": {"gr_sales": 12.0, "gr_fcf": 15.0, "gr_eps": 15.0, "ps": 5.0, "pe": 25.0, "p_fcf": 25.0, "wacc": 9.5},
-    "Communication Services": {"gr_sales": 8.0, "gr_fcf": 10.0, "gr_eps": 10.0, "ps": 3.0, "pe": 18.0, "p_fcf": 18.0, "wacc": 9.0},
-    "Consumer Cyclical": {"gr_sales": 6.0, "gr_fcf": 8.0, "gr_eps": 10.0, "ps": 2.0, "pe": 18.0, "p_fcf": 15.0, "wacc": 10.0},
-    "Consumer Defensive": {"gr_sales": 4.0, "gr_fcf": 5.0, "gr_eps": 6.0, "ps": 1.5, "pe": 20.0, "p_fcf": 18.0, "wacc": 7.5},
-    "Financial Services": {"gr_sales": 5.0, "gr_fcf": 6.0, "gr_eps": 8.0, "ps": 2.5, "pe": 12.0, "p_fcf": 12.0, "wacc": 9.0},
-    "Healthcare": {"gr_sales": 5.0, "gr_fcf": 7.0, "gr_eps": 8.0, "ps": 4.0, "pe": 22.0, "p_fcf": 20.0, "wacc": 8.0},
-    "Energy": {"gr_sales": 3.0, "gr_fcf": 5.0, "gr_eps": 5.0, "ps": 1.5, "pe": 10.0, "p_fcf": 8.0, "wacc": 10.0},
-    "Industrials": {"gr_sales": 4.0, "gr_fcf": 6.0, "gr_eps": 7.0, "ps": 1.8, "pe": 18.0, "p_fcf": 15.0, "wacc": 9.0},
-    "Basic Materials": {"gr_sales": 3.0, "gr_fcf": 5.0, "gr_eps": 5.0, "ps": 1.5, "pe": 15.0, "p_fcf": 12.0, "wacc": 10.0},
-    "Real Estate": {"gr_sales": 4.0, "gr_fcf": 5.0, "gr_eps": 5.0, "ps": 5.0, "pe": 25.0, "p_fcf": 20.0, "wacc": 8.5},
-    "Utilities": {"gr_sales": 3.0, "gr_fcf": 4.0, "gr_eps": 4.0, "ps": 2.0, "pe": 18.0, "p_fcf": 15.0, "wacc": 7.0},
     "Default": {"gr_sales": 7.0, "gr_fcf": 8.0, "gr_eps": 8.0, "ps": 2.5, "pe": 15.0, "p_fcf": 15.0, "wacc": 9.0}
 }
 
 def get_benchmark_data(ticker, sector_info):
-    # Nettoyage strict pour éviter les faux positifs (ex: PNG.V avec Visa "V")
-    ticker_clean = ticker.upper().replace(".TO", "").replace("-B", "").replace(".UN", "").replace(".V", "").replace(".NE", "").replace(".CN", "").strip()
+    # NETTOYAGE STRICT (Correction du bug PNG.V vs V)
+    ticker_clean = ticker.upper().split(".")[0] # Garde juste "PNG" de "PNG.V"
     
-    # 1. Recherche EXACTE dans les groupes spécifiques (Priorité)
+    # 1. Recherche EXACTE dans les groupes
     for group_key, data in PEER_GROUPS.items():
         clean_list = [t.upper() for t in data['tickers']]
         
         if ticker_clean in clean_list:
-            # On exclut l'action elle-même de la liste des pairs
             peers_list = [t for t in data['tickers'] if t.upper() != ticker_clean]
             peers_str = ", ".join(peers_list[:5])
             return {**data, "source": "Comparables", "peers": peers_str}
             
-    # 2. Fallback Secteur Générique (si pas dans la liste manuelle)
-    # On utilise le secteur renvoyé par Yahoo (ex: "Industrials" pour Kraken)
-    bench = SECTOR_BENCHMARKS.get(sector_info, SECTOR_BENCHMARKS["Default"])
+    # 2. Fallback Secteur
+    bench = SECTOR_BENCHMARKS.get("Default")
     return {**bench, "source": "Sector", "name": sector_info or "General", "peers": "Sector Average"}
 
-# --- 3. DATA FUNCTIONS (SECURE) ---
+# --- 2. DATA FUNCTIONS (SECURE + MANUAL CALC) ---
+def get_growth_manual(df, keys):
+    """Calcule la croissance manuellement si Yahoo renvoie 0 ou None"""
+    try:
+        if df is None or df.empty: return 0
+        # Trouver la ligne (Revenu ou Net Income)
+        row = None
+        for key in keys:
+            for idx in df.index:
+                if key.upper().replace(" ", "") in str(idx).upper().replace(" ", ""):
+                    row = df.loc[idx]
+                    break
+            if row is not None: break
+        
+        if row is None: return 0
+        
+        # On prend les 4 colonnes les plus récentes (TTM vs Previous TTM)
+        vals = [v for v in row if pd.api.types.is_number(v)]
+        if len(vals) >= 5:
+            # Croissance YoY trimestrielle (plus fiable)
+            current = vals[0]
+            last_year = vals[4]
+            if last_year != 0:
+                return (current - last_year) / abs(last_year)
+        elif len(vals) >= 2:
+             # Croissance simple si pas assez de données
+             return (vals[0] - vals[1]) / abs(vals[1])
+             
+        return 0
+    except: return 0
+
 @st.cache_data(ttl=3600)
 def get_financial_data_secure(ticker):
     try:
@@ -190,8 +207,16 @@ def get_financial_data_secure(ticker):
         try:
             full_info = stock.info
             sector = full_info.get('sector', 'Default')
+            
+            # --- CORRECTION ZÉROS (MANUAL CALC) ---
             rev_growth = full_info.get('revenueGrowth', 0)
+            if rev_growth is None or rev_growth == 0:
+                rev_growth = get_growth_manual(inc, ["TotalRevenue", "Revenue"])
+                
             eps_growth = full_info.get('earningsGrowth', 0)
+            if eps_growth is None or eps_growth == 0:
+                eps_growth = get_growth_manual(inc, ["NetIncome", "Net Income Common Stockholders"])
+
             trailing_eps = full_info.get('trailingEps', None)
             shares_info = full_info.get('sharesOutstanding', 0)
         except:
