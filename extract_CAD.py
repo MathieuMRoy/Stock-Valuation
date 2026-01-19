@@ -1,8 +1,6 @@
 import streamlit as st
 import yfinance as yf
 import pandas as pd
-import requests
-import xml.etree.ElementTree as ET
 from datetime import datetime
 
 # --- CONFIGURATION ---
@@ -169,28 +167,6 @@ def get_growth_manual(df, keys):
         return 0
     except: return 0
 
-# --- NOUVEAU MODULE GOOGLE NEWS ---
-def fetch_google_news(ticker):
-    """Récupère les news via Google News RSS (Fiable & Gratuit)"""
-    try:
-        # Nettoyage du ticker pour la recherche (enlever .TO, .V etc pour une meilleure recherche globale)
-        clean_ticker = ticker.split(".")[0]
-        url = f"https://news.google.com/rss/search?q={clean_ticker}+stock+news&hl=en-US&gl=US&ceid=US:en"
-        
-        response = requests.get(url, timeout=5)
-        root = ET.fromstring(response.content)
-        
-        news_items = []
-        for item in root.findall('.//item')[:7]: # Top 7 news
-            news_items.append({
-                'title': item.find('title').text,
-                'link': item.find('link').text,
-                'pubDate': item.find('pubDate').text
-            })
-        return news_items
-    except:
-        return []
-
 @st.cache_data(ttl=3600)
 def get_financial_data_secure(ticker):
     try:
@@ -212,8 +188,19 @@ def get_financial_data_secure(ticker):
         inc = stock.quarterly_financials
         cf = stock.quarterly_cashflow
         
-        # 3. NEWS -> ON UTILISE GOOGLE MAINTENANT
-        news = fetch_google_news(ticker)
+        # 3. ANALYST & CALENDAR (NOUVEAU)
+        try:
+            # Récupère les upgrades/downgrades récents
+            upgrades = stock.upgrades_downgrades
+            if upgrades is not None and not upgrades.empty:
+                upgrades = upgrades.sort_index(ascending=False).head(10)
+            else:
+                upgrades = pd.DataFrame()
+        except: upgrades = pd.DataFrame()
+
+        try:
+            calendar = stock.calendar
+        except: calendar = None
 
         if bs is None or bs.empty: return None
 
@@ -240,7 +227,8 @@ def get_financial_data_secure(ticker):
             shares_info = 0
         
         return {
-            "bs": bs, "inc": inc, "cf": cf, "history": history, "news": news,
+            "bs": bs, "inc": inc, "cf": cf, "history": history, 
+            "upgrades": upgrades, "calendar": calendar, # NOUVELLES DONNÉES
             "price": current_price, "shares_calc": shares_calc,
             "sector": sector, "rev_growth": rev_growth, 
             "eps_growth": eps_growth, "trailing_eps": trailing_eps,
@@ -419,7 +407,7 @@ if ticker_final:
         # ==========================================
         # RESULTS TABS
         # ==========================================
-        tabs = st.tabs(["💵 DCF (Cash)", "📈 Sales (P/S)", "💰 Earnings (P/E)", "📊 Scorecard", "📰 News & Context"])
+        tabs = st.tabs(["💵 DCF (Cash)", "📈 Sales (P/S)", "💰 Earnings (P/E)", "📊 Scorecard", "📢 Analyst & IR"])
 
         # --- 1. DCF ---
         with tabs[0]:
@@ -440,11 +428,6 @@ if ticker_final:
             c_base.metric("🎯 Neutral", f"{base_res[0]:.2f} $", delta=f"{base_res[0]-current_price:.1f}")
             c_bull.metric("🐂 Bull", f"{bull_res[0]:.2f} $", delta=f"{bull_res[0]-current_price:.1f}")
 
-            st.markdown("##### 📝 Investment Theses")
-            st.error(f"**🐻 Bear (-20%):** FCF Growth slows to **{gr_fcf_input*0.8:.1f}%**. Market doubts cash flow sustainability.")
-            st.info(f"**🎯 Neutral:** Base case. FCF Growth **{gr_fcf_input:.1f}%**, WACC **{wacc_input:.1f}%**.")
-            st.success(f"**🐂 Bull (+20%):** Perfect execution. FCF Growth accelerates to **{gr_fcf_input*1.2:.1f}%**.")
-
         # --- 2. SALES ---
         with tabs[1]:
             st.subheader("🏷️ Buy Price (Sales)")
@@ -464,11 +447,6 @@ if ticker_final:
             c_base.metric("🎯 Neutral", f"{base_res[1]:.2f} $")
             c_bull.metric("🐂 Bull", f"{bull_res[1]:.2f} $")
 
-            st.markdown("##### 📝 Investment Theses")
-            st.error(f"**🐻 Bear:** Multiple compression to **{target_ps*0.8:.1f}x** sales.")
-            st.info(f"**🎯 Neutral:** Maintains historical multiple of **{target_ps:.1f}x**.")
-            st.success(f"**🐂 Bull:** Market euphoria, multiple expands to **{target_ps*1.2:.1f}x**.")
-
         # --- 3. EARNINGS ---
         with tabs[2]:
             st.subheader("🏷️ Buy Price (P/E)")
@@ -487,11 +465,6 @@ if ticker_final:
             c_bear.metric("🐻 Bear", f"{bear_res[2]:.2f} $")
             c_base.metric("🎯 Neutral", f"{base_res[2]:.2f} $")
             c_bull.metric("🐂 Bull", f"{bull_res[2]:.2f} $")
-
-            st.markdown("##### 📝 Investment Theses")
-            st.error(f"**🐻 Bear:** EPS Growth **{gr_eps_input*0.8:.1f}%**, P/E drops to **{target_pe*0.8:.1f}x**.")
-            st.info(f"**🎯 Neutral:** EPS Growth **{gr_eps_input:.1f}%**, Standard P/E of **{target_pe:.1f}x**.")
-            st.success(f"**🐂 Bull:** Margin expansion (**{gr_eps_input*1.2:.1f}%**), Premium P/E of **{target_pe*1.2:.1f}x**.")
 
         # --- 4. SCORECARD ---
         with tabs[3]:
@@ -517,45 +490,65 @@ if ticker_final:
                 st.caption("Rule of 40")
                 if rule_40 >= 40: st.success(f"✅ {rule_40:.1f}")
                 else: st.warning(f"⚠️ {rule_40:.1f}")
-                with st.expander("Interpretation Guide"):
-                    st.write(f"**Calc:** Growth {gr_sales_input:.1f}% + Margin {fcf_margin:.1f}%")
-                    st.markdown("""
-                    * 🟢 **> 40: Excellent** (Efficient Hyper-growth)
-                    * 🟡 **20 - 40: Average** (Watch closely)
-                    * 🔴 **< 20: Weak** (Inefficient)
-                    """)
 
             with col_score2:
                 st.markdown("#### 🛡️ Stability")
                 st.caption("Total Return")
                 if total_return >= 12: st.success(f"✅ {total_return:.1f}%")
                 else: st.warning(f"⚠️ {total_return:.1f}%")
-                with st.expander("Interpretation Guide"):
-                    st.write(f"**Calc:** Yield {fcf_yield:.1f}% + Growth {gr_eps_input:.1f}%")
-                    st.markdown("""
-                    * 🟢 **> 12%: Excellent** (Beats Market)
-                    * 🟡 **8 - 12%: Fair** (Market Average)
-                    * 🔴 **< 8%: Weak** (Underperformance)
-                    """)
 
-        # --- 5. NEWS & CONTEXT (GOOGLE NEWS) ---
+        # --- 5. ANALYST & IR (NOUVEAU) ---
         with tabs[4]:
-            st.subheader("📰 Recent Context")
-            st.caption("Price movements (6 months) & Latest Headlines")
+            st.subheader("📢 Analyst & IR")
+            st.caption("Upgrades/Downgrades & Investor Relations")
 
+            # A. CHART
             if 'history' in data and not data['history'].empty:
                 st.line_chart(data['history']['Close'], color="#0068C9")
-            else:
-                st.warning("Chart data unavailable.")
-
+            
             st.divider()
 
-            # Google News List
-            if 'news' in data and data['news']:
-                for article in data['news']:
-                    with st.container():
-                        st.markdown(f"**[{article['title']}]({article['link']})**")
-                        st.caption(f"📅 {article['pubDate']} | 📢 Google News")
-                        st.write("---")
+            # B. CALENDAR & LINK
+            col_ir1, col_ir2 = st.columns(2)
+            
+            with col_ir1:
+                # Earnings Date
+                earnings_date = "N/A"
+                if 'calendar' in data and data['calendar'] is not None:
+                    try:
+                        # Gère les différents formats de retour de yfinance (Dictionary ou DataFrame)
+                        if isinstance(data['calendar'], dict):
+                            earnings_list = data['calendar'].get('Earnings Date', [])
+                            if earnings_list:
+                                earnings_date = str(earnings_list[0])[:10]
+                        elif isinstance(data['calendar'], pd.DataFrame):
+                             # Parfois c'est une DF, on essaie de trouver la date
+                             vals = data['calendar'].values.flatten()
+                             if len(vals) > 0: earnings_date = str(vals[0])[:10]
+                    except: pass
+                
+                st.metric("📅 Next Earnings", earnings_date)
+
+            with col_ir2:
+                # SMART LINK BUTTON
+                clean_ticker = ticker_final.split(".")[0]
+                url_ir = f"https://www.google.com/search?q={clean_ticker}+investor+relations"
+                st.link_button(f"🌐 Go to {clean_ticker} Inv. Relations", url_ir)
+
+            st.write("---")
+
+            # C. UPGRADES TABLE
+            st.markdown("##### 🏦 Latest Analyst Ratings")
+            if 'upgrades' in data and not data['upgrades'].empty:
+                # On nettoie la dataframe pour l'affichage
+                df_up = data['upgrades'].copy()
+                # On garde juste les colonnes utiles si elles existent
+                cols_to_keep = ['Firm', 'To Grade', 'Action']
+                final_cols = [c for c in cols_to_keep if c in df_up.columns]
+                
+                if final_cols:
+                    st.dataframe(df_up[final_cols], use_container_width=True)
+                else:
+                    st.dataframe(df_up, use_container_width=True)
             else:
-                st.info("No recent news found.")
+                st.info("No recent analyst upgrades/downgrades found.")
