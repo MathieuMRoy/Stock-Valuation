@@ -1,8 +1,8 @@
 import streamlit as st
 import yfinance as yf
 import pandas as pd
-import plotly.graph_objects as go # AJOUTÉ : Pour le graphique interactif
-from datetime import datetime     # AJOUTÉ : Pour gérer les dates des news
+import plotly.graph_objects as go # IMPORTANT: Il faut avoir fait 'pip install plotly'
+from datetime import datetime
 
 # --- CONFIGURATION ---
 st.set_page_config(page_title="Valuation Master", page_icon="📱", layout="centered")
@@ -172,7 +172,7 @@ def get_financial_data_secure(ticker):
     try:
         stock = yf.Ticker(ticker)
         
-        # 1. PRICE & HISTORY (For Chart)
+        # 1. PRICE & HISTORY
         try:
             current_price = stock.fast_info['last_price']
             market_cap = stock.fast_info['market_cap']
@@ -189,7 +189,7 @@ def get_financial_data_secure(ticker):
         inc = stock.quarterly_financials
         cf = stock.quarterly_cashflow
         
-        # 3. NEWS (NOUVEAU)
+        # 3. NEWS
         try:
             news = stock.news
         except:
@@ -399,7 +399,6 @@ if ticker_final:
         # ==========================================
         # RESULTS TABS
         # ==========================================
-        # AJOUT DE L'ONGLET NEWS
         tabs = st.tabs(["💵 DCF (Cash)", "📈 Sales (P/S)", "💰 Earnings (P/E)", "📊 Scorecard", "📰 News & Context"])
 
         # --- 1. DCF ---
@@ -421,6 +420,11 @@ if ticker_final:
             c_base.metric("🎯 Neutral", f"{base_res[0]:.2f} $", delta=f"{base_res[0]-current_price:.1f}")
             c_bull.metric("🐂 Bull", f"{bull_res[0]:.2f} $", delta=f"{bull_res[0]-current_price:.1f}")
 
+            st.markdown("##### 📝 Investment Theses")
+            st.error(f"**🐻 Bear (-20%):** FCF Growth slows to **{gr_fcf_input*0.8:.1f}%**. Market doubts cash flow sustainability.")
+            st.info(f"**🎯 Neutral:** Base case. FCF Growth **{gr_fcf_input:.1f}%**, WACC **{wacc_input:.1f}%**.")
+            st.success(f"**🐂 Bull (+20%):** Perfect execution. FCF Growth accelerates to **{gr_fcf_input*1.2:.1f}%**.")
+
         # --- 2. SALES ---
         with tabs[1]:
             st.subheader("🏷️ Buy Price (Sales)")
@@ -440,6 +444,11 @@ if ticker_final:
             c_base.metric("🎯 Neutral", f"{base_res[1]:.2f} $")
             c_bull.metric("🐂 Bull", f"{bull_res[1]:.2f} $")
 
+            st.markdown("##### 📝 Investment Theses")
+            st.error(f"**🐻 Bear:** Multiple compression to **{target_ps*0.8:.1f}x** sales.")
+            st.info(f"**🎯 Neutral:** Maintains historical multiple of **{target_ps:.1f}x**.")
+            st.success(f"**🐂 Bull:** Market euphoria, multiple expands to **{target_ps*1.2:.1f}x**.")
+
         # --- 3. EARNINGS ---
         with tabs[2]:
             st.subheader("🏷️ Buy Price (P/E)")
@@ -458,6 +467,11 @@ if ticker_final:
             c_bear.metric("🐻 Bear", f"{bear_res[2]:.2f} $")
             c_base.metric("🎯 Neutral", f"{base_res[2]:.2f} $")
             c_bull.metric("🐂 Bull", f"{bull_res[2]:.2f} $")
+
+            st.markdown("##### 📝 Investment Theses")
+            st.error(f"**🐻 Bear:** EPS Growth **{gr_eps_input*0.8:.1f}%**, P/E drops to **{target_pe*0.8:.1f}x**.")
+            st.info(f"**🎯 Neutral:** EPS Growth **{gr_eps_input:.1f}%**, Standard P/E of **{target_pe:.1f}x**.")
+            st.success(f"**🐂 Bull:** Margin expansion (**{gr_eps_input*1.2:.1f}%**), Premium P/E of **{target_pe*1.2:.1f}x**.")
 
         # --- 4. SCORECARD ---
         with tabs[3]:
@@ -485,6 +499,11 @@ if ticker_final:
                 else: st.warning(f"⚠️ {rule_40:.1f}")
                 with st.expander("Interpretation Guide"):
                     st.write(f"**Calc:** Growth {gr_sales_input:.1f}% + Margin {fcf_margin:.1f}%")
+                    st.markdown("""
+                    * 🟢 **> 40: Excellent** (Efficient Hyper-growth)
+                    * 🟡 **20 - 40: Average** (Watch closely)
+                    * 🔴 **< 20: Weak** (Inefficient)
+                    """)
 
             with col_score2:
                 st.markdown("#### 🛡️ Stability")
@@ -493,6 +512,11 @@ if ticker_final:
                 else: st.warning(f"⚠️ {total_return:.1f}%")
                 with st.expander("Interpretation Guide"):
                     st.write(f"**Calc:** Yield {fcf_yield:.1f}% + Growth {gr_eps_input:.1f}%")
+                    st.markdown("""
+                    * 🟢 **> 12%: Excellent** (Beats Market)
+                    * 🟡 **8 - 12%: Fair** (Market Average)
+                    * 🔴 **< 8%: Weak** (Underperformance)
+                    """)
 
         # --- 5. INTERACTIVE CHART (NEWS) ---
         with tabs[4]:
