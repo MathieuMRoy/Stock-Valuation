@@ -1,6 +1,8 @@
 import streamlit as st
 import yfinance as yf
 import pandas as pd
+import plotly.graph_objects as go # AJOUTÉ : Pour le graphique interactif
+from datetime import datetime     # AJOUTÉ : Pour gérer les dates des news
 
 # --- CONFIGURATION ---
 st.set_page_config(page_title="Valuation Master", page_icon="📱", layout="centered")
@@ -133,28 +135,20 @@ SECTOR_BENCHMARKS = {
 }
 
 def get_benchmark_data(ticker, sector_info):
-    # NETTOYAGE STRICT (Correction du bug PNG.V vs V)
-    ticker_clean = ticker.upper().split(".")[0] # Garde juste "PNG" de "PNG.V"
-    
-    # 1. Recherche EXACTE dans les groupes
+    ticker_clean = ticker.upper().split(".")[0]
     for group_key, data in PEER_GROUPS.items():
         clean_list = [t.upper() for t in data['tickers']]
-        
         if ticker_clean in clean_list:
             peers_list = [t for t in data['tickers'] if t.upper() != ticker_clean]
             peers_str = ", ".join(peers_list[:5])
             return {**data, "source": "Comparables", "peers": peers_str}
-            
-    # 2. Fallback Secteur
     bench = SECTOR_BENCHMARKS.get("Default")
     return {**bench, "source": "Sector", "name": sector_info or "General", "peers": "Sector Average"}
 
-# --- 2. DATA FUNCTIONS (SECURE + MANUAL CALC) ---
+# --- 2. DATA FUNCTIONS ---
 def get_growth_manual(df, keys):
-    """Calcule la croissance manuellement si Yahoo renvoie 0 ou None"""
     try:
         if df is None or df.empty: return 0
-        # Trouver la ligne (Revenu ou Net Income)
         row = None
         for key in keys:
             for idx in df.index:
@@ -162,21 +156,14 @@ def get_growth_manual(df, keys):
                     row = df.loc[idx]
                     break
             if row is not None: break
-        
         if row is None: return 0
-        
-        # On prend les 4 colonnes les plus récentes (TTM vs Previous TTM)
         vals = [v for v in row if pd.api.types.is_number(v)]
         if len(vals) >= 5:
-            # Croissance YoY trimestrielle (plus fiable)
             current = vals[0]
             last_year = vals[4]
-            if last_year != 0:
-                return (current - last_year) / abs(last_year)
+            if last_year != 0: return (current - last_year) / abs(last_year)
         elif len(vals) >= 2:
-             # Croissance simple si pas assez de données
              return (vals[0] - vals[1]) / abs(vals[1])
-             
         return 0
     except: return 0
 
@@ -185,30 +172,36 @@ def get_financial_data_secure(ticker):
     try:
         stock = yf.Ticker(ticker)
         
-        # 1. PRIX & SHARES
+        # 1. PRICE & HISTORY (For Chart)
         try:
             current_price = stock.fast_info['last_price']
             market_cap = stock.fast_info['market_cap']
             shares_calc = market_cap / current_price if current_price > 0 else 0
+            # 6 months history
+            history = stock.history(period="6mo")
         except:
-            hist = stock.history(period="1d")
-            if hist.empty: return None
-            current_price = hist['Close'].iloc[-1]
+            history = pd.DataFrame()
+            current_price = 0
             shares_calc = 0 
 
-        # 2. ÉTATS FINANCIERS
+        # 2. FINANCIALS
         bs = stock.quarterly_balance_sheet
         inc = stock.quarterly_financials
         cf = stock.quarterly_cashflow
         
+        # 3. NEWS (NOUVEAU)
+        try:
+            news = stock.news
+        except:
+            news = []
+
         if bs is None or bs.empty: return None
 
-        # 3. INFO
+        # 4. INFO
         try:
             full_info = stock.info
             sector = full_info.get('sector', 'Default')
             
-            # --- CORRECTION ZÉROS (MANUAL CALC) ---
             rev_growth = full_info.get('revenueGrowth', 0)
             if rev_growth is None or rev_growth == 0:
                 rev_growth = get_growth_manual(inc, ["TotalRevenue", "Revenue"])
@@ -227,7 +220,7 @@ def get_financial_data_secure(ticker):
             shares_info = 0
         
         return {
-            "bs": bs, "inc": inc, "cf": cf, 
+            "bs": bs, "inc": inc, "cf": cf, "history": history, "news": news,
             "price": current_price, "shares_calc": shares_calc,
             "sector": sector, "rev_growth": rev_growth, 
             "eps_growth": eps_growth, "trailing_eps": trailing_eps,
@@ -406,7 +399,8 @@ if ticker_final:
         # ==========================================
         # RESULTS TABS
         # ==========================================
-        tabs = st.tabs(["💵 DCF (Cash)", "📈 Sales (P/S)", "💰 Earnings (P/E)", "📊 Scorecard"])
+        # AJOUT DE L'ONGLET NEWS
+        tabs = st.tabs(["💵 DCF (Cash)", "📈 Sales (P/S)", "💰 Earnings (P/E)", "📊 Scorecard", "📰 News & Context"])
 
         # --- 1. DCF ---
         with tabs[0]:
@@ -427,11 +421,6 @@ if ticker_final:
             c_base.metric("🎯 Neutral", f"{base_res[0]:.2f} $", delta=f"{base_res[0]-current_price:.1f}")
             c_bull.metric("🐂 Bull", f"{bull_res[0]:.2f} $", delta=f"{bull_res[0]-current_price:.1f}")
 
-            st.markdown("##### 📝 Investment Theses")
-            st.error(f"**🐻 Bear (-20%):** FCF Growth slows to **{gr_fcf_input*0.8:.1f}%**. Market doubts cash flow sustainability.")
-            st.info(f"**🎯 Neutral:** Base case. FCF Growth **{gr_fcf_input:.1f}%**, WACC **{wacc_input:.1f}%**.")
-            st.success(f"**🐂 Bull (+20%):** Perfect execution. FCF Growth accelerates to **{gr_fcf_input*1.2:.1f}%**.")
-
         # --- 2. SALES ---
         with tabs[1]:
             st.subheader("🏷️ Buy Price (Sales)")
@@ -451,11 +440,6 @@ if ticker_final:
             c_base.metric("🎯 Neutral", f"{base_res[1]:.2f} $")
             c_bull.metric("🐂 Bull", f"{bull_res[1]:.2f} $")
 
-            st.markdown("##### 📝 Investment Theses")
-            st.error(f"**🐻 Bear:** Multiple compression to **{target_ps*0.8:.1f}x** sales.")
-            st.info(f"**🎯 Neutral:** Maintains historical multiple of **{target_ps:.1f}x**.")
-            st.success(f"**🐂 Bull:** Market euphoria, multiple expands to **{target_ps*1.2:.1f}x**.")
-
         # --- 3. EARNINGS ---
         with tabs[2]:
             st.subheader("🏷️ Buy Price (P/E)")
@@ -474,11 +458,6 @@ if ticker_final:
             c_bear.metric("🐻 Bear", f"{bear_res[2]:.2f} $")
             c_base.metric("🎯 Neutral", f"{base_res[2]:.2f} $")
             c_bull.metric("🐂 Bull", f"{bull_res[2]:.2f} $")
-
-            st.markdown("##### 📝 Investment Theses")
-            st.error(f"**🐻 Bear:** EPS Growth **{gr_eps_input*0.8:.1f}%**, P/E drops to **{target_pe*0.8:.1f}x**.")
-            st.info(f"**🎯 Neutral:** EPS Growth **{gr_eps_input:.1f}%**, Standard P/E of **{target_pe:.1f}x**.")
-            st.success(f"**🐂 Bull:** Margin expansion (**{gr_eps_input*1.2:.1f}%**), Premium P/E of **{target_pe*1.2:.1f}x**.")
 
         # --- 4. SCORECARD ---
         with tabs[3]:
@@ -506,11 +485,6 @@ if ticker_final:
                 else: st.warning(f"⚠️ {rule_40:.1f}")
                 with st.expander("Interpretation Guide"):
                     st.write(f"**Calc:** Growth {gr_sales_input:.1f}% + Margin {fcf_margin:.1f}%")
-                    st.markdown("""
-                    * 🟢 **> 40: Excellent** (Efficient Hyper-growth)
-                    * 🟡 **20 - 40: Average** (Watch closely)
-                    * 🔴 **< 20: Weak** (Inefficient)
-                    """)
 
             with col_score2:
                 st.markdown("#### 🛡️ Stability")
@@ -519,8 +493,86 @@ if ticker_final:
                 else: st.warning(f"⚠️ {total_return:.1f}%")
                 with st.expander("Interpretation Guide"):
                     st.write(f"**Calc:** Yield {fcf_yield:.1f}% + Growth {gr_eps_input:.1f}%")
-                    st.markdown("""
-                    * 🟢 **> 12%: Excellent** (Beats Market)
-                    * 🟡 **8 - 12%: Fair** (Market Average)
-                    * 🔴 **< 8%: Weak** (Underperformance)
-                    """)
+
+        # --- 5. INTERACTIVE CHART (NEWS) ---
+        with tabs[4]:
+            st.subheader("📰 Recent Context")
+            st.caption("Interact with the chart to see news events.")
+
+            if 'history' in data and not data['history'].empty:
+                # 1. Prepare Base Chart
+                fig = go.Figure()
+                fig.add_trace(go.Scatter(
+                    x=data['history'].index, 
+                    y=data['history']['Close'],
+                    mode='lines',
+                    name='Price',
+                    line=dict(color='#0068C9', width=2)
+                ))
+
+                # 2. Map News to Dates
+                if 'news' in data and data['news']:
+                    news_dates = []
+                    news_prices = []
+                    news_titles = []
+                    
+                    for article in data['news']:
+                        try:
+                            # Convert Unix timestamp to Date
+                            ts = article.get('providerPublishTime', 0)
+                            dt = datetime.utcfromtimestamp(ts).date()
+                            title = article.get('title', 'News')
+                            
+                            # Find matching (or closest) date in history
+                            # Ensure chart index is timezone-naive for comparison
+                            hist_dates = data['history'].index.date
+                            
+                            if dt in hist_dates:
+                                # Get price on that day
+                                price_on_day = data['history'].loc[data['history'].index.date == dt]['Close'].iloc[0]
+                                
+                                news_dates.append(data['history'].loc[data['history'].index.date == dt].index[0])
+                                news_prices.append(price_on_day)
+                                # Add simple HTML bold for title
+                                news_titles.append(f"<b>{title}</b><br><i>Click list below for link</i>")
+                        except:
+                            continue
+
+                    # 3. Add News Markers
+                    if news_dates:
+                        fig.add_trace(go.Scatter(
+                            x=news_dates,
+                            y=news_prices,
+                            mode='markers',
+                            name='News Event',
+                            marker=dict(color='orange', size=10, symbol='circle'),
+                            hovertext=news_titles,
+                            hoverinfo="text"
+                        ))
+
+                fig.update_layout(
+                    height=400,
+                    margin=dict(l=20, r=20, t=20, b=20),
+                    hovermode="x unified"
+                )
+                
+                st.plotly_chart(fig, use_container_width=True)
+            
+            else:
+                st.warning("Chart data unavailable.")
+
+            st.divider()
+
+            # News List Below
+            if 'news' in data and data['news']:
+                for article in data['news'][:7]:
+                    with st.container():
+                        st.markdown(f"**[{article['title']}]({article['link']})**")
+                        try:
+                            ts = article.get('providerPublishTime', 0)
+                            date_str = datetime.utcfromtimestamp(ts).strftime('%Y-%m-%d %H:%M')
+                        except: date_str = "Recent"
+                        st.caption(f"📅 {date_str} | 📢 {article.get('publisher', 'Unknown')}")
+                        st.write("---")
+            else:
+                st.info("No recent news found.")
