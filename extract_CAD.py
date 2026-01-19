@@ -1,7 +1,6 @@
 import streamlit as st
 import yfinance as yf
 import pandas as pd
-import plotly.graph_objects as go # IMPORTANT: Il faut avoir fait 'pip install plotly'
 from datetime import datetime
 
 # --- CONFIGURATION ---
@@ -172,7 +171,7 @@ def get_financial_data_secure(ticker):
     try:
         stock = yf.Ticker(ticker)
         
-        # 1. PRICE & HISTORY
+        # 1. PRICE & HISTORY (For Chart)
         try:
             current_price = stock.fast_info['last_price']
             market_cap = stock.fast_info['market_cap']
@@ -189,7 +188,7 @@ def get_financial_data_secure(ticker):
         inc = stock.quarterly_financials
         cf = stock.quarterly_cashflow
         
-        # 3. NEWS
+        # 3. NEWS (NOUVEAU)
         try:
             news = stock.news
         except:
@@ -518,70 +517,14 @@ if ticker_final:
                     * 🔴 **< 8%: Weak** (Underperformance)
                     """)
 
-        # --- 5. INTERACTIVE CHART (NEWS) ---
+        # --- 5. NEWS & CONTEXT (SIMPLE CHART) ---
         with tabs[4]:
             st.subheader("📰 Recent Context")
-            st.caption("Interact with the chart to see news events.")
+            st.caption("Price movements (6 months) & Latest Headlines")
 
             if 'history' in data and not data['history'].empty:
-                # 1. Prepare Base Chart
-                fig = go.Figure()
-                fig.add_trace(go.Scatter(
-                    x=data['history'].index, 
-                    y=data['history']['Close'],
-                    mode='lines',
-                    name='Price',
-                    line=dict(color='#0068C9', width=2)
-                ))
-
-                # 2. Map News to Dates
-                if 'news' in data and data['news']:
-                    news_dates = []
-                    news_prices = []
-                    news_titles = []
-                    
-                    for article in data['news']:
-                        try:
-                            # Convert Unix timestamp to Date
-                            ts = article.get('providerPublishTime', 0)
-                            dt = datetime.utcfromtimestamp(ts).date()
-                            title = article.get('title', 'News')
-                            
-                            # Find matching (or closest) date in history
-                            # Ensure chart index is timezone-naive for comparison
-                            hist_dates = data['history'].index.date
-                            
-                            if dt in hist_dates:
-                                # Get price on that day
-                                price_on_day = data['history'].loc[data['history'].index.date == dt]['Close'].iloc[0]
-                                
-                                news_dates.append(data['history'].loc[data['history'].index.date == dt].index[0])
-                                news_prices.append(price_on_day)
-                                # Add simple HTML bold for title
-                                news_titles.append(f"<b>{title}</b><br><i>Click list below for link</i>")
-                        except:
-                            continue
-
-                    # 3. Add News Markers
-                    if news_dates:
-                        fig.add_trace(go.Scatter(
-                            x=news_dates,
-                            y=news_prices,
-                            mode='markers',
-                            name='News Event',
-                            marker=dict(color='orange', size=10, symbol='circle'),
-                            hovertext=news_titles,
-                            hoverinfo="text"
-                        ))
-
-                fig.update_layout(
-                    height=400,
-                    margin=dict(l=20, r=20, t=20, b=20),
-                    hovermode="x unified"
-                )
-                
-                st.plotly_chart(fig, use_container_width=True)
-            
+                # THE SIMPLE SOLUTION (Ligne simple, pas de Plotly compliqué)
+                st.line_chart(data['history']['Close'], color="#0068C9")
             else:
                 st.warning("Chart data unavailable.")
 
@@ -589,7 +532,7 @@ if ticker_final:
 
             # News List Below
             if 'news' in data and data['news']:
-                for article in data['news'][:7]:
+                for article in data['news'][:7]: # Top 7 news
                     with st.container():
                         st.markdown(f"**[{article['title']}]({article['link']})**")
                         try:
