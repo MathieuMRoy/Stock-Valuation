@@ -169,27 +169,21 @@ def get_growth_manual(df, keys):
         return 0
     except: return 0
 
-# --- NOUVEAU : FETCH PRESS RELEASES ---
 def fetch_ir_press_releases(search_name):
-    """Cherche spécifiquement les 'Press Release' pour éviter le bruit"""
     try:
-        # Requête très ciblée : Nom + Press Release
         query = f"{search_name} press release investor relations"
         url = f"https://news.google.com/rss/search?q={query}&hl=en-US&gl=US&ceid=US:en"
-        
         response = requests.get(url, timeout=4)
         root = ET.fromstring(response.content)
-        
         news_items = []
-        for item in root.findall('.//item')[:3]: # Juste les 3 plus récents
+        for item in root.findall('.//item')[:3]:
             news_items.append({
                 'title': item.find('title').text,
                 'link': item.find('link').text,
-                'pubDate': item.find('pubDate').text[:16] # Coupe la date pour faire propre
+                'pubDate': item.find('pubDate').text[:16]
             })
         return news_items
-    except:
-        return []
+    except: return []
 
 @st.cache_data(ttl=3600)
 def get_financial_data_secure(ticker):
@@ -212,7 +206,7 @@ def get_financial_data_secure(ticker):
         inc = stock.quarterly_financials
         cf = stock.quarterly_cashflow
         
-        # 3. ANALYST & CALENDAR
+        # 3. ANALYST & EARNINGS SURPRISE (NEW)
         try:
             reco_summary = stock.recommendations_summary
         except: reco_summary = None
@@ -220,6 +214,11 @@ def get_financial_data_secure(ticker):
         try:
             calendar = stock.calendar
         except: calendar = None
+        
+        # NOUVEAU: Earnings Dates pour le Surprise History
+        try:
+            earn_dates = stock.earnings_dates
+        except: earn_dates = None
 
         if bs is None or bs.empty: return None
 
@@ -228,11 +227,8 @@ def get_financial_data_secure(ticker):
             full_info = stock.info
             sector = full_info.get('sector', 'Default')
             target_price = full_info.get('targetMeanPrice', None)
-            
-            # Nom propre pour la recherche de news (ex: "Kraken Robotics Inc")
             long_name = full_info.get('longName', ticker)
             
-            # APPEL AUX PRESS RELEASES
             ir_news = fetch_ir_press_releases(long_name)
             
             rev_growth = full_info.get('revenueGrowth', 0)
@@ -256,8 +252,8 @@ def get_financial_data_secure(ticker):
         
         return {
             "bs": bs, "inc": inc, "cf": cf, "history": history, 
-            "reco_summary": reco_summary, "calendar": calendar, 
-            "target_price": target_price, "ir_news": ir_news, # Ajouté ici
+            "reco_summary": reco_summary, "calendar": calendar, "earn_dates": earn_dates,
+            "target_price": target_price, "ir_news": ir_news,
             "price": current_price, "shares_calc": shares_calc,
             "sector": sector, "rev_growth": rev_growth, 
             "eps_growth": eps_growth, "trailing_eps": trailing_eps,
@@ -541,7 +537,6 @@ if ticker_final:
             if 'reco_summary' in data and data['reco_summary'] is not None and not data['reco_summary'].empty:
                 try:
                     rec = data['reco_summary'].iloc[0] # Prend la première ligne (Mois actuel)
-                    
                     buy_cnt = rec.get('strongBuy', 0) + rec.get('buy', 0)
                     hold_cnt = rec.get('hold', 0)
                     sell_cnt = rec.get('sell', 0) + rec.get('strongSell', 0)
@@ -560,43 +555,76 @@ if ticker_final:
             
             st.divider()
 
+            # --- NOUVEAU: SURPRISE RESULTS (EPS / REVENUE) ---
+            st.markdown("##### 📊 Last Earnings Results")
+            if 'earn_dates' in data and data['earn_dates'] is not None and not data['earn_dates'].empty:
+                try:
+                    # On cherche la dernière date passée (index = timestamp)
+                    now = pd.Timestamp.now().tz_localize(None)
+                    # Hack: On enlève la timezone de l'index pour comparer
+                    df_dates = data['earn_dates'].copy()
+                    df_dates.index = df_dates.index.tz_localize(None)
+                    
+                    past_dates = df_dates[df_dates.index < now]
+                    
+                    if not past_dates.empty:
+                        last_q = past_dates.iloc[0] # Le plus récent
+                        
+                        # EPS SURPRISE
+                        eps_est = last_q.get('EPS Estimate', 0)
+                        eps_act = last_q.get('Reported EPS', 0)
+                        
+                        if pd.notna(eps_act) and pd.notna(eps_est):
+                            diff = eps_act - eps_est
+                            pct = (diff / abs(eps_est)) * 100 if eps_est != 0 else 0
+                            color_delta = "normal" if diff >= 0 else "inverse"
+                            
+                            ce1, ce2 = st.columns(2)
+                            ce1.metric("EPS (Actual)", f"{eps_act:.2f}", delta=f"{pct:.1f}% vs Est", delta_color=color_delta)
+                            ce2.metric("EPS (Estimate)", f"{eps_est:.2f}")
+                        else:
+                            st.caption("EPS Surprise data missing.")
+                        
+                        # REVENUE CONTEXT (On utilise le dernier TTM Growth car Estimate Rev est dur à avoir)
+                        st.caption(f"📅 Date: {past_dates.index[0].strftime('%Y-%m-%d')}")
+                        cr1, cr2 = st.columns(2)
+                        cr1.metric("Revenue (Last Q)", f"{revenue_ttm/4:.1f} M$ (Approx)", help="Derived from TTM/4")
+                        cr2.metric("Growth YoY", f"{cur_sales_gr*100:.1f}%")
+
+                    else: st.info("No past earnings data found.")
+                except Exception as e:
+                    st.caption("Earnings surprise calculation unavailable.")
+            else:
+                st.info("No earnings history available.")
+
+            st.divider()
+
             # C. EARNINGS & IR NEWS
             col_ir1, col_ir2 = st.columns(2)
-            
             with col_ir1:
                 # Earnings Logic
                 earnings_display = "N/A"
                 label_earnings = "Earnings Date"
-                
                 if 'calendar' in data and data['calendar'] is not None:
                     try:
-                        if isinstance(data['calendar'], dict):
-                            dates = data['calendar'].get('Earnings Date', [])
-                        elif isinstance(data['calendar'], pd.DataFrame):
-                             dates = data['calendar'].values.flatten()
+                        if isinstance(data['calendar'], dict): dates = data['calendar'].get('Earnings Date', [])
+                        elif isinstance(data['calendar'], pd.DataFrame): dates = data['calendar'].values.flatten()
                         else: dates = []
-                        
                         if len(dates) > 0:
                             raw_date = pd.to_datetime(dates[0])
                             today = pd.Timestamp.now()
                             earnings_display = raw_date.strftime('%Y-%m-%d')
-                            
-                            if raw_date < today:
-                                label_earnings = "📅 Last Reported"
-                            else:
-                                label_earnings = "📅 Next Earnings"
+                            if raw_date < today: label_earnings = "📅 Last Reported"
+                            else: label_earnings = "📅 Next Earnings"
                     except: pass
-                
                 st.metric(label_earnings, earnings_display)
                 
-                # --- NOUVEAU : IR NEWS UNDER DATE ---
-                st.markdown("##### 📰 Latest Press Releases")
+                st.markdown("##### 📰 Press Releases")
                 if 'ir_news' in data and data['ir_news']:
                     for item in data['ir_news']:
                         st.markdown(f"• [{item['title']}]({item['link']})")
                         st.caption(f"_{item['pubDate']}_")
-                else:
-                    st.caption("No recent PR found.")
+                else: st.caption("No recent PR found.")
 
             with col_ir2:
                 clean_ticker = ticker_final.split(".")[0]
