@@ -42,6 +42,7 @@ TICKER_DB = [
     "PLTR - Palantir Technologies",
     "LMT - Lockheed Martin",
     "PNG.V - Kraken Robotics",
+    "IONQ - IonQ Inc",
     "--- CANADA (TSX) ---",
     "RY.TO - Royal Bank (RBC)",
     "TD.TO - TD Bank",
@@ -62,7 +63,7 @@ TICKER_DB = [
 # --- 1. DATA: SECTOR BENCHMARKS ---
 PEER_GROUPS = {
     "SPACE_TECH": {
-        "tickers": ["MDA", "RKLB", "ASTS", "LUNR", "PL", "SPIR", "SPCE", "PNG"],
+        "tickers": ["MDA", "RKLB", "ASTS", "LUNR", "PL", "SPIR", "SPCE", "PNG", "IONQ"],
         "gr_sales": 20.0, "gr_fcf": 25.0, "gr_eps": 25.0, "ps": 6.0, "pe": 40.0, "p_fcf": 35.0, "wacc": 11.0,
         "name": "Space Tech & Robotics"
     },
@@ -171,12 +172,11 @@ def get_financial_data_secure(ticker):
     try:
         stock = yf.Ticker(ticker)
         
-        # 1. PRICE & HISTORY (For Chart)
+        # 1. PRICE & HISTORY
         try:
             current_price = stock.fast_info['last_price']
             market_cap = stock.fast_info['market_cap']
             shares_calc = market_cap / current_price if current_price > 0 else 0
-            # 6 months history
             history = stock.history(period="6mo")
         except:
             history = pd.DataFrame()
@@ -188,7 +188,7 @@ def get_financial_data_secure(ticker):
         inc = stock.quarterly_financials
         cf = stock.quarterly_cashflow
         
-        # 3. NEWS (NOUVEAU)
+        # 3. NEWS (PROTECTED)
         try:
             news = stock.news
         except:
@@ -517,29 +517,34 @@ if ticker_final:
                     * 🔴 **< 8%: Weak** (Underperformance)
                     """)
 
-        # --- 5. NEWS & CONTEXT (SIMPLE CHART) ---
+        # --- 5. NEWS & CONTEXT (CRASH-PROOF) ---
         with tabs[4]:
             st.subheader("📰 Recent Context")
             st.caption("Price movements (6 months) & Latest Headlines")
 
             if 'history' in data and not data['history'].empty:
-                # THE SIMPLE SOLUTION (Ligne simple, pas de Plotly compliqué)
                 st.line_chart(data['history']['Close'], color="#0068C9")
             else:
                 st.warning("Chart data unavailable.")
 
             st.divider()
 
-            # News List Below
+            # News List Below (SECURE MODE)
             if 'news' in data and data['news']:
-                for article in data['news'][:7]: # Top 7 news
+                for article in data['news'][:7]:
                     with st.container():
-                        st.markdown(f"**[{article['title']}]({article['link']})**")
+                        # Utilisation de .get() pour éviter le KeyError si 'title' ou 'link' manque
+                        title = article.get('title', 'No Title Available')
+                        link = article.get('link', '#')
+                        st.markdown(f"**[{title}]({link})**")
+                        
                         try:
                             ts = article.get('providerPublishTime', 0)
                             date_str = datetime.utcfromtimestamp(ts).strftime('%Y-%m-%d %H:%M')
                         except: date_str = "Recent"
-                        st.caption(f"📅 {date_str} | 📢 {article.get('publisher', 'Unknown')}")
+                        
+                        publisher = article.get('publisher', 'Unknown')
+                        st.caption(f"📅 {date_str} | 📢 {publisher}")
                         st.write("---")
             else:
                 st.info("No recent news found.")
