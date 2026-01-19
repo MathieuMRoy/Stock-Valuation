@@ -1,7 +1,7 @@
 import streamlit as st
 import yfinance as yf
 import pandas as pd
-from datetime import datetime
+from datetime import datetime, date
 
 # --- CONFIGURATION ---
 st.set_page_config(page_title="Valuation Master", page_icon="📱", layout="centered")
@@ -188,15 +188,11 @@ def get_financial_data_secure(ticker):
         inc = stock.quarterly_financials
         cf = stock.quarterly_cashflow
         
-        # 3. ANALYST & CALENDAR (NOUVEAU)
+        # 3. ANALYST RECOMMENDATIONS & CALENDAR (UPDATED)
         try:
-            # Récupère les upgrades/downgrades récents
-            upgrades = stock.upgrades_downgrades
-            if upgrades is not None and not upgrades.empty:
-                upgrades = upgrades.sort_index(ascending=False).head(10)
-            else:
-                upgrades = pd.DataFrame()
-        except: upgrades = pd.DataFrame()
+            # Récupération du résumé des recommandations (Buy/Hold/Sell counts)
+            reco_summary = stock.recommendations_summary
+        except: reco_summary = None
 
         try:
             calendar = stock.calendar
@@ -208,6 +204,7 @@ def get_financial_data_secure(ticker):
         try:
             full_info = stock.info
             sector = full_info.get('sector', 'Default')
+            target_price = full_info.get('targetMeanPrice', None) # Prix cible moyen
             
             rev_growth = full_info.get('revenueGrowth', 0)
             if rev_growth is None or rev_growth == 0:
@@ -225,10 +222,12 @@ def get_financial_data_secure(ticker):
             eps_growth = 0
             trailing_eps = None
             shares_info = 0
+            target_price = None
         
         return {
             "bs": bs, "inc": inc, "cf": cf, "history": history, 
-            "upgrades": upgrades, "calendar": calendar, # NOUVELLES DONNÉES
+            "reco_summary": reco_summary, "calendar": calendar, 
+            "target_price": target_price,
             "price": current_price, "shares_calc": shares_calc,
             "sector": sector, "rev_growth": rev_growth, 
             "eps_growth": eps_growth, "trailing_eps": trailing_eps,
@@ -497,10 +496,10 @@ if ticker_final:
                 if total_return >= 12: st.success(f"✅ {total_return:.1f}%")
                 else: st.warning(f"⚠️ {total_return:.1f}%")
 
-        # --- 5. ANALYST & IR (NOUVEAU) ---
+        # --- 5. ANALYST & IR (SUMMARY EDITION) ---
         with tabs[4]:
-            st.subheader("📢 Analyst & IR")
-            st.caption("Upgrades/Downgrades & Investor Relations")
+            st.subheader("📢 Analyst Consensus")
+            st.caption("Aggregated Analyst Recommendations")
 
             # A. CHART
             if 'history' in data and not data['history'].empty:
@@ -508,47 +507,64 @@ if ticker_final:
             
             st.divider()
 
-            # B. CALENDAR & LINK
+            # B. ANALYST COUNTS
+            if 'reco_summary' in data and data['reco_summary'] is not None and not data['reco_summary'].empty:
+                # On prend la ligne la plus récente (period = 0m)
+                try:
+                    rec = data['reco_summary'].iloc[0] # Prend la première ligne (Mois actuel)
+                    
+                    buy_cnt = rec.get('strongBuy', 0) + rec.get('buy', 0)
+                    hold_cnt = rec.get('hold', 0)
+                    sell_cnt = rec.get('sell', 0) + rec.get('strongSell', 0)
+                    
+                    c1, c2, c3 = st.columns(3)
+                    c1.metric("🟢 BUY", int(buy_cnt))
+                    c2.metric("🟡 HOLD", int(hold_cnt))
+                    c3.metric("🔴 SELL", int(sell_cnt))
+                except:
+                    st.warning("Analyst consensus data unavailable.")
+            else:
+                 st.info("No consensus data available for this ticker.")
+            
+            # Target Price
+            if data['target_price']:
+                st.caption(f"🎯 **Analyst Mean Target Price:** {data['target_price']} $")
+            
+            st.divider()
+
+            # C. EARNINGS & IR
             col_ir1, col_ir2 = st.columns(2)
             
             with col_ir1:
-                # Earnings Date
-                earnings_date = "N/A"
+                # Earnings Date Logic
+                earnings_display = "N/A"
+                label_earnings = "Earnings Date"
+                
                 if 'calendar' in data and data['calendar'] is not None:
                     try:
-                        # Gère les différents formats de retour de yfinance (Dictionary ou DataFrame)
+                        # Gestion flexible (Dict ou DataFrame)
                         if isinstance(data['calendar'], dict):
-                            earnings_list = data['calendar'].get('Earnings Date', [])
-                            if earnings_list:
-                                earnings_date = str(earnings_list[0])[:10]
+                            dates = data['calendar'].get('Earnings Date', [])
                         elif isinstance(data['calendar'], pd.DataFrame):
-                             # Parfois c'est une DF, on essaie de trouver la date
-                             vals = data['calendar'].values.flatten()
-                             if len(vals) > 0: earnings_date = str(vals[0])[:10]
+                             dates = data['calendar'].values.flatten()
+                        else: dates = []
+                        
+                        if len(dates) > 0:
+                            raw_date = pd.to_datetime(dates[0])
+                            today = pd.Timestamp.now()
+                            earnings_display = raw_date.strftime('%Y-%m-%d')
+                            
+                            # Vérification si passé ou futur
+                            if raw_date < today:
+                                label_earnings = "📅 Last Reported"
+                            else:
+                                label_earnings = "📅 Next Earnings"
                     except: pass
                 
-                st.metric("📅 Next Earnings", earnings_date)
+                st.metric(label_earnings, earnings_display)
 
             with col_ir2:
                 # SMART LINK BUTTON
                 clean_ticker = ticker_final.split(".")[0]
                 url_ir = f"https://www.google.com/search?q={clean_ticker}+investor+relations"
                 st.link_button(f"🌐 Go to {clean_ticker} Inv. Relations", url_ir)
-
-            st.write("---")
-
-            # C. UPGRADES TABLE
-            st.markdown("##### 🏦 Latest Analyst Ratings")
-            if 'upgrades' in data and not data['upgrades'].empty:
-                # On nettoie la dataframe pour l'affichage
-                df_up = data['upgrades'].copy()
-                # On garde juste les colonnes utiles si elles existent
-                cols_to_keep = ['Firm', 'To Grade', 'Action']
-                final_cols = [c for c in cols_to_keep if c in df_up.columns]
-                
-                if final_cols:
-                    st.dataframe(df_up[final_cols], use_container_width=True)
-                else:
-                    st.dataframe(df_up, use_container_width=True)
-            else:
-                st.info("No recent analyst upgrades/downgrades found.")
