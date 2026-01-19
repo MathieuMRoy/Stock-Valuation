@@ -1,6 +1,8 @@
 import streamlit as st
 import yfinance as yf
 import pandas as pd
+import requests
+import xml.etree.ElementTree as ET
 from datetime import datetime
 
 # --- CONFIGURATION ---
@@ -11,7 +13,7 @@ with st.sidebar:
     if st.button("🗑️ Reset Cache"):
         st.cache_data.clear()
         st.rerun()
-    st.caption("À utiliser si les données semblent incorrectes ou manquantes.")
+    st.caption("À utiliser si les données semblent incorrectes.")
 
 st.title("📱 Valuation Master")
 st.caption("3 Models: Cash • Sales • Earnings")
@@ -167,6 +169,28 @@ def get_growth_manual(df, keys):
         return 0
     except: return 0
 
+# --- NOUVEAU MODULE GOOGLE NEWS ---
+def fetch_google_news(ticker):
+    """Récupère les news via Google News RSS (Fiable & Gratuit)"""
+    try:
+        # Nettoyage du ticker pour la recherche (enlever .TO, .V etc pour une meilleure recherche globale)
+        clean_ticker = ticker.split(".")[0]
+        url = f"https://news.google.com/rss/search?q={clean_ticker}+stock+news&hl=en-US&gl=US&ceid=US:en"
+        
+        response = requests.get(url, timeout=5)
+        root = ET.fromstring(response.content)
+        
+        news_items = []
+        for item in root.findall('.//item')[:7]: # Top 7 news
+            news_items.append({
+                'title': item.find('title').text,
+                'link': item.find('link').text,
+                'pubDate': item.find('pubDate').text
+            })
+        return news_items
+    except:
+        return []
+
 @st.cache_data(ttl=3600)
 def get_financial_data_secure(ticker):
     try:
@@ -188,11 +212,8 @@ def get_financial_data_secure(ticker):
         inc = stock.quarterly_financials
         cf = stock.quarterly_cashflow
         
-        # 3. NEWS (PROTECTED)
-        try:
-            news = stock.news
-        except:
-            news = []
+        # 3. NEWS -> ON UTILISE GOOGLE MAINTENANT
+        news = fetch_google_news(ticker)
 
         if bs is None or bs.empty: return None
 
@@ -517,7 +538,7 @@ if ticker_final:
                     * 🔴 **< 8%: Weak** (Underperformance)
                     """)
 
-        # --- 5. NEWS & CONTEXT (CRASH-PROOF) ---
+        # --- 5. NEWS & CONTEXT (GOOGLE NEWS) ---
         with tabs[4]:
             st.subheader("📰 Recent Context")
             st.caption("Price movements (6 months) & Latest Headlines")
@@ -529,22 +550,12 @@ if ticker_final:
 
             st.divider()
 
-            # News List Below (SECURE MODE)
+            # Google News List
             if 'news' in data and data['news']:
-                for article in data['news'][:7]:
+                for article in data['news']:
                     with st.container():
-                        # Utilisation de .get() pour éviter le KeyError si 'title' ou 'link' manque
-                        title = article.get('title', 'No Title Available')
-                        link = article.get('link', '#')
-                        st.markdown(f"**[{title}]({link})**")
-                        
-                        try:
-                            ts = article.get('providerPublishTime', 0)
-                            date_str = datetime.utcfromtimestamp(ts).strftime('%Y-%m-%d %H:%M')
-                        except: date_str = "Recent"
-                        
-                        publisher = article.get('publisher', 'Unknown')
-                        st.caption(f"📅 {date_str} | 📢 {publisher}")
+                        st.markdown(f"**[{article['title']}]({article['link']})**")
+                        st.caption(f"📅 {article['pubDate']} | 📢 Google News")
                         st.write("---")
             else:
                 st.info("No recent news found.")
