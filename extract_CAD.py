@@ -1,7 +1,9 @@
 import streamlit as st
 import yfinance as yf
 import pandas as pd
-from datetime import datetime, date
+import requests
+import xml.etree.ElementTree as ET
+from datetime import datetime
 
 # --- CONFIGURATION ---
 st.set_page_config(page_title="Valuation Master", page_icon="📱", layout="centered")
@@ -167,6 +169,28 @@ def get_growth_manual(df, keys):
         return 0
     except: return 0
 
+# --- NOUVEAU : FETCH PRESS RELEASES ---
+def fetch_ir_press_releases(search_name):
+    """Cherche spécifiquement les 'Press Release' pour éviter le bruit"""
+    try:
+        # Requête très ciblée : Nom + Press Release
+        query = f"{search_name} press release investor relations"
+        url = f"https://news.google.com/rss/search?q={query}&hl=en-US&gl=US&ceid=US:en"
+        
+        response = requests.get(url, timeout=4)
+        root = ET.fromstring(response.content)
+        
+        news_items = []
+        for item in root.findall('.//item')[:3]: # Juste les 3 plus récents
+            news_items.append({
+                'title': item.find('title').text,
+                'link': item.find('link').text,
+                'pubDate': item.find('pubDate').text[:16] # Coupe la date pour faire propre
+            })
+        return news_items
+    except:
+        return []
+
 @st.cache_data(ttl=3600)
 def get_financial_data_secure(ticker):
     try:
@@ -188,9 +212,8 @@ def get_financial_data_secure(ticker):
         inc = stock.quarterly_financials
         cf = stock.quarterly_cashflow
         
-        # 3. ANALYST RECOMMENDATIONS & CALENDAR (UPDATED)
+        # 3. ANALYST & CALENDAR
         try:
-            # Récupération du résumé des recommandations (Buy/Hold/Sell counts)
             reco_summary = stock.recommendations_summary
         except: reco_summary = None
 
@@ -200,11 +223,17 @@ def get_financial_data_secure(ticker):
 
         if bs is None or bs.empty: return None
 
-        # 4. INFO
+        # 4. INFO & IR NEWS
         try:
             full_info = stock.info
             sector = full_info.get('sector', 'Default')
-            target_price = full_info.get('targetMeanPrice', None) # Prix cible moyen
+            target_price = full_info.get('targetMeanPrice', None)
+            
+            # Nom propre pour la recherche de news (ex: "Kraken Robotics Inc")
+            long_name = full_info.get('longName', ticker)
+            
+            # APPEL AUX PRESS RELEASES
+            ir_news = fetch_ir_press_releases(long_name)
             
             rev_growth = full_info.get('revenueGrowth', 0)
             if rev_growth is None or rev_growth == 0:
@@ -223,11 +252,12 @@ def get_financial_data_secure(ticker):
             trailing_eps = None
             shares_info = 0
             target_price = None
+            ir_news = []
         
         return {
             "bs": bs, "inc": inc, "cf": cf, "history": history, 
             "reco_summary": reco_summary, "calendar": calendar, 
-            "target_price": target_price,
+            "target_price": target_price, "ir_news": ir_news, # Ajouté ici
             "price": current_price, "shares_calc": shares_calc,
             "sector": sector, "rev_growth": rev_growth, 
             "eps_growth": eps_growth, "trailing_eps": trailing_eps,
@@ -496,7 +526,7 @@ if ticker_final:
                 if total_return >= 12: st.success(f"✅ {total_return:.1f}%")
                 else: st.warning(f"⚠️ {total_return:.1f}%")
 
-        # --- 5. ANALYST & IR (SUMMARY EDITION) ---
+        # --- 5. ANALYST & IR ---
         with tabs[4]:
             st.subheader("📢 Analyst Consensus")
             st.caption("Aggregated Analyst Recommendations")
@@ -509,7 +539,6 @@ if ticker_final:
 
             # B. ANALYST COUNTS
             if 'reco_summary' in data and data['reco_summary'] is not None and not data['reco_summary'].empty:
-                # On prend la ligne la plus récente (period = 0m)
                 try:
                     rec = data['reco_summary'].iloc[0] # Prend la première ligne (Mois actuel)
                     
@@ -526,23 +555,21 @@ if ticker_final:
             else:
                  st.info("No consensus data available for this ticker.")
             
-            # Target Price
             if data['target_price']:
                 st.caption(f"🎯 **Analyst Mean Target Price:** {data['target_price']} $")
             
             st.divider()
 
-            # C. EARNINGS & IR
+            # C. EARNINGS & IR NEWS
             col_ir1, col_ir2 = st.columns(2)
             
             with col_ir1:
-                # Earnings Date Logic
+                # Earnings Logic
                 earnings_display = "N/A"
                 label_earnings = "Earnings Date"
                 
                 if 'calendar' in data and data['calendar'] is not None:
                     try:
-                        # Gestion flexible (Dict ou DataFrame)
                         if isinstance(data['calendar'], dict):
                             dates = data['calendar'].get('Earnings Date', [])
                         elif isinstance(data['calendar'], pd.DataFrame):
@@ -554,7 +581,6 @@ if ticker_final:
                             today = pd.Timestamp.now()
                             earnings_display = raw_date.strftime('%Y-%m-%d')
                             
-                            # Vérification si passé ou futur
                             if raw_date < today:
                                 label_earnings = "📅 Last Reported"
                             else:
@@ -562,9 +588,17 @@ if ticker_final:
                     except: pass
                 
                 st.metric(label_earnings, earnings_display)
+                
+                # --- NOUVEAU : IR NEWS UNDER DATE ---
+                st.markdown("##### 📰 Latest Press Releases")
+                if 'ir_news' in data and data['ir_news']:
+                    for item in data['ir_news']:
+                        st.markdown(f"• [{item['title']}]({item['link']})")
+                        st.caption(f"_{item['pubDate']}_")
+                else:
+                    st.caption("No recent PR found.")
 
             with col_ir2:
-                # SMART LINK BUTTON
                 clean_ticker = ticker_final.split(".")[0]
                 url_ir = f"https://www.google.com/search?q={clean_ticker}+investor+relations"
                 st.link_button(f"🌐 Go to {clean_ticker} Inv. Relations", url_ir)
