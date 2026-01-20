@@ -206,18 +206,16 @@ def get_financial_data_secure(ticker):
         inc = stock.quarterly_financials
         cf = stock.quarterly_cashflow
         
-        # 3. ANALYST & EARNINGS SURPRISE (IMPROVED)
+        # 3. ANALYST & EARNINGS
         try: reco_summary = stock.recommendations_summary
         except: reco_summary = None
 
         try: calendar = stock.calendar
         except: calendar = None
         
-        # SOURCE 1: Earnings History (Best for Surprise)
         try: earn_history = stock.earnings_history
         except: earn_history = None
         
-        # SOURCE 2: Earnings Dates (Fallback)
         try: earn_dates = stock.earnings_dates
         except: earn_dates = None
 
@@ -254,7 +252,7 @@ def get_financial_data_secure(ticker):
         return {
             "bs": bs, "inc": inc, "cf": cf, "history": history, 
             "reco_summary": reco_summary, "calendar": calendar, 
-            "earn_dates": earn_dates, "earn_history": earn_history, # NOUVEAU
+            "earn_dates": earn_dates, "earn_history": earn_history,
             "target_price": target_price, "ir_news": ir_news,
             "price": current_price, "shares_calc": shares_calc,
             "sector": sector, "rev_growth": rev_growth, 
@@ -557,43 +555,32 @@ if ticker_final:
             
             st.divider()
 
-            # --- C. EARNINGS SURPRISE (ROBUST FALLBACK) ---
+            # --- C. EARNINGS SURPRISE (CHRONO FIX) ---
             st.markdown("##### 📊 Last Earnings Results")
             earnings_found = False
             
-            # STRATEGY 1: TRY EARNINGS HISTORY (BEST FOR SURPRISE)
-            if 'earn_history' in data and data['earn_history'] is not None and not data['earn_history'].empty:
-                try:
-                    latest = data['earn_history'].iloc[0] # Most recent
-                    eps_act = latest.get('epsActual')
-                    eps_est = latest.get('epsEstimate')
-                    
-                    if pd.notna(eps_act) and pd.notna(eps_est):
-                        earnings_found = True
-                        diff = eps_act - eps_est
-                        pct = (diff / abs(eps_est)) * 100 if eps_est != 0 else 0
-                        color_delta = "normal" if diff >= 0 else "inverse"
-                        
-                        ce1, ce2 = st.columns(2)
-                        ce1.metric("EPS (Actual)", f"{eps_act:.2f}", delta=f"{pct:.1f}% vs Est", delta_color=color_delta)
-                        ce2.metric("EPS (Estimate)", f"{eps_est:.2f}")
-                        st.caption(f"📅 Report Date: {latest.name.date() if hasattr(latest.name, 'date') else 'Recent'}")
-                except: pass
-
-            # STRATEGY 2: TRY EARNINGS DATES (FALLBACK)
-            if not earnings_found and 'earn_dates' in data and data['earn_dates'] is not None and not data['earn_dates'].empty:
+            # STRATEGY: CHECK EARNINGS DATES & SORT CHRONOLOGICALLY
+            if 'earn_dates' in data and data['earn_dates'] is not None and not data['earn_dates'].empty:
                 try:
                     now = pd.Timestamp.now().tz_localize(None)
                     df_dates = data['earn_dates'].copy()
+                    
+                    # Nettoyage timezone
                     if df_dates.index.tz is not None:
                         df_dates.index = df_dates.index.tz_localize(None)
                     
+                    # TRI STRICT : Plus récent en haut
+                    df_dates = df_dates.sort_index(ascending=False)
+                    
+                    # FILTRE : Uniquement dates passées
                     past_dates = df_dates[df_dates.index < now]
-                    if not past_dates.empty:
-                        last_q = past_dates.iloc[0]
-                        eps_est = last_q.get('EPS Estimate', 0)
-                        eps_act = last_q.get('Reported EPS', 0)
+                    
+                    # BOUCLE : Trouver le premier résultat valide (avec des chiffres)
+                    for idx, row in past_dates.iterrows():
+                        eps_act = row.get('Reported EPS')
+                        eps_est = row.get('EPS Estimate')
                         
+                        # Si on a les chiffres, c'est le bon !
                         if pd.notna(eps_act) and pd.notna(eps_est):
                             earnings_found = True
                             diff = eps_act - eps_est
@@ -603,22 +590,19 @@ if ticker_final:
                             ce1, ce2 = st.columns(2)
                             ce1.metric("EPS (Actual)", f"{eps_act:.2f}", delta=f"{pct:.1f}% vs Est", delta_color=color_delta)
                             ce2.metric("EPS (Estimate)", f"{eps_est:.2f}")
-                except: pass
+                            st.caption(f"📅 Report Date: {idx.strftime('%Y-%m-%d')}")
+                            break # On arrête dès qu'on a le plus récent valide
+                            
+                except Exception as e:
+                    pass
 
-            # STRATEGY 3: HARD FALLBACK (SHOW RAW FINANCIALS)
+            # FALLBACK
             if not earnings_found:
-                # Show Revenue instead if Surprise is missing
                 cr1, cr2 = st.columns(2)
-                
-                # Get latest revenue from Income Statement
+                # Raw financials fallback
                 latest_rev = 0
                 if 'inc' in data and not data['inc'].empty:
-                    # Try to get the most recent column
-                    latest_col = data['inc'].iloc[:, 0] # First column is usually most recent
-                    # Try to find Total Revenue row
-                    rev_row = data['inc'].loc[data['inc'].index.astype(str).str.contains("Total Revenue|Revenue", case=False)]
-                    if not rev_row.empty:
-                        latest_rev = rev_row.iloc[0, 0]
+                    latest_rev = data['inc'].iloc[0, 0] # Chiffre le plus récent
                 
                 if latest_rev > 0:
                     cr1.metric("Reported Revenue", f"{latest_rev/1e6:.1f} M$")
