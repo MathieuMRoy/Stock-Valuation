@@ -190,7 +190,7 @@ def get_financial_data_secure(ticker):
     try:
         stock = yf.Ticker(ticker)
         
-        # 1. PRICE (NO CHART HISTORY NEEDED ANYMORE)
+        # 1. PRICE
         try:
             current_price = stock.fast_info['last_price']
             market_cap = stock.fast_info['market_cap']
@@ -444,6 +444,11 @@ if ticker_final:
             c_base.metric("🎯 Neutral", f"{base_res[0]:.2f} $", delta=f"{base_res[0]-current_price:.1f}")
             c_bull.metric("🐂 Bull", f"{bull_res[0]:.2f} $", delta=f"{bull_res[0]-current_price:.1f}")
 
+            st.markdown("##### 📝 Investment Theses")
+            st.error(f"**🐻 Bear (-20%):** FCF Growth slows to **{gr_fcf_input*0.8:.1f}%**. Market doubts cash flow sustainability.")
+            st.info(f"**🎯 Neutral:** Base case. FCF Growth **{gr_fcf_input:.1f}%**, WACC **{wacc_input:.1f}%**.")
+            st.success(f"**🐂 Bull (+20%):** Perfect execution. FCF Growth accelerates to **{gr_fcf_input*1.2:.1f}%**.")
+
         # --- 2. SALES ---
         with tabs[1]:
             st.subheader("🏷️ Buy Price (Sales)")
@@ -463,6 +468,11 @@ if ticker_final:
             c_base.metric("🎯 Neutral", f"{base_res[1]:.2f} $")
             c_bull.metric("🐂 Bull", f"{bull_res[1]:.2f} $")
 
+            st.markdown("##### 📝 Investment Theses")
+            st.error(f"**🐻 Bear:** Multiple compression to **{target_ps*0.8:.1f}x** sales.")
+            st.info(f"**🎯 Neutral:** Maintains historical multiple of **{target_ps:.1f}x**.")
+            st.success(f"**🐂 Bull:** Market euphoria, multiple expands to **{target_ps*1.2:.1f}x**.")
+
         # --- 3. EARNINGS ---
         with tabs[2]:
             st.subheader("🏷️ Buy Price (P/E)")
@@ -481,6 +491,11 @@ if ticker_final:
             c_bear.metric("🐻 Bear", f"{bear_res[2]:.2f} $")
             c_base.metric("🎯 Neutral", f"{base_res[2]:.2f} $")
             c_bull.metric("🐂 Bull", f"{bull_res[2]:.2f} $")
+
+            st.markdown("##### 📝 Investment Theses")
+            st.error(f"**🐻 Bear:** EPS Growth **{gr_eps_input*0.8:.1f}%**, P/E drops to **{target_pe*0.8:.1f}x**.")
+            st.info(f"**🎯 Neutral:** EPS Growth **{gr_eps_input:.1f}%**, Standard P/E of **{target_pe:.1f}x**.")
+            st.success(f"**🐂 Bull:** Margin expansion (**{gr_eps_input*1.2:.1f}%**), Premium P/E of **{target_pe*1.2:.1f}x**.")
 
         # --- 4. SCORECARD ---
         with tabs[3]:
@@ -527,7 +542,7 @@ if ticker_final:
                     * 🔴 **< 8%: Weak** (Underperformance)
                     """)
 
-        # --- 5. ANALYST & IR (CLEAN VERSION) ---
+        # --- 5. ANALYST & IR (CLEAN) ---
         with tabs[4]:
             st.subheader("📢 Analyst & IR")
 
