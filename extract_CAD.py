@@ -610,4 +610,4 @@ if ticker_final:
 
             # PLAN C: GUARANTEED FALLBACK (INCOME STATEMENT)
             if not earnings_found:
-                cr1, cr2 = st.columns(2
+                cr1, cr2 = st.columns(2)
