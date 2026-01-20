@@ -555,91 +555,59 @@ if ticker_final:
             
             st.divider()
 
-            # --- C. EARNINGS SURPRISE (CHRONO FIX) ---
+            # --- C. EARNINGS SURPRISE OR GUARANTEED FALLBACK ---
             st.markdown("##### 📊 Last Earnings Results")
             earnings_found = False
             
-            # STRATEGY: CHECK EARNINGS DATES & SORT CHRONOLOGICALLY
-            if 'earn_dates' in data and data['earn_dates'] is not None and not data['earn_dates'].empty:
+            # PLAN A: TRY EARNINGS HISTORY (BEST FOR SURPRISE)
+            if 'earn_history' in data and data['earn_history'] is not None and not data['earn_history'].empty:
+                try:
+                    latest = data['earn_history'].iloc[0]
+                    eps_act = latest.get('epsActual')
+                    eps_est = latest.get('epsEstimate')
+                    if pd.notna(eps_act) and pd.notna(eps_est):
+                        earnings_found = True
+                        diff = eps_act - eps_est
+                        pct = (diff / abs(eps_est)) * 100 if eps_est != 0 else 0
+                        color_delta = "normal" if diff >= 0 else "inverse"
+                        ce1, ce2 = st.columns(2)
+                        ce1.metric("EPS (Actual)", f"{eps_act:.2f}", delta=f"{pct:.1f}% vs Est", delta_color=color_delta)
+                        ce2.metric("EPS (Estimate)", f"{eps_est:.2f}")
+                        st.caption(f"📅 Report Date: {latest.name.date() if hasattr(latest.name, 'date') else 'Recent'}")
+                except: pass
+
+            # PLAN B: TRY EARNINGS DATES (FALLBACK)
+            if not earnings_found and 'earn_dates' in data and data['earn_dates'] is not None and not data['earn_dates'].empty:
                 try:
                     now = pd.Timestamp.now().tz_localize(None)
                     df_dates = data['earn_dates'].copy()
+                    if df_dates.index.tz is not None: df_dates.index = df_dates.index.tz_localize(None)
                     
-                    # Nettoyage timezone
-                    if df_dates.index.tz is not None:
-                        df_dates.index = df_dates.index.tz_localize(None)
+                    # Sort Descending & Filter Past
+                    past_dates = df_dates.sort_index(ascending=False)
+                    past_dates = past_dates[past_dates.index < now]
                     
-                    # TRI STRICT : Plus récent en haut
-                    df_dates = df_dates.sort_index(ascending=False)
-                    
-                    # FILTRE : Uniquement dates passées
-                    past_dates = df_dates[df_dates.index < now]
-                    
-                    # BOUCLE : Trouver le premier résultat valide (avec des chiffres)
-                    for idx, row in past_dates.iterrows():
-                        eps_act = row.get('Reported EPS')
-                        eps_est = row.get('EPS Estimate')
-                        
-                        # Si on a les chiffres, c'est le bon !
-                        if pd.notna(eps_act) and pd.notna(eps_est):
-                            earnings_found = True
-                            diff = eps_act - eps_est
-                            pct = (diff / abs(eps_est)) * 100 if eps_est != 0 else 0
-                            color_delta = "normal" if diff >= 0 else "inverse"
-                            
-                            ce1, ce2 = st.columns(2)
-                            ce1.metric("EPS (Actual)", f"{eps_act:.2f}", delta=f"{pct:.1f}% vs Est", delta_color=color_delta)
-                            ce2.metric("EPS (Estimate)", f"{eps_est:.2f}")
-                            st.caption(f"📅 Report Date: {idx.strftime('%Y-%m-%d')}")
-                            break # On arrête dès qu'on a le plus récent valide
-                            
-                except Exception as e:
-                    pass
+                    if not past_dates.empty:
+                        # Iterate to find first valid data
+                        for idx, row in past_dates.iterrows():
+                            eps_act = row.get('Reported EPS')
+                            eps_est = row.get('EPS Estimate')
+                            if pd.notna(eps_act): # At least actual must be there
+                                earnings_found = True
+                                ce1, ce2 = st.columns(2)
+                                if pd.notna(eps_est):
+                                    diff = eps_act - eps_est
+                                    pct = (diff / abs(eps_est)) * 100 if eps_est != 0 else 0
+                                    color_delta = "normal" if diff >= 0 else "inverse"
+                                    ce1.metric("EPS (Actual)", f"{eps_act:.2f}", delta=f"{pct:.1f}% vs Est", delta_color=color_delta)
+                                    ce2.metric("EPS (Estimate)", f"{eps_est:.2f}")
+                                else:
+                                    ce1.metric("EPS (Actual)", f"{eps_act:.2f}")
+                                    ce2.caption("No Estimate Available")
+                                st.caption(f"📅 Report Date: {idx.strftime('%Y-%m-%d')}")
+                                break
+                except: pass
 
-            # FALLBACK
+            # PLAN C: GUARANTEED FALLBACK (INCOME STATEMENT)
             if not earnings_found:
-                cr1, cr2 = st.columns(2)
-                # Raw financials fallback
-                latest_rev = 0
-                if 'inc' in data and not data['inc'].empty:
-                    latest_rev = data['inc'].iloc[0, 0] # Chiffre le plus récent
-                
-                if latest_rev > 0:
-                    cr1.metric("Reported Revenue", f"{latest_rev/1e6:.1f} M$")
-                    cr2.metric("Revenue Growth", f"{cur_sales_gr*100:.1f}%")
-                    st.caption("ℹ️ Note: Earnings surprise data unavailable. Showing reported financials.")
-                else:
-                    st.info("No earnings history available.")
-
-            st.divider()
-
-            # D. EARNINGS & IR NEWS
-            col_ir1, col_ir2 = st.columns(2)
-            with col_ir1:
-                earnings_display = "N/A"
-                label_earnings = "Earnings Date"
-                if 'calendar' in data and data['calendar'] is not None:
-                    try:
-                        if isinstance(data['calendar'], dict): dates = data['calendar'].get('Earnings Date', [])
-                        elif isinstance(data['calendar'], pd.DataFrame): dates = data['calendar'].values.flatten()
-                        else: dates = []
-                        if len(dates) > 0:
-                            raw_date = pd.to_datetime(dates[0])
-                            today = pd.Timestamp.now()
-                            earnings_display = raw_date.strftime('%Y-%m-%d')
-                            if raw_date < today: label_earnings = "📅 Last Reported"
-                            else: label_earnings = "📅 Next Earnings"
-                    except: pass
-                st.metric(label_earnings, earnings_display)
-                
-                st.markdown("##### 📰 Press Releases")
-                if 'ir_news' in data and data['ir_news']:
-                    for item in data['ir_news']:
-                        st.markdown(f"• [{item['title']}]({item['link']})")
-                        st.caption(f"_{item['pubDate']}_")
-                else: st.caption("No recent PR found.")
-
-            with col_ir2:
-                clean_ticker = ticker_final.split(".")[0]
-                url_ir = f"https://www.google.com/search?q={clean_ticker}+investor+relations"
-                st.link_button(f"🌐 Go to {clean_ticker} Inv. Relations", url_ir)
+                cr1, cr2 = st.columns(2
