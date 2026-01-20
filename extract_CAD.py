@@ -190,14 +190,12 @@ def get_financial_data_secure(ticker):
     try:
         stock = yf.Ticker(ticker)
         
-        # 1. PRICE & HISTORY
+        # 1. PRICE (NO CHART HISTORY NEEDED ANYMORE)
         try:
             current_price = stock.fast_info['last_price']
             market_cap = stock.fast_info['market_cap']
             shares_calc = market_cap / current_price if current_price > 0 else 0
-            history = stock.history(period="6mo")
         except:
-            history = pd.DataFrame()
             current_price = 0
             shares_calc = 0 
 
@@ -212,12 +210,6 @@ def get_financial_data_secure(ticker):
 
         try: calendar = stock.calendar
         except: calendar = None
-        
-        try: earn_history = stock.earnings_history
-        except: earn_history = None
-        
-        try: earn_dates = stock.earnings_dates
-        except: earn_dates = None
 
         if bs is None or bs.empty: return None
 
@@ -250,9 +242,8 @@ def get_financial_data_secure(ticker):
             ir_news = []
         
         return {
-            "bs": bs, "inc": inc, "cf": cf, "history": history, 
+            "bs": bs, "inc": inc, "cf": cf, 
             "reco_summary": reco_summary, "calendar": calendar, 
-            "earn_dates": earn_dates, "earn_history": earn_history,
             "target_price": target_price, "ir_news": ir_news,
             "price": current_price, "shares_calc": shares_calc,
             "sector": sector, "rev_growth": rev_growth, 
@@ -515,25 +506,33 @@ if ticker_final:
                 st.caption("Rule of 40")
                 if rule_40 >= 40: st.success(f"✅ {rule_40:.1f}")
                 else: st.warning(f"⚠️ {rule_40:.1f}")
+                with st.expander("Interpretation Guide"):
+                    st.write(f"**Calc:** Growth {gr_sales_input:.1f}% + Margin {fcf_margin:.1f}%")
+                    st.markdown("""
+                    * 🟢 **> 40: Excellent** (Efficient Hyper-growth)
+                    * 🟡 **20 - 40: Average** (Watch closely)
+                    * 🔴 **< 20: Weak** (Inefficient)
+                    """)
 
             with col_score2:
                 st.markdown("#### 🛡️ Stability")
                 st.caption("Total Return")
                 if total_return >= 12: st.success(f"✅ {total_return:.1f}%")
                 else: st.warning(f"⚠️ {total_return:.1f}%")
+                with st.expander("Interpretation Guide"):
+                    st.write(f"**Calc:** Yield {fcf_yield:.1f}% + Growth {gr_eps_input:.1f}%")
+                    st.markdown("""
+                    * 🟢 **> 12%: Excellent** (Beats Market)
+                    * 🟡 **8 - 12%: Fair** (Market Average)
+                    * 🔴 **< 8%: Weak** (Underperformance)
+                    """)
 
-        # --- 5. ANALYST & IR ---
+        # --- 5. ANALYST & IR (CLEAN VERSION) ---
         with tabs[4]:
-            st.subheader("📢 Analyst Consensus")
-            st.caption("Aggregated Analyst Recommendations")
+            st.subheader("📢 Analyst & IR")
 
-            # A. CHART
-            if 'history' in data and not data['history'].empty:
-                st.line_chart(data['history']['Close'], color="#0068C9")
-            
-            st.divider()
-
-            # B. ANALYST COUNTS
+            # 1. ANALYST CONSENSUS
+            st.markdown("##### 🏦 Analyst Consensus")
             if 'reco_summary' in data and data['reco_summary'] is not None and not data['reco_summary'].empty:
                 try:
                     rec = data['reco_summary'].iloc[0]
@@ -548,66 +547,44 @@ if ticker_final:
                 except:
                     st.warning("Analyst consensus data unavailable.")
             else:
-                 st.info("No consensus data available for this ticker.")
+                 st.info("No consensus data available.")
             
             if data['target_price']:
                 st.caption(f"🎯 **Analyst Mean Target Price:** {data['target_price']} $")
             
             st.divider()
 
-            # --- C. EARNINGS SURPRISE OR GUARANTEED FALLBACK ---
-            st.markdown("##### 📊 Last Earnings Results")
-            earnings_found = False
+            # 2. INVESTOR RELATIONS
+            st.markdown("##### 📅 Calendar & News")
+            col_ir1, col_ir2 = st.columns(2)
             
-            # PLAN A: TRY EARNINGS HISTORY (BEST FOR SURPRISE)
-            if 'earn_history' in data and data['earn_history'] is not None and not data['earn_history'].empty:
-                try:
-                    latest = data['earn_history'].iloc[0]
-                    eps_act = latest.get('epsActual')
-                    eps_est = latest.get('epsEstimate')
-                    if pd.notna(eps_act) and pd.notna(eps_est):
-                        earnings_found = True
-                        diff = eps_act - eps_est
-                        pct = (diff / abs(eps_est)) * 100 if eps_est != 0 else 0
-                        color_delta = "normal" if diff >= 0 else "inverse"
-                        ce1, ce2 = st.columns(2)
-                        ce1.metric("EPS (Actual)", f"{eps_act:.2f}", delta=f"{pct:.1f}% vs Est", delta_color=color_delta)
-                        ce2.metric("EPS (Estimate)", f"{eps_est:.2f}")
-                        st.caption(f"📅 Report Date: {latest.name.date() if hasattr(latest.name, 'date') else 'Recent'}")
-                except: pass
+            with col_ir1:
+                earnings_display = "N/A"
+                label_earnings = "Earnings Date"
+                if 'calendar' in data and data['calendar'] is not None:
+                    try:
+                        if isinstance(data['calendar'], dict): dates = data['calendar'].get('Earnings Date', [])
+                        elif isinstance(data['calendar'], pd.DataFrame): dates = data['calendar'].values.flatten()
+                        else: dates = []
+                        if len(dates) > 0:
+                            raw_date = pd.to_datetime(dates[0])
+                            today = pd.Timestamp.now()
+                            earnings_display = raw_date.strftime('%Y-%m-%d')
+                            if raw_date < today: label_earnings = "📅 Last Reported"
+                            else: label_earnings = "📅 Next Earnings"
+                    except: pass
+                st.metric(label_earnings, earnings_display)
 
-            # PLAN B: TRY EARNINGS DATES (FALLBACK)
-            if not earnings_found and 'earn_dates' in data and data['earn_dates'] is not None and not data['earn_dates'].empty:
-                try:
-                    now = pd.Timestamp.now().tz_localize(None)
-                    df_dates = data['earn_dates'].copy()
-                    if df_dates.index.tz is not None: df_dates.index = df_dates.index.tz_localize(None)
-                    
-                    # Sort Descending & Filter Past
-                    past_dates = df_dates.sort_index(ascending=False)
-                    past_dates = past_dates[past_dates.index < now]
-                    
-                    if not past_dates.empty:
-                        # Iterate to find first valid data
-                        for idx, row in past_dates.iterrows():
-                            eps_act = row.get('Reported EPS')
-                            eps_est = row.get('EPS Estimate')
-                            if pd.notna(eps_act): # At least actual must be there
-                                earnings_found = True
-                                ce1, ce2 = st.columns(2)
-                                if pd.notna(eps_est):
-                                    diff = eps_act - eps_est
-                                    pct = (diff / abs(eps_est)) * 100 if eps_est != 0 else 0
-                                    color_delta = "normal" if diff >= 0 else "inverse"
-                                    ce1.metric("EPS (Actual)", f"{eps_act:.2f}", delta=f"{pct:.1f}% vs Est", delta_color=color_delta)
-                                    ce2.metric("EPS (Estimate)", f"{eps_est:.2f}")
-                                else:
-                                    ce1.metric("EPS (Actual)", f"{eps_act:.2f}")
-                                    ce2.caption("No Estimate Available")
-                                st.caption(f"📅 Report Date: {idx.strftime('%Y-%m-%d')}")
-                                break
-                except: pass
+            with col_ir2:
+                clean_ticker = ticker_final.split(".")[0]
+                url_ir = f"https://www.google.com/search?q={clean_ticker}+investor+relations"
+                st.link_button(f"🌐 Go to {clean_ticker} Inv. Relations", url_ir)
 
-            # PLAN C: GUARANTEED FALLBACK (INCOME STATEMENT)
-            if not earnings_found:
-                cr1, cr2 = st.columns(2)
+            st.write("---")
+            st.markdown("**📰 Official Press Releases**")
+            if 'ir_news' in data and data['ir_news']:
+                for item in data['ir_news']:
+                    st.markdown(f"• [{item['title']}]({item['link']})")
+                    st.caption(f"_{item['pubDate']}_")
+            else:
+                st.caption("No recent press releases found.")
