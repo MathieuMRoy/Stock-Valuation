@@ -206,18 +206,19 @@ def get_financial_data_secure(ticker):
         inc = stock.quarterly_financials
         cf = stock.quarterly_cashflow
         
-        # 3. ANALYST & EARNINGS SURPRISE (NEW)
-        try:
-            reco_summary = stock.recommendations_summary
+        # 3. ANALYST & EARNINGS SURPRISE (IMPROVED)
+        try: reco_summary = stock.recommendations_summary
         except: reco_summary = None
 
-        try:
-            calendar = stock.calendar
+        try: calendar = stock.calendar
         except: calendar = None
         
-        # NOUVEAU: Earnings Dates pour le Surprise History
-        try:
-            earn_dates = stock.earnings_dates
+        # SOURCE 1: Earnings History (Best for Surprise)
+        try: earn_history = stock.earnings_history
+        except: earn_history = None
+        
+        # SOURCE 2: Earnings Dates (Fallback)
+        try: earn_dates = stock.earnings_dates
         except: earn_dates = None
 
         if bs is None or bs.empty: return None
@@ -252,7 +253,8 @@ def get_financial_data_secure(ticker):
         
         return {
             "bs": bs, "inc": inc, "cf": cf, "history": history, 
-            "reco_summary": reco_summary, "calendar": calendar, "earn_dates": earn_dates,
+            "reco_summary": reco_summary, "calendar": calendar, 
+            "earn_dates": earn_dates, "earn_history": earn_history, # NOUVEAU
             "target_price": target_price, "ir_news": ir_news,
             "price": current_price, "shares_calc": shares_calc,
             "sector": sector, "rev_growth": rev_growth, 
@@ -536,7 +538,7 @@ if ticker_final:
             # B. ANALYST COUNTS
             if 'reco_summary' in data and data['reco_summary'] is not None and not data['reco_summary'].empty:
                 try:
-                    rec = data['reco_summary'].iloc[0] # Prend la première ligne (Mois actuel)
+                    rec = data['reco_summary'].iloc[0]
                     buy_cnt = rec.get('strongBuy', 0) + rec.get('buy', 0)
                     hold_cnt = rec.get('hold', 0)
                     sell_cnt = rec.get('sell', 0) + rec.get('strongSell', 0)
@@ -555,26 +557,45 @@ if ticker_final:
             
             st.divider()
 
-            # --- NOUVEAU: SURPRISE RESULTS (EPS / REVENUE) ---
+            # --- C. EARNINGS SURPRISE (ROBUST FALLBACK) ---
             st.markdown("##### 📊 Last Earnings Results")
-            if 'earn_dates' in data and data['earn_dates'] is not None and not data['earn_dates'].empty:
+            earnings_found = False
+            
+            # STRATEGY 1: TRY EARNINGS HISTORY (BEST FOR SURPRISE)
+            if 'earn_history' in data and data['earn_history'] is not None and not data['earn_history'].empty:
                 try:
-                    # On cherche la dernière date passée (index = timestamp)
+                    latest = data['earn_history'].iloc[0] # Most recent
+                    eps_act = latest.get('epsActual')
+                    eps_est = latest.get('epsEstimate')
+                    
+                    if pd.notna(eps_act) and pd.notna(eps_est):
+                        earnings_found = True
+                        diff = eps_act - eps_est
+                        pct = (diff / abs(eps_est)) * 100 if eps_est != 0 else 0
+                        color_delta = "normal" if diff >= 0 else "inverse"
+                        
+                        ce1, ce2 = st.columns(2)
+                        ce1.metric("EPS (Actual)", f"{eps_act:.2f}", delta=f"{pct:.1f}% vs Est", delta_color=color_delta)
+                        ce2.metric("EPS (Estimate)", f"{eps_est:.2f}")
+                        st.caption(f"📅 Report Date: {latest.name.date() if hasattr(latest.name, 'date') else 'Recent'}")
+                except: pass
+
+            # STRATEGY 2: TRY EARNINGS DATES (FALLBACK)
+            if not earnings_found and 'earn_dates' in data and data['earn_dates'] is not None and not data['earn_dates'].empty:
+                try:
                     now = pd.Timestamp.now().tz_localize(None)
-                    # Hack: On enlève la timezone de l'index pour comparer
                     df_dates = data['earn_dates'].copy()
-                    df_dates.index = df_dates.index.tz_localize(None)
+                    if df_dates.index.tz is not None:
+                        df_dates.index = df_dates.index.tz_localize(None)
                     
                     past_dates = df_dates[df_dates.index < now]
-                    
                     if not past_dates.empty:
-                        last_q = past_dates.iloc[0] # Le plus récent
-                        
-                        # EPS SURPRISE
+                        last_q = past_dates.iloc[0]
                         eps_est = last_q.get('EPS Estimate', 0)
                         eps_act = last_q.get('Reported EPS', 0)
                         
                         if pd.notna(eps_act) and pd.notna(eps_est):
+                            earnings_found = True
                             diff = eps_act - eps_est
                             pct = (diff / abs(eps_est)) * 100 if eps_est != 0 else 0
                             color_delta = "normal" if diff >= 0 else "inverse"
@@ -582,27 +603,35 @@ if ticker_final:
                             ce1, ce2 = st.columns(2)
                             ce1.metric("EPS (Actual)", f"{eps_act:.2f}", delta=f"{pct:.1f}% vs Est", delta_color=color_delta)
                             ce2.metric("EPS (Estimate)", f"{eps_est:.2f}")
-                        else:
-                            st.caption("EPS Surprise data missing.")
-                        
-                        # REVENUE CONTEXT (On utilise le dernier TTM Growth car Estimate Rev est dur à avoir)
-                        st.caption(f"📅 Date: {past_dates.index[0].strftime('%Y-%m-%d')}")
-                        cr1, cr2 = st.columns(2)
-                        cr1.metric("Revenue (Last Q)", f"{revenue_ttm/4:.1f} M$ (Approx)", help="Derived from TTM/4")
-                        cr2.metric("Growth YoY", f"{cur_sales_gr*100:.1f}%")
+                except: pass
 
-                    else: st.info("No past earnings data found.")
-                except Exception as e:
-                    st.caption("Earnings surprise calculation unavailable.")
-            else:
-                st.info("No earnings history available.")
+            # STRATEGY 3: HARD FALLBACK (SHOW RAW FINANCIALS)
+            if not earnings_found:
+                # Show Revenue instead if Surprise is missing
+                cr1, cr2 = st.columns(2)
+                
+                # Get latest revenue from Income Statement
+                latest_rev = 0
+                if 'inc' in data and not data['inc'].empty:
+                    # Try to get the most recent column
+                    latest_col = data['inc'].iloc[:, 0] # First column is usually most recent
+                    # Try to find Total Revenue row
+                    rev_row = data['inc'].loc[data['inc'].index.astype(str).str.contains("Total Revenue|Revenue", case=False)]
+                    if not rev_row.empty:
+                        latest_rev = rev_row.iloc[0, 0]
+                
+                if latest_rev > 0:
+                    cr1.metric("Reported Revenue", f"{latest_rev/1e6:.1f} M$")
+                    cr2.metric("Revenue Growth", f"{cur_sales_gr*100:.1f}%")
+                    st.caption("ℹ️ Note: Earnings surprise data unavailable. Showing reported financials.")
+                else:
+                    st.info("No earnings history available.")
 
             st.divider()
 
-            # C. EARNINGS & IR NEWS
+            # D. EARNINGS & IR NEWS
             col_ir1, col_ir2 = st.columns(2)
             with col_ir1:
-                # Earnings Logic
                 earnings_display = "N/A"
                 label_earnings = "Earnings Date"
                 if 'calendar' in data and data['calendar'] is not None:
