@@ -156,26 +156,48 @@ def get_benchmark_data(ticker, sector_info):
     return {**bench, "source": "Sector", "name": sector_info or "General", "peers": "Sector Average"}
 
 # --- 2. DATA FUNCTIONS ---
+
+# --- FIX: NOUVELLE FONCTION ROBUSTE POUR CALCULER LA CROISSANCE ---
 def get_growth_manual(df, keys):
+    """Calcul plus robuste de la croissance qui fouille le bilan si Yahoo renvoie 0"""
     try:
         if df is None or df.empty: return 0
-        row = None
+        
+        # 1. Recherche flexible de la ligne (ex: "Revenue" trouve "Total Revenue")
+        row_vals = None
         for key in keys:
-            for idx in df.index:
-                if key.upper().replace(" ", "") in str(idx).upper().replace(" ", ""):
-                    row = df.loc[idx]
-                    break
-            if row is not None: break
-        if row is None: return 0
-        vals = [v for v in row if pd.api.types.is_number(v)]
+            # On cherche si un des index contient le mot clé (case insensitive)
+            matches = df.index[df.index.astype(str).str.contains(key, case=False, regex=True)]
+            if not matches.empty:
+                row_vals = df.loc[matches[0]].values
+                break
+        
+        if row_vals is None: return 0
+
+        # 2. Nettoyage : On garde que les vrais chiffres
+        vals = [v for v in row_vals if isinstance(v, (int, float)) and not pd.isna(v)]
+        
+        if not vals: return 0
+
+        # 3. Calcul
+        # Priorité : Croissance annuelle (Trimestre actuel vs même trimestre année passée)
         if len(vals) >= 5:
             current = vals[0]
             last_year = vals[4]
-            if last_year != 0: return (current - last_year) / abs(last_year)
+            if last_year != 0: 
+                return (current - last_year) / abs(last_year)
+        
+        # Secours : Croissance trimestrielle (si historique court)
         elif len(vals) >= 2:
-             return (vals[0] - vals[1]) / abs(vals[1])
+            current = vals[0]
+            prev = vals[1]
+            if prev != 0:
+                return (current - prev) / abs(prev)
+                
         return 0
-    except: return 0
+    except Exception as e:
+        return 0
+# -------------------------------------------------------------
 
 def fetch_ir_press_releases(search_name):
     try:
@@ -225,6 +247,7 @@ def get_financial_data_secure(ticker):
             
             ir_news = fetch_ir_press_releases(long_name)
             
+            # --- MODIFICATION : APPEL DE LA FONCTION ROBUSTE ---
             rev_growth = full_info.get('revenueGrowth', 0)
             if rev_growth is None or rev_growth == 0:
                 rev_growth = get_growth_manual(inc, ["TotalRevenue", "Revenue"])
@@ -298,7 +321,7 @@ def display_relative_analysis(current, benchmark, metric_name, group_name):
     box(f"**🔍 Relative Analysis:** Current {metric_name} **{current:.1f}x** vs Peer/Sector **{benchmark}x**.\n\n"
         f"👉 **Verdict: {status}** ({msg} vs {group_name}).")
 
-# --- AI AGENT FUNCTION (GROQ - UPDATED) ---
+# --- AI AGENT FUNCTION (GROQ) ---
 def generate_ai_analysis(ticker, price, dcf_val, sales_val, pe_val, growth, sector, api_key):
     if not api_key:
         return "⚠️ Please enter your Groq API Key in the Sidebar to use the AI Agent."
@@ -333,7 +356,7 @@ def generate_ai_analysis(ticker, price, dcf_val, sales_val, pe_val, growth, sect
                     "content": prompt,
                 }
             ],
-            # MODELE MIS A JOUR : On utilise la version stable actuelle
+            # On utilise Llama 3.3 (Stable et gratuit)
             model="llama-3.3-70b-versatile",
         )
         return chat_completion.choices[0].message.content
