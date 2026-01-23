@@ -4,7 +4,7 @@ import pandas as pd
 import requests
 import xml.etree.ElementTree as ET
 from datetime import datetime
-import openai # NOUVEAU : Pour l'intelligence artificielle
+from groq import Groq # REMPLACEMENT D'OPENAI PAR GROQ (GRATUIT)
 
 # --- CONFIGURATION ---
 st.set_page_config(page_title="Valuation Master", page_icon="📱", layout="centered")
@@ -13,8 +13,8 @@ st.set_page_config(page_title="Valuation Master", page_icon="📱", layout="cent
 with st.sidebar:
     st.header("⚙️ Configuration")
     
-    # INPUT POUR LA CLÉ OPENAI
-    api_key = st.text_input("🔑 OpenAI API Key", type="password", help="Colle ta clé sk-... ici pour activer l'agent IA.")
+    # INPUT POUR LA CLÉ GROQ
+    api_key = st.text_input("🔑 Groq API Key", type="password", help="Gratuit sur console.groq.com. Commence par gsk_")
     
     st.divider()
     
@@ -298,42 +298,49 @@ def display_relative_analysis(current, benchmark, metric_name, group_name):
     box(f"**🔍 Relative Analysis:** Current {metric_name} **{current:.1f}x** vs Peer/Sector **{benchmark}x**.\n\n"
         f"👉 **Verdict: {status}** ({msg} vs {group_name}).")
 
-# --- AI AGENT FUNCTION ---
+# --- AI AGENT FUNCTION (GROQ - FREE) ---
 def generate_ai_analysis(ticker, price, dcf_val, sales_val, pe_val, growth, sector, api_key):
     if not api_key:
-        return "⚠️ Please enter your OpenAI API Key in the Sidebar to use the AI Agent."
+        return "⚠️ Please enter your Groq API Key in the Sidebar to use the AI Agent."
     
-    client = openai.OpenAI(api_key=api_key)
-    
-    prompt = f"""
-    You are a Senior CFA Analyst assisting a portfolio manager.
-    Analyze the following stock: {ticker} (Sector: {sector}).
-    
-    DATA POINTS:
-    - Current Price: ${price:.2f}
-    - Intrinsic Value (DCF Model): ${dcf_val:.2f}
-    - Intrinsic Value (P/S Model): ${sales_val:.2f}
-    - Intrinsic Value (P/E Model): ${pe_val:.2f}
-    - Revenue Growth (Last Year): {growth*100:.1f}%
-    
-    TASK:
-    Write a concise, professional investment memo (max 200 words).
-    1. Verdict: Is it Undervalued or Overvalued?
-    2. Which valuation model (Cash, Sales, Earnings) is most appropriate for this specific sector?
-    3. Key Risk: Mention one generic risk for this sector.
-    
-    Format nicely with markdown.
-    """
-    
+    # Initialisation du client Groq
     try:
-        response = client.chat.completions.create(
-            model="gpt-3.5-turbo",
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0.7
+        client = Groq(api_key=api_key)
+        
+        prompt = f"""
+        You are a Senior CFA Analyst assisting a portfolio manager.
+        Analyze the following stock: {ticker} (Sector: {sector}).
+        
+        DATA POINTS:
+        - Current Price: ${price:.2f}
+        - Intrinsic Value (DCF Model): ${dcf_val:.2f}
+        - Intrinsic Value (P/S Model): ${sales_val:.2f}
+        - Intrinsic Value (P/E Model): ${pe_val:.2f}
+        - Revenue Growth (Last Year): {growth*100:.1f}%
+        
+        TASK:
+        Write a concise, professional investment memo (max 200 words).
+        1. Verdict: Is it Undervalued or Overvalued based on the models?
+        2. Which valuation model (Cash, Sales, Earnings) is most appropriate for this specific sector?
+        3. Key Risk: Mention one specific risk for this company/sector.
+        
+        Format nicely with markdown. Use 'Bullish', 'Bearish', or 'Neutral' terms.
+        """
+        
+        chat_completion = client.chat.completions.create(
+            messages=[
+                {
+                    "role": "user",
+                    "content": prompt,
+                }
+            ],
+            # On utilise Llama 3 70B (Très intelligent et gratuit sur Groq)
+            model="llama3-70b-8192",
         )
-        return response.choices[0].message.content
+        return chat_completion.choices[0].message.content
+        
     except Exception as e:
-        return f"Error connecting to AI: {str(e)}"
+        return f"Error connecting to Groq AI: {str(e)}. Check your API Key."
 
 # --- 3. INTERFACE ---
 
@@ -570,7 +577,7 @@ if ticker_final:
                     * 🔴 **< 8%: Weak** (Underperformance)
                     """)
 
-        # --- 5. ANALYST & IR ---
+        # --- 5. ANALYST & IR (CLEAN) ---
         with tabs[4]:
             st.subheader("📢 Analyst & IR")
 
@@ -632,13 +639,14 @@ if ticker_final:
             else:
                 st.caption("No recent press releases found.")
 
-        # --- 6. AI AGENT (NOUVEAU) ---
+        # --- 6. AI AGENT (GROQ) ---
         with tabs[5]:
-            st.subheader("🤖 AI Analyst (CFA Mode)")
+            st.subheader("🤖 AI Analyst (Llama 3 via Groq)")
             st.caption("Auto-generated investment memo based on computed data.")
             
             if not api_key:
-                st.warning("🔒 Enter your OpenAI API Key in the Sidebar to unlock this feature.")
+                st.warning("🔒 Enter your Groq API Key in the Sidebar to unlock this feature.")
+                st.markdown("[👉 Get a Free Groq API Key here](https://console.groq.com/keys)")
             else:
                 if st.button("✨ Generate AI Analysis"):
                     with st.spinner("Analyzing data..."):
