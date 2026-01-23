@@ -4,7 +4,7 @@ import pandas as pd
 import requests
 import xml.etree.ElementTree as ET
 from datetime import datetime
-from groq import Groq # REMPLACEMENT D'OPENAI PAR GROQ (GRATUIT)
+from groq import Groq 
 
 # --- CONFIGURATION ---
 st.set_page_config(page_title="Valuation Master", page_icon="📱", layout="centered")
@@ -298,12 +298,11 @@ def display_relative_analysis(current, benchmark, metric_name, group_name):
     box(f"**🔍 Relative Analysis:** Current {metric_name} **{current:.1f}x** vs Peer/Sector **{benchmark}x**.\n\n"
         f"👉 **Verdict: {status}** ({msg} vs {group_name}).")
 
-# --- AI AGENT FUNCTION (GROQ - FREE) ---
+# --- AI AGENT FUNCTION (GROQ - UPDATED) ---
 def generate_ai_analysis(ticker, price, dcf_val, sales_val, pe_val, growth, sector, api_key):
     if not api_key:
         return "⚠️ Please enter your Groq API Key in the Sidebar to use the AI Agent."
     
-    # Initialisation du client Groq
     try:
         client = Groq(api_key=api_key)
         
@@ -334,8 +333,8 @@ def generate_ai_analysis(ticker, price, dcf_val, sales_val, pe_val, growth, sect
                     "content": prompt,
                 }
             ],
-            # On utilise Llama 3 70B (Très intelligent et gratuit sur Groq)
-            model="llama3-70b-8192",
+            # MODELE MIS A JOUR : On utilise la version stable actuelle
+            model="llama-3.3-70b-versatile",
         )
         return chat_completion.choices[0].message.content
         
@@ -650,7 +649,6 @@ if ticker_final:
             else:
                 if st.button("✨ Generate AI Analysis"):
                     with st.spinner("Analyzing data..."):
-                        # Prepare Data Context for AI
                         analysis = generate_ai_analysis(
                             ticker_final, current_price, base_res[0], base_res[1], base_res[2],
                             cur_sales_gr, data['sector'], api_key
