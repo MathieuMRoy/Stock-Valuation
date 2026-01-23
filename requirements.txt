@@ -1,3 +1,6 @@
 streamlit
 yfinance
 pandas
+crewai
+crewai-tools
+langchain_community
