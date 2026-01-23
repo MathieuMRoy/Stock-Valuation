@@ -4,19 +4,27 @@ import pandas as pd
 import requests
 import xml.etree.ElementTree as ET
 from datetime import datetime
+import openai # NOUVEAU : Pour l'intelligence artificielle
 
 # --- CONFIGURATION ---
 st.set_page_config(page_title="Valuation Master", page_icon="📱", layout="centered")
 
-# --- SIDEBAR : BOUTON RESET ---
+# --- SIDEBAR : BOUTON RESET & API KEY ---
 with st.sidebar:
+    st.header("⚙️ Configuration")
+    
+    # INPUT POUR LA CLÉ OPENAI
+    api_key = st.text_input("🔑 OpenAI API Key", type="password", help="Colle ta clé sk-... ici pour activer l'agent IA.")
+    
+    st.divider()
+    
     if st.button("🗑️ Reset Cache"):
         st.cache_data.clear()
         st.rerun()
     st.caption("À utiliser si les données semblent incorrectes.")
 
 st.title("📱 Valuation Master")
-st.caption("3 Models: Cash • Sales • Earnings")
+st.caption("3 Models: Cash • Sales • Earnings • AI Agent")
 
 # --- 0. DATA: SMART SEARCH DATABASE ---
 TICKER_DB = [
@@ -189,8 +197,6 @@ def fetch_ir_press_releases(search_name):
 def get_financial_data_secure(ticker):
     try:
         stock = yf.Ticker(ticker)
-        
-        # 1. PRICE
         try:
             current_price = stock.fast_info['last_price']
             market_cap = stock.fast_info['market_cap']
@@ -199,21 +205,18 @@ def get_financial_data_secure(ticker):
             current_price = 0
             shares_calc = 0 
 
-        # 2. FINANCIALS
         bs = stock.quarterly_balance_sheet
         inc = stock.quarterly_financials
         cf = stock.quarterly_cashflow
         
-        # 3. ANALYST & EARNINGS
         try: reco_summary = stock.recommendations_summary
         except: reco_summary = None
 
         try: calendar = stock.calendar
         except: calendar = None
-
+        
         if bs is None or bs.empty: return None
 
-        # 4. INFO & IR NEWS
         try:
             full_info = stock.info
             sector = full_info.get('sector', 'Default')
@@ -242,7 +245,7 @@ def get_financial_data_secure(ticker):
             ir_news = []
         
         return {
-            "bs": bs, "inc": inc, "cf": cf, 
+            "bs": bs, "inc": inc, "cf": cf,
             "reco_summary": reco_summary, "calendar": calendar, 
             "target_price": target_price, "ir_news": ir_news,
             "price": current_price, "shares_calc": shares_calc,
@@ -294,6 +297,43 @@ def display_relative_analysis(current, benchmark, metric_name, group_name):
     else: box = st.warning; status = "Fair Value 🟡"; msg = "aligned"
     box(f"**🔍 Relative Analysis:** Current {metric_name} **{current:.1f}x** vs Peer/Sector **{benchmark}x**.\n\n"
         f"👉 **Verdict: {status}** ({msg} vs {group_name}).")
+
+# --- AI AGENT FUNCTION ---
+def generate_ai_analysis(ticker, price, dcf_val, sales_val, pe_val, growth, sector, api_key):
+    if not api_key:
+        return "⚠️ Please enter your OpenAI API Key in the Sidebar to use the AI Agent."
+    
+    client = openai.OpenAI(api_key=api_key)
+    
+    prompt = f"""
+    You are a Senior CFA Analyst assisting a portfolio manager.
+    Analyze the following stock: {ticker} (Sector: {sector}).
+    
+    DATA POINTS:
+    - Current Price: ${price:.2f}
+    - Intrinsic Value (DCF Model): ${dcf_val:.2f}
+    - Intrinsic Value (P/S Model): ${sales_val:.2f}
+    - Intrinsic Value (P/E Model): ${pe_val:.2f}
+    - Revenue Growth (Last Year): {growth*100:.1f}%
+    
+    TASK:
+    Write a concise, professional investment memo (max 200 words).
+    1. Verdict: Is it Undervalued or Overvalued?
+    2. Which valuation model (Cash, Sales, Earnings) is most appropriate for this specific sector?
+    3. Key Risk: Mention one generic risk for this sector.
+    
+    Format nicely with markdown.
+    """
+    
+    try:
+        response = client.chat.completions.create(
+            model="gpt-3.5-turbo",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.7
+        )
+        return response.choices[0].message.content
+    except Exception as e:
+        return f"Error connecting to AI: {str(e)}"
 
 # --- 3. INTERFACE ---
 
@@ -423,27 +463,23 @@ if ticker_final:
         # ==========================================
         # RESULTS TABS
         # ==========================================
-        tabs = st.tabs(["💵 DCF (Cash)", "📈 Sales (P/S)", "💰 Earnings (P/E)", "📊 Scorecard", "📢 Analyst & IR"])
+        tabs = st.tabs(["💵 DCF (Cash)", "📈 Sales (P/S)", "💰 Earnings (P/E)", "📊 Scorecard", "📢 Analyst & IR", "🤖 AI Agent"])
 
         # --- 1. DCF ---
         with tabs[0]:
             st.subheader("🏷️ Buy Price (DCF)")
             st.caption("ℹ️ **Discounted Cash Flow:** Based on future Free Cash Flow discounted to today. The 'true' intrinsic value.")
-            
             c1, c2 = st.columns(2)
             c1.metric("Current Price", f"{current_price:.2f} $")
             delta = base_res[0] - current_price
             c2.metric("Intrinsic (Neutral)", f"{base_res[0]:.2f} $", delta=f"{delta:.2f} $", delta_color="normal", help=f"Fair value based on DCF model.")
-            
             st.write("")
             display_relative_analysis(pfcf_current, bench_data.get('p_fcf', 20.0), "P/FCF", bench_data['name'])
             st.divider()
-            
             c_bear, c_base, c_bull = st.columns(3)
             c_bear.metric("🐻 Bear", f"{bear_res[0]:.2f} $", delta=f"{bear_res[0]-current_price:.1f}")
             c_base.metric("🎯 Neutral", f"{base_res[0]:.2f} $", delta=f"{base_res[0]-current_price:.1f}")
             c_bull.metric("🐂 Bull", f"{bull_res[0]:.2f} $", delta=f"{bull_res[0]-current_price:.1f}")
-
             st.markdown("##### 📝 Investment Theses")
             st.error(f"**🐻 Bear (-20%):** FCF Growth slows to **{gr_fcf_input*0.8:.1f}%**. Market doubts cash flow sustainability.")
             st.info(f"**🎯 Neutral:** Base case. FCF Growth **{gr_fcf_input:.1f}%**, WACC **{wacc_input:.1f}%**.")
@@ -453,21 +489,17 @@ if ticker_final:
         with tabs[1]:
             st.subheader("🏷️ Buy Price (Sales)")
             st.caption("ℹ️ **Price-to-Sales:** Values the company based on Revenue. Good for high-growth companies with no profits yet.")
-            
             c1, c2 = st.columns(2)
             c1.metric("Current Price", f"{current_price:.2f} $")
             delta = base_res[1] - current_price
             c2.metric("Intrinsic (Neutral)", f"{base_res[1]:.2f} $", delta=f"{delta:.2f} $", delta_color="normal", help=f"Fair value based on Price/Sales.")
-            
             st.write("")
             display_relative_analysis(ps_current, bench_data['ps'], "P/S", bench_data['name'])
             st.divider()
-            
             c_bear, c_base, c_bull = st.columns(3)
             c_bear.metric("🐻 Bear", f"{bear_res[1]:.2f} $")
             c_base.metric("🎯 Neutral", f"{base_res[1]:.2f} $")
             c_bull.metric("🐂 Bull", f"{bull_res[1]:.2f} $")
-
             st.markdown("##### 📝 Investment Theses")
             st.error(f"**🐻 Bear:** Multiple compression to **{target_ps*0.8:.1f}x** sales.")
             st.info(f"**🎯 Neutral:** Maintains historical multiple of **{target_ps:.1f}x**.")
@@ -477,21 +509,17 @@ if ticker_final:
         with tabs[2]:
             st.subheader("🏷️ Buy Price (P/E)")
             st.caption("ℹ️ **Price-to-Earnings:** Values the company based on Profits. The standard for profitable companies.")
-            
             c1, c2 = st.columns(2)
             c1.metric("Current Price", f"{current_price:.2f} $")
             delta = base_res[2] - current_price
             c2.metric("Intrinsic (Neutral)", f"{base_res[2]:.2f} $", delta=f"{delta:.2f} $", delta_color="normal", help=f"Fair value based on Price/Earnings.")
-            
             st.write("")
             display_relative_analysis(pe_current, bench_data.get('pe', 20), "P/E", bench_data['name'])
             st.divider()
-            
             c_bear, c_base, c_bull = st.columns(3)
             c_bear.metric("🐻 Bear", f"{bear_res[2]:.2f} $")
             c_base.metric("🎯 Neutral", f"{base_res[2]:.2f} $")
             c_bull.metric("🐂 Bull", f"{bull_res[2]:.2f} $")
-
             st.markdown("##### 📝 Investment Theses")
             st.error(f"**🐻 Bear:** EPS Growth **{gr_eps_input*0.8:.1f}%**, P/E drops to **{target_pe*0.8:.1f}x**.")
             st.info(f"**🎯 Neutral:** EPS Growth **{gr_eps_input:.1f}%**, Standard P/E of **{target_pe:.1f}x**.")
@@ -542,7 +570,7 @@ if ticker_final:
                     * 🔴 **< 8%: Weak** (Underperformance)
                     """)
 
-        # --- 5. ANALYST & IR (CLEAN) ---
+        # --- 5. ANALYST & IR ---
         with tabs[4]:
             st.subheader("📢 Analyst & IR")
 
@@ -603,3 +631,20 @@ if ticker_final:
                     st.caption(f"_{item['pubDate']}_")
             else:
                 st.caption("No recent press releases found.")
+
+        # --- 6. AI AGENT (NOUVEAU) ---
+        with tabs[5]:
+            st.subheader("🤖 AI Analyst (CFA Mode)")
+            st.caption("Auto-generated investment memo based on computed data.")
+            
+            if not api_key:
+                st.warning("🔒 Enter your OpenAI API Key in the Sidebar to unlock this feature.")
+            else:
+                if st.button("✨ Generate AI Analysis"):
+                    with st.spinner("Analyzing data..."):
+                        # Prepare Data Context for AI
+                        analysis = generate_ai_analysis(
+                            ticker_final, current_price, base_res[0], base_res[1], base_res[2],
+                            cur_sales_gr, data['sector'], api_key
+                        )
+                        st.markdown(analysis)
