@@ -190,6 +190,7 @@ def _safe_df(x) -> pd.DataFrame:
     if hasattr(x, "empty"): return x if not x.empty else pd.DataFrame()
     return pd.DataFrame()
 
+# --- FIX: Fonction PRIX robuste ---
 def _robust_price(stock: yf.Ticker, ticker: str) -> float:
     try:
         if hasattr(stock, 'fast_info'):
@@ -206,6 +207,7 @@ def _robust_price(stock: yf.Ticker, ticker: str) -> float:
     except: pass
     return 0.0
 
+# --- FIX: Fonction SHARES robuste ---
 def _robust_shares(stock: yf.Ticker) -> float:
     shares = 0.0
     try:
@@ -220,16 +222,6 @@ def _robust_shares(stock: yf.Ticker) -> float:
                     shares = mcap / price
         except: pass
     return shares
-
-def _infer_is_quarterly(df: pd.DataFrame) -> bool:
-    try:
-        if df is None or df.empty: return False
-        cols = list(df.columns)
-        if len(cols) < 2: return False
-        c0 = pd.to_datetime(cols[0])
-        c1 = pd.to_datetime(cols[1])
-        return abs((c0 - c1).days) < 160
-    except: return False
 
 def get_growth_manual(df: pd.DataFrame, keys: list) -> float:
     try:
@@ -269,7 +261,7 @@ def get_financial_data_secure(ticker: str) -> dict:
         "bs": pd.DataFrame(), "inc": pd.DataFrame(), "cf": pd.DataFrame(),
         "reco_summary": None, "calendar": None, "target_price": None, "ir_news": [],
         "price": 0.0, "shares_info": 0.0, "sector": "Default",
-        "rev_growth": 0.0, "eps_growth": 0.0, "trailing_eps": 0.0, "pe_ratio": 0.0,
+        "rev_growth": 0.0, "eps_growth": 0.0, "trailing_eps": 0.0, "pe_ratio": 0.0, "revenue_ttm": 0.0,
         "long_name": ticker, "error": None, "market_cap": None, "insiders": pd.DataFrame()
     }
     try:
@@ -288,6 +280,9 @@ def get_financial_data_secure(ticker: str) -> dict:
         out["eps_growth"] = float(full_info.get("earningsGrowth", 0) or 0)
         out["trailing_eps"] = float(full_info.get("trailingEps", 0) or 0)
         out["pe_ratio"] = float(full_info.get("trailingPE", 0) or 0)
+        
+        # FIX REVENUE: Get Total Revenue from Info first
+        out["revenue_ttm"] = float(full_info.get("totalRevenue", 0) or 0)
 
         if out["shares_info"] > 0 and out["price"] > 0:
              out["market_cap"] = out["shares_info"] * out["price"]
@@ -342,15 +337,16 @@ def get_item_safe(df: pd.DataFrame, search_terms: list) -> float:
 
 def get_ttm_or_latest(df: pd.DataFrame, keys_list: list) -> float:
     if df is None or df.empty: return 0.0
-    is_q = _infer_is_quarterly(df)
+    # FIX: Force sum of first 4 cols if dataframe is quarterly
+    is_q = len(df.columns) > 1 
     for key in keys_list:
         matches = df.index[df.index.astype(str).str.contains(key, case=False, regex=True)]
         if not matches.empty:
             row = df.loc[matches[0]]
             vals = [v for v in row if isinstance(v, (int, float)) and not pd.isna(v)]
             if not vals: return 0.0
-            # FIX: Force sum if quarterly to get TTM
-            if is_q and len(vals) >= 4: return float(sum(vals[:4]))
+            if len(vals) >= 4: return float(sum(vals[:4])) # Sum 4 quarters
+            if len(vals) == 1: return float(vals[0]) * 4 # Estimate annual if only 1 qtr
             return float(vals[0])
     return 0.0
 
@@ -518,7 +514,6 @@ def plot_technical_chart(df: pd.DataFrame, ticker: str):
     
     # --- FIX: AJOUT DU SMA20 SUR LE GRAPHIQUE ---
     if "SMA20" in df.columns: ax.plot(df["Date"], df["SMA20"], linewidth=1, label="SMA20", color="orange")
-    
     if "SMA50" in df.columns: ax.plot(df["Date"], df["SMA50"], linewidth=1, label="SMA50", color="green")
     if "SMA200" in df.columns: ax.plot(df["Date"], df["SMA200"], linewidth=1, label="SMA200", color="red")
     ax.set_title(f"{ticker} — Price History")
@@ -680,13 +675,19 @@ if mode == "Stock Analyzer":
     market_cap = shares * current_price
     altman_z = calculate_altman_z(bs, inc, market_cap)
 
-    revenue_ttm = get_ttm_or_latest(inc, ["TotalRevenue", "Revenue"])
+    # --- REVENUE FIX ---
+    # Priorité: Info Yahoo -> Sum Quarterly -> x4 single quarter
+    revenue_ttm = data.get("revenue_ttm", 0)
+    if revenue_ttm == 0:
+        revenue_ttm = get_ttm_or_latest(inc, ["TotalRevenue", "Revenue"])
+
     cfo_ttm = get_ttm_or_latest(cf, ["OperatingCashFlow", "Operating Cash Flow"])
     capex_ttm = abs(get_item_safe(cf, ["CapitalExpenditure", "PurchaseOfPPE"]))
     fcf_ttm = cfo_ttm - capex_ttm
     cash = get_item_safe(bs, ["CashAndCashEquivalents", "Cash"])
     debt = get_item_safe(bs, ["LongTermDebt"]) + get_item_safe(bs, ["LeaseLiabilities", "TotalLiab"])
     
+    # --- P/E FIX ---
     eps_ttm = data.get("trailing_eps", 0)
     if eps_ttm == 0:
         net_inc_ttm = get_ttm_or_latest(inc, ["NetIncome", "Net Income Common Stockholders"])
