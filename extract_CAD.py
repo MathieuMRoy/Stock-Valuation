@@ -14,7 +14,7 @@ try:
     MATPLOTLIB_OK = True
 except ImportError:
     MATPLOTLIB_OK = False
-    st.warning("⚠️ 'matplotlib' n'est pas installé. Ajoute-le dans requirements.txt pour voir les graphiques.")
+    st.warning("⚠️ 'matplotlib' n'est pas installé. Ajoute-le dans requirements.txt.")
 
 try:
     from groq import Groq
@@ -183,7 +183,7 @@ def get_benchmark_data(ticker: str, sector_info: str) -> dict:
     return out
 
 # =========================================================
-# 2) DATA HELPERS (ROBUSTES & CORRIGÉS)
+# 2) DATA HELPERS (ROBUST & CORRIGÉ)
 # =========================================================
 def _safe_df(x) -> pd.DataFrame:
     if x is None: return pd.DataFrame()
@@ -282,7 +282,6 @@ def get_financial_data_secure(ticker: str) -> dict:
     }
     try:
         stock = yf.Ticker(ticker)
-        # FIXES ICI
         out["price"] = _robust_price(stock, ticker)
         out["shares_info"] = _robust_shares(stock)
         
@@ -498,10 +497,9 @@ def bull_flag_score(df: pd.DataFrame) -> dict:
         return {"is_bull_flag": False, "score": 0.0, "notes": "Not enough data."}
     d = df.copy().dropna(subset=["Close"])
     last_close = d["Close"].iloc[-1]
-    
-    # Simple Technical Score Logic
     sma20 = d["SMA20"].iloc[-1] if "SMA20" in d.columns else last_close
     sma50 = d["SMA50"].iloc[-1] if "SMA50" in d.columns else last_close
+    
     score = 5.0
     if last_close > sma20: score += 2
     if last_close > sma50: score += 1
@@ -704,14 +702,33 @@ if mode == "Stock Analyzer":
 
     metrics = {
         "ticker": ticker_final, "price": current_price, "pe": pe, "ps": ps, 
-        "sales_gr": cur_sales_gr, "net_cash": cash-debt, 
+        "sales_gr": cur_sales_gr, "eps_gr": cur_eps_gr, "net_cash": cash-debt, 
         "fcf_yield": fcf_ttm/market_cap if market_cap else 0,
         "rule_40": cur_sales_gr + ((fcf_ttm/revenue_ttm) if revenue_ttm else 0)
     }
     scores = score_out_of_10(metrics, bench_data)
 
+    # --- RESTAURATION DE LA SECTION COMPARAISON (HELP) ---
+    with st.expander(f"💡 Help: {bench_data['name']} vs {ticker_final}", expanded=True):
+        st.write(f"**Peers:** {bench_data.get('peers', 'N/A')}")
+        st.markdown("### 🏢 Sector / Peer Averages")
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("Peer Sales Gr.", f"{bench_data['gr_sales']:.0f}%")
+        c2.metric("Peer EPS Gr.", f"{bench_data.get('gr_eps', 0):.0f}%")
+        c3.metric("Peer Target P/S", f"{bench_data['ps']}x")
+        c4.metric("Peer Target P/E", f"{bench_data.get('pe', 20)}x")
+
+        st.divider()
+
+        st.markdown(f"### 📍 {ticker_final} Current Metrics (Actual)")
+        c5, c6, c7, c8 = st.columns(4)
+        c5.metric("Actual Sales Gr.", f"{cur_sales_gr*100:.1f}%", delta_color="off")
+        c6.metric("Actual EPS Gr.", f"{cur_eps_gr*100:.1f}%", delta_color="off")
+        c7.metric("Actual P/S", f"{ps:.1f}x", delta_color="off")
+        c8.metric("Actual P/E", f"{pe:.1f}x", delta_color="off")
+
     # --- ASSUMPTIONS ---
-    with st.expander("⚙️ Edit Assumptions", expanded=True):
+    with st.expander("⚙️ Edit Assumptions", expanded=False):
         c1, c2, c3 = st.columns(3)
         gr_sales = c1.number_input("Sales Growth %", value=float(bench_data['gr_sales']))
         gr_fcf = c2.number_input("FCF Growth %", value=float(bench_data['gr_fcf']))
