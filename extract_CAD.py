@@ -289,10 +289,9 @@ def get_financial_data_secure(ticker: str) -> dict:
         out["rev_growth"] = float(full_info.get("revenueGrowth", 0) or 0)
         out["eps_growth"] = float(full_info.get("earningsGrowth", 0) or 0)
         out["trailing_eps"] = float(full_info.get("trailingEps", 0) or 0)
-        
-        # --- FIX: ON RECUPERE LE PE DIRECTEMENT ---
         out["pe_ratio"] = float(full_info.get("trailingPE", 0) or 0)
 
+        # Calcul Market Cap et Shares
         if out["shares_info"] > 0 and out["price"] > 0:
              out["market_cap"] = out["shares_info"] * out["price"]
              out["shares_calc"] = out["shares_info"]
@@ -680,15 +679,17 @@ if mode == "Stock Analyzer":
     cash = get_item_safe(bs, ["CashAndCashEquivalents", "Cash"])
     debt = get_item_safe(bs, ["LongTermDebt"]) + get_item_safe(bs, ["LeaseLiabilities", "TotalLiab"])
     
+    # --- P/E FIX : CALCUL MANUEL SI API = 0 ---
     eps_ttm = data.get("trailing_eps", 0)
-    if eps_ttm == 0 and shares > 0: 
-        net_inc = get_ttm_or_latest(inc, ["NetIncome"])
-        eps_ttm = net_inc / shares
+    # Si API fail, on calcule via les bénéfices nets
+    if eps_ttm == 0:
+        net_inc_ttm = get_ttm_or_latest(inc, ["NetIncome", "Net Income Common Stockholders", "Net Income Continuous Operations"])
+        if shares > 0:
+            eps_ttm = net_inc_ttm / shares
 
-    # --- P/E FIX ---
-    # Priorité au P/E fourni par Yahoo, sinon calcul manuel
+    # On priorise le PE de l'API, sinon on le calcule
     pe = data.get("pe_ratio", 0)
-    if pe == 0 and eps_ttm != 0:
+    if pe == 0 and eps_ttm > 0:
         pe = current_price / eps_ttm
         
     ps = market_cap / revenue_ttm if revenue_ttm > 0 else 0
@@ -709,7 +710,7 @@ if mode == "Stock Analyzer":
     }
     scores = score_out_of_10(metrics, bench_data)
 
-    # --- RESTAURATION DE LA SECTION COMPARAISON (HELP) ---
+    # --- SECTION HELP RESTAURÉE (AVEC P/E CORRIGÉ) ---
     with st.expander(f"💡 Help: {bench_data['name']} vs {ticker_final}", expanded=True):
         st.write(f"**Peers:** {bench_data.get('peers', 'N/A')}")
         st.markdown("### 🏢 Sector / Peer Averages")
@@ -726,6 +727,7 @@ if mode == "Stock Analyzer":
         c5.metric("Actual Sales Gr.", f"{cur_sales_gr*100:.1f}%", delta_color="off")
         c6.metric("Actual EPS Gr.", f"{cur_eps_gr*100:.1f}%", delta_color="off")
         c7.metric("Actual P/S", f"{ps:.1f}x", delta_color="off")
+        # Le PE affiché ici sera le PE corrigé
         c8.metric("Actual P/E", f"{pe:.1f}x", delta_color="off")
 
     # --- ASSUMPTIONS ---
