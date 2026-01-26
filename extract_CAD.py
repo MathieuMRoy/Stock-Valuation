@@ -14,7 +14,7 @@ try:
     MATPLOTLIB_OK = True
 except ImportError:
     MATPLOTLIB_OK = False
-    st.warning("⚠️ 'matplotlib' n'est pas installé. Ajoute-le dans requirements.txt.")
+    st.warning("⚠️ 'matplotlib' n'est pas installé. Ajoute-le dans requirements.txt pour voir les graphiques.")
 
 try:
     from groq import Groq
@@ -39,7 +39,7 @@ with st.sidebar:
     st.caption("À utiliser si les données semblent incorrectes.")
 
 st.title("📱 Valuation Master Pro")
-st.caption("3 Models: Cash • Sales • Earnings • AI Agent • Screener")
+st.caption("Cash • Sales • Earnings • Health • Insiders • AI + Screener")
 
 # =========================================================
 # 0) SMART SEARCH DATABASE
@@ -183,34 +183,42 @@ def get_benchmark_data(ticker: str, sector_info: str) -> dict:
     return out
 
 # =========================================================
-# 2) DATA HELPERS (ROBUST & CORRIGÉ)
+# 2) DATA HELPERS (ROBUSTES & CORRIGÉS)
 # =========================================================
 def _safe_df(x) -> pd.DataFrame:
-    if x is None:
-        return pd.DataFrame()
-    if hasattr(x, "empty"):
-        return x if not x.empty else pd.DataFrame()
+    if x is None: return pd.DataFrame()
+    if hasattr(x, "empty"): return x if not x.empty else pd.DataFrame()
     return pd.DataFrame()
 
-# --- CORRECTION PRIX & ACTIONS (LE BUG DES MILLIARDS) ---
+# --- FIX: Fonction PRIX robuste ---
 def _robust_price(stock: yf.Ticker, ticker: str) -> float:
+    # 1. FastInfo
     try:
         if hasattr(stock, 'fast_info'):
             return float(stock.fast_info['last_price'])
     except: pass
+    # 2. History
     try:
         hist = stock.history(period="1d")
         if not hist.empty and "Close" in hist.columns:
             return float(hist["Close"].iloc[-1])
     except: pass
+    # 3. Info
+    try:
+        info = stock.info or {}
+        return float(info.get("currentPrice") or info.get("regularMarketPrice") or 0.0)
+    except: pass
     return 0.0
 
+# --- FIX: Fonction SHARES robuste ---
 def _robust_shares(stock: yf.Ticker) -> float:
     shares = 0.0
+    # 1. Info
     try:
         shares = float(stock.info.get("sharesOutstanding", 0))
     except: pass
     
+    # 2. FastInfo (Calcul inversé : MarketCap / Prix)
     if shares <= 0:
         try:
             if hasattr(stock, 'fast_info'):
@@ -274,6 +282,7 @@ def get_financial_data_secure(ticker: str) -> dict:
     }
     try:
         stock = yf.Ticker(ticker)
+        # FIXES ICI
         out["price"] = _robust_price(stock, ticker)
         out["shares_info"] = _robust_shares(stock)
         
@@ -288,18 +297,27 @@ def get_financial_data_secure(ticker: str) -> dict:
         out["eps_growth"] = float(full_info.get("earningsGrowth", 0) or 0)
         out["trailing_eps"] = float(full_info.get("trailingEps", 0) or 0)
 
-        bs = _safe_df(stock.quarterly_balance_sheet)
-        if bs.empty: bs = _safe_df(stock.balance_sheet)
-        out["bs"] = bs
+        # Calcul Market Cap et Shares
+        if out["shares_info"] > 0 and out["price"] > 0:
+             out["market_cap"] = out["shares_info"] * out["price"]
+             out["shares_calc"] = out["shares_info"]
+        else:
+             out["market_cap"] = full_info.get("marketCap", None)
+             if out["market_cap"] and out["price"] > 0:
+                  out["shares_calc"] = float(out["market_cap"]) / float(out["price"])
 
-        inc = _safe_df(stock.quarterly_financials)
-        if inc.empty: inc = _safe_df(stock.financials)
-        out["inc"] = inc
+        bs_q = _safe_df(getattr(stock, "quarterly_balance_sheet", None))
+        inc_q = _safe_df(getattr(stock, "quarterly_financials", None))
+        cf_q = _safe_df(getattr(stock, "quarterly_cashflow", None))
 
-        cf = _safe_df(stock.quarterly_cashflow)
-        if cf.empty: cf = _safe_df(stock.cashflow)
-        out["cf"] = cf
+        bs_a = _safe_df(getattr(stock, "balance_sheet", None))
+        inc_a = _safe_df(getattr(stock, "financials", None))
+        cf_a = _safe_df(getattr(stock, "cashflow", None))
 
+        out["bs"] = bs_q if not bs_q.empty else bs_a
+        out["inc"] = inc_q if not inc_q.empty else inc_a
+        out["cf"] = cf_q if not cf_q.empty else cf_a
+        
         try: out["insiders"] = _safe_df(stock.insider_transactions)
         except: pass
 
@@ -480,9 +498,10 @@ def bull_flag_score(df: pd.DataFrame) -> dict:
         return {"is_bull_flag": False, "score": 0.0, "notes": "Not enough data."}
     d = df.copy().dropna(subset=["Close"])
     last_close = d["Close"].iloc[-1]
+    
+    # Simple Technical Score Logic
     sma20 = d["SMA20"].iloc[-1] if "SMA20" in d.columns else last_close
     sma50 = d["SMA50"].iloc[-1] if "SMA50" in d.columns else last_close
-    
     score = 5.0
     if last_close > sma20: score += 2
     if last_close > sma50: score += 1
@@ -646,10 +665,10 @@ if mode == "Stock Analyzer":
     cf = data.get("cf", pd.DataFrame())
     piotroski = calculate_piotroski_score(bs, inc, cf)
     
-    # --- SHARES OVERRIDE ---
+    # --- SHARES OVERRIDE (CRITICAL FIX) ---
     shares = float(data.get("shares_info", 0) or 0)
     st.sidebar.markdown("### 🔧 Data Override")
-    manual_shares = st.sidebar.number_input("Shares Outstanding (Millions)", value=0.0, step=1.0)
+    manual_shares = st.sidebar.number_input("Manual Shares (Millions)", value=0.0, step=1.0)
     if manual_shares > 0:
         shares = manual_shares * 1_000_000
         st.sidebar.success(f"Using manual shares: {shares:,.0f}")
@@ -701,7 +720,7 @@ if mode == "Stock Analyzer":
         target_pe = c4.number_input("Target P/E", value=float(bench_data.get('pe', 20)))
         target_ps = c5.number_input("Target P/S", value=float(bench_data['ps']))
 
-    # --- CALCULATION SCENARIOS ---
+    # --- CALCULATION SCENARIOS (RESTORING BEAR/BULL) ---
     def run_calc(g_fac, m_fac, w_adj):
         return calculate_valuation(
             gr_sales/100*g_fac, gr_fcf/100*g_fac, 0.10, wacc/100 + w_adj, 
