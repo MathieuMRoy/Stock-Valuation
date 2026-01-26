@@ -8,13 +8,13 @@ import xml.etree.ElementTree as ET
 import streamlit as st
 import yfinance as yf
 
-# GESTION DES ERREURS D'IMPORT (Pour éviter le ModuleNotFoundError)
+# GESTION DES ERREURS D'IMPORT
 try:
     import matplotlib.pyplot as plt
     MATPLOTLIB_OK = True
 except ImportError:
     MATPLOTLIB_OK = False
-    st.warning("⚠️ 'matplotlib' n'est pas installé. Les graphiques ne s'afficheront pas. Ajoute 'matplotlib' dans requirements.txt.")
+    st.warning("⚠️ 'matplotlib' n'est pas installé. Ajoute-le dans requirements.txt.")
 
 try:
     from groq import Groq
@@ -196,7 +196,6 @@ def _robust_price(stock: yf.Ticker, ticker: str) -> float:
     # 1. Essai via FastInfo (Le plus rapide et fiable moderne)
     try:
         if hasattr(stock, 'fast_info'):
-            # Note: fast_info ne supporte pas .get(), on accède directement
             return float(stock.fast_info['last_price'])
     except Exception:
         pass
@@ -532,6 +531,12 @@ def add_indicators(df: pd.DataFrame) -> pd.DataFrame:
     loss = (-delta.clip(upper=0)).rolling(14).mean()
     rs = gain / loss.replace(0, np.nan)
     out["RSI14"] = 100 - (100 / (1 + rs))
+    
+    # MACD
+    ema12 = out["Close"].ewm(span=12, adjust=False).mean()
+    ema26 = out["Close"].ewm(span=26, adjust=False).mean()
+    out["MACD"] = ema12 - ema26
+    out["MACDSignal"] = out["MACD"].ewm(span=9, adjust=False).mean()
     return out
 
 def bull_flag_score(df: pd.DataFrame) -> dict:
@@ -560,6 +565,7 @@ def plot_technical_chart(df: pd.DataFrame, ticker: str):
     fig, ax = plt.subplots(figsize=(8, 4))
     ax.plot(df["Date"], df["Close"], linewidth=2, label="Close")
     if "SMA50" in df.columns: ax.plot(df["Date"], df["SMA50"], linewidth=1, label="SMA50", color="green")
+    if "SMA200" in df.columns: ax.plot(df["Date"], df["SMA200"], linewidth=1, label="SMA200", color="red")
     ax.set_title(f"{ticker} — Price History")
     ax.legend()
     st.pyplot(fig)
@@ -570,7 +576,6 @@ def plot_technical_chart(df: pd.DataFrame, ticker: str):
 def score_out_of_10(metrics: dict, bench: dict) -> dict:
     # Simplified Logic
     overall = 5.0
-    # ... (Garder logique simple pour éviter surcharge code)
     if metrics['pe'] > 0 and metrics['pe'] < float(bench.get('pe', 20)): overall += 1
     if metrics['sales_gr'] > 0.10: overall += 1
     if metrics['net_cash'] > 0: overall += 1
@@ -596,7 +601,50 @@ def ai_analyst_report(metrics: dict, bench: dict, scores: dict, tech: dict, api_
     if not api_key: return None, "API Key missing."
     try:
         client = Groq(api_key=api_key)
-        prompt = f"Analyse l'action {metrics['ticker']} (Prix: {metrics['price']}$). PE: {metrics['pe']}. Fais un rapport court."
+        valuation_context = "Sous-évalué" if scores['valuation'] > 6 else "Sur-évalué" if scores['valuation'] < 4 else "Correctement valorisé"
+
+        prompt = f"""
+        Tu es Cameron Doerksen, Analyste Senior en Equity Research chez Goldman Sachs / NBCFM.
+        Rédige un rapport de "Coverage" institutionnel complet sur l'action {metrics['ticker']} (Dernières données du 23 janvier 2026).
+
+        CONCOURS MACROÉCONOMIQUE ACTUEL (Contexte Canada Defense) :
+        - Le Canada a officiellement accepté la cible NATO de 3,5% du PIB d'ici 2035.
+        - Modernisation du NORAD estimée à 38,6 milliards $ sur 20 ans.
+        - Priorité gouvernementale sur la souveraineté Arctique et les drones sous-marins.
+
+        DONNÉES FINANCIÈRES RÉELLES (Action {metrics['ticker']}) :
+        - Prix actuel : {metrics['price']:.2f} $
+        - Croissance Revenus : {metrics['sales_gr']*100:.1f}%
+        - P/E Ratio : {metrics['pe']:.1f}x (Benchmark Peers : {bench.get('pe', 'N/A')}x)
+        - P/S Ratio : {metrics['ps']:.1f}x
+        - Trésorerie Nette : {metrics['net_cash']/1e6:.0f} M$
+        - Santé Financière (Score): {scores['health']}/10
+        - Tendance Technique : {"Haussière" if tech['score'] > 6 else "Baissière" if tech['score'] < 4 else "Neutre"}
+        - Bull Flag Score : {tech['score']:.1f}/10
+        
+        TA MISSION :
+        Rédige un rapport structuré d'au moins 800 mots en Markdown respectant scrupuleusement ce plan :
+
+        1.  THÈSE D'INVESTISSEMENT & RATING (/10)
+           - Attribue une note globale sévère mais juste.
+           - Recommandation explicite : ACHAT FORT, ACHAT, CONSERVER ou VENDRE.
+        
+        2.  ANALYSE FONDAMENTALE & OPÉRATIONNELLE (SWOT)
+           -  Forces : Détaille le Moat, les marges et la visibilité des revenus.
+           -  Faiblesses & Risques : Détaille la dette, les risques de concurrence ou de régulation.
+        
+        3.  VALORISATION ET ANALYSE COMPARATIVE
+           - Analyse si le prix actuel est justifié par rapport à l'industrie ({valuation_context}).
+           - Le P/E actuel de {metrics['pe']:.1f} est-il cohérent avec la croissance affichée ?
+
+        4.  PLAN DE TRADING & STRATÉGIE (POINTS D'ENTRÉE/SORTIE)
+           Tu dois proposer des niveaux précis basés sur le prix actuel de {metrics['price']:.2f} $ :
+           -  ZONE D'ACHAT IDÉALE (ENTRY) : [Donne une fourchette précise]
+           -  OBJECTIF DE PRIX (TAKE PROFIT) : [Objectif réaliste à 12 mois]
+           -  STOP LOSS (INVALIDATION) : [Niveau critique de sortie de sécurité]
+
+        Ton ton doit être analytique, institutionnel et convaincant. Rédige en français.
+        """
         response = client.chat.completions.create(
             model="llama-3.3-70b-versatile",
             messages=[{"role": "user", "content": prompt}],
@@ -606,10 +654,92 @@ def ai_analyst_report(metrics: dict, bench: dict, scores: dict, tech: dict, api_
     except Exception as e: return None, str(e)
 
 # =========================================================
-# MAIN APP LOGIC
+# 7) ASSET-BASED VALUE
 # =========================================================
-mode = st.sidebar.radio("Mode", ["Stock Analyzer", "AI Screener"], index=0)
+def compute_asset_based_value(bs: pd.DataFrame, shares: float) -> dict:
+    if bs is None or bs.empty or shares <= 0:
+        return {"nav_ps": 0.0, "tnav_ps": 0.0, "notes": "Balance sheet unavailable."}
 
+    total_assets = get_item_safe(bs, ["TotalAssets", "Total Assets"])
+    total_liab = get_item_safe(bs, ["TotalLiab", "Total Liab", "Total Liabilities"])
+    goodwill = get_item_safe(bs, ["Goodwill"])
+    intangibles = get_item_safe(bs, ["IntangibleAssets", "Intangible Assets"])
+
+    equity = total_assets - total_liab
+    t_equity = (total_assets - goodwill - intangibles) - total_liab
+
+    nav_ps = equity / shares if shares > 0 else 0.0
+    tnav_ps = t_equity / shares if shares > 0 else 0.0
+
+    notes = f"Assets={total_assets/1e9:.2f}B, Liab={total_liab/1e9:.2f}B"
+    return {"nav_ps": float(nav_ps), "tnav_ps": float(tnav_ps), "notes": notes}
+
+# =========================================================
+# 8) FINVIZ SCREENER (TICKERS ONLY) - RESTAURÉ
+# =========================================================
+FINVIZ_SECTORS = [
+    ("Technology", "sec_technology"),
+    ("Healthcare", "sec_healthcare"),
+    ("Financial", "sec_financial"),
+    ("Energy", "sec_energy"),
+    ("Consumer Cyclical", "sec_consumercyclical"),
+    ("Industrials", "sec_industrials"),
+]
+
+@st.cache_data(ttl=3600)
+def finviz_fetch_tickers(sector_filter: str, geo_filter: str, max_tickers: int = 60) -> list:
+    base = "https://finviz.com/screener.ashx"
+    headers = {"User-Agent": "Mozilla/5.0"}
+    tickers = []
+    r = 1
+    f = f"{sector_filter},{geo_filter},cap_smallover"
+
+    while len(tickers) < max_tickers and r <= 401:
+        params = {"v": "111", "f": f, "r": str(r)}
+        try:
+            resp = requests.get(base, params=params, headers=headers, timeout=10)
+            if resp.status_code != 200:
+                break
+            html = resp.text
+            found = []
+            parts = html.split("quote.ashx?t=")
+            for p in parts[1:]:
+                t = ""
+                for ch in p:
+                    if ch.isalnum() or ch in ".-":
+                        t += ch
+                    else:
+                        break
+                if t and t not in found:
+                    found.append(t)
+
+            if not found:
+                break
+            for t in found:
+                if t not in tickers:
+                    tickers.append(t)
+            r += 20
+        except Exception:
+            break
+    return tickers[:max_tickers]
+
+def _mc_ok(data: dict, min_mc: float) -> bool:
+    mc = data.get("market_cap")
+    if mc is None:
+        return False
+    try:
+        return float(mc) >= float(min_mc)
+    except Exception:
+        return False
+
+# =========================================================
+# 9) SIDEBAR MODE
+# =========================================================
+mode = st.sidebar.radio("Mode", ["Stock Analyzer", "AI Screener (Top Upside)"], index=0)
+
+# =========================================================
+# MODE A) STOCK ANALYZER
+# =========================================================
 if mode == "Stock Analyzer":
     st.subheader("Search for a Company")
     choice = st.selectbox("Choose a popular stock:", TICKER_DB, index=2)
@@ -650,6 +780,9 @@ if mode == "Stock Analyzer":
     inc = data.get("inc", pd.DataFrame())
     cf = data.get("cf", pd.DataFrame())
     
+    # Advanced Health Scores
+    piotroski = calculate_piotroski_score(bs, inc, cf)
+    
     revenue_ttm = get_ttm_or_latest(inc, ["TotalRevenue", "Revenue"])
     cfo_ttm = get_ttm_or_latest(cf, ["OperatingCashFlow", "Operating Cash Flow"])
     capex_ttm = abs(get_item_safe(cf, ["CapitalExpenditure", "PurchaseOfPPE"]))
@@ -663,13 +796,29 @@ if mode == "Stock Analyzer":
         net_inc = get_ttm_or_latest(inc, ["NetIncome"])
         eps_ttm = net_inc / shares
 
+    altman_z = calculate_altman_z(bs, inc, market_cap)
+
     # Ratios
     pe = current_price / eps_ttm if eps_ttm > 0 else 0
     ps = market_cap / revenue_ttm if revenue_ttm > 0 else 0
     
-    metrics = {"ticker": ticker_final, "price": current_price, "pe": pe, "ps": ps, "sales_gr": data.get("rev_growth", 0), "net_cash": cash-debt, "fcf_yield": fcf_ttm/market_cap if market_cap else 0}
+    cur_sales_gr = data.get("rev_growth", 0)
+    cur_eps_gr = data.get("eps_growth", 0)
+    
     bench_data = get_benchmark_data(ticker_final, data.get("sector", "Default"))
     
+    price_df = fetch_price_history(ticker_final, "1y")
+    tech_df = add_indicators(price_df)
+    tech = bull_flag_score(tech_df)
+
+    metrics = {
+        "ticker": ticker_final, "price": current_price, "pe": pe, "ps": ps, 
+        "sales_gr": cur_sales_gr, "net_cash": cash-debt, 
+        "fcf_yield": fcf_ttm/market_cap if market_cap else 0,
+        "rule_40": cur_sales_gr + ((fcf_ttm/revenue_ttm) if revenue_ttm else 0)
+    }
+    scores = score_out_of_10(metrics, bench_data)
+
     # --- ASSUMPTIONS ---
     with st.expander("⚙️ Edit Assumptions", expanded=True):
         c1, c2, c3 = st.columns(3)
@@ -686,33 +835,169 @@ if mode == "Stock Analyzer":
         gr_sales/100, gr_fcf/100, 0.10, wacc/100, target_ps, target_pe,
         revenue_ttm, fcf_ttm, eps_ttm, cash, debt, shares
     )
+    
+    bear_res = calculate_valuation(gr_sales/100*0.8, gr_fcf/100*0.8, 0.08, wacc/100 + 0.01, target_ps*0.8, target_pe*0.8, revenue_ttm, fcf_ttm, eps_ttm, cash, debt, shares)
+    bull_res = calculate_valuation(gr_sales/100*1.2, gr_fcf/100*1.2, 0.12, wacc/100 - 0.01, target_ps*1.2, target_pe*1.2, revenue_ttm, fcf_ttm, eps_ttm, cash, debt, shares)
 
     # --- DISPLAY ---
     st.metric("Current Price", f"{current_price:.2f} $")
     
-    tabs = st.tabs(["DCF", "Sales", "Earnings", "Scorecard", "AI Analyst"])
+    tabs = st.tabs(["DCF", "Sales", "Earnings", "Assets", "Insiders", "Tech", "Scorecard", "AI Analyst"])
     
     with tabs[0]:
         st.subheader("Intrinsic Value (DCF)")
-        st.metric("Fair Value", f"{dcf:.2f} $", delta=f"{dcf-current_price:.2f}")
+        c1, c2 = st.columns(2)
+        c1.metric("Fair Value (Neutral)", f"{dcf:.2f} $", delta=f"{dcf-current_price:.2f}")
+        c2.metric("Upside", f"{(dcf/current_price - 1)*100:.1f} %")
+        
+        st.divider()
+        c_bear, c_base, c_bull = st.columns(3)
+        c_bear.metric("Bear", f"{bear_res[0]:.2f} $")
+        c_base.metric("Neutral", f"{dcf:.2f} $")
+        c_bull.metric("Bull", f"{bull_res[0]:.2f} $")
+        
         if dcf > 10000:
             st.error("🚨 Chiffre anormalement élevé ? C'est sûrement le nombre d'actions qui est faux. Utilisez la case 'Shares Outstanding' à gauche.")
 
     with tabs[1]:
         st.subheader("Price to Sales Valuation")
         st.metric("Fair Value", f"{val_sales:.2f} $")
+        display_relative_analysis(ps, float(bench_data.get('ps', 3)), "P/S", bench_data['name'])
         
     with tabs[2]:
         st.subheader("P/E Valuation")
         st.metric("Fair Value", f"{val_pe:.2f} $")
+        display_relative_analysis(pe, float(bench_data.get('pe', 20)), "P/E", bench_data['name'])
         
-    with tabs[4]: # AI
-        st.subheader("AI Report")
+    with tabs[3]:
+        st.subheader("Asset Based")
+        ab = compute_asset_based_value(bs, shares)
+        st.metric("NAV / Share", f"{ab['nav_ps']:.2f} $")
+        st.metric("Tangible NAV", f"{ab['tnav_ps']:.2f} $")
+
+    with tabs[4]:
+        st.subheader("Insiders")
+        if not data['insiders'].empty:
+            st.dataframe(data['insiders'].head(10))
+        else:
+            st.info("No insider data.")
+
+    with tabs[5]:
+        st.subheader("Technical Analysis")
+        c1, c2 = st.columns(2)
+        c1.metric("Bull Flag Score", f"{tech['score']}/10")
+        c2.metric("Pattern", "Bull Flag" if tech['is_bull_flag'] else "None")
+        plot_technical_chart(tech_df, ticker_final)
+        
+    with tabs[6]:
+        st.subheader("Scorecard")
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Health", f"{scores['health']}/10")
+        c2.metric("Growth", f"{scores['growth']}/10")
+        c3.metric("Value", f"{scores['valuation']}/10")
+        
+        # Radar
+        fig = plot_radar(scores, tech['score'])
+        if fig: st.pyplot(fig)
+        
+        st.markdown("**Piotroski F-Score:** " + str(piotroski if piotroski else "N/A"))
+        st.markdown("**Altman Z-Score:** " + str(round(altman_z, 2)))
+
+    with tabs[7]: # AI
+        st.subheader("AI Analyst (Groq)")
         if st.button("Generate Report"):
-            with st.spinner("Analyzing..."):
-                rep, err = ai_analyst_report(metrics, bench_data, {}, {}, api_key)
+            with st.spinner("Writing report..."):
+                rep, err = ai_analyst_report(metrics, bench_data, scores, tech, api_key)
                 if rep: st.markdown(rep)
                 else: st.error(err)
 
+# =========================================================
+# MODE B) AI SCREENER
+# =========================================================
 else:
-    st.write("Screener Mode Placeholder")
+    st.subheader("AI Screener (Top Upside)")
+    st.caption("Finviz (tickers) → Yahoo/yfinance (données) → Intrinsic (DCF) → Top 5 par secteur.")
+
+    min_market_cap = st.number_input("Minimum Market Cap (USD)", value=1_000_000_000, step=250_000_000)
+    max_tickers_per_sector = st.slider("Max tickers per sector", 10, 80, 20, step=5)
+
+    colA, colB = st.columns(2)
+    scr_gr_fcf = colA.number_input("FCF Growth % (fallback)", value=15.0, step=0.5)
+    scr_wacc = colB.number_input("WACC %", value=10.0, step=0.5)
+
+    def intrinsic_dcf_quick(ticker: str) -> dict:
+        data = get_financial_data_secure(ticker)
+        price = float(data.get("price", 0) or 0)
+        if price <= 0: return {"ticker": ticker, "ok": False}
+
+        bs = data.get("bs", pd.DataFrame())
+        inc = data.get("inc", pd.DataFrame())
+        cf = data.get("cf", pd.DataFrame())
+
+        shares = float(data.get("shares", 0) or 0)
+        if shares <= 1: return {"ticker": ticker, "ok": False}
+        if not _mc_ok(data, min_market_cap): return {"ticker": ticker, "ok": False}
+
+        revenue = get_ttm_or_latest(inc, ["TotalRevenue", "Revenue"])
+        cfo = get_ttm_or_latest(cf, ["OperatingCashFlow", "Operating Cash Flow"])
+        capex = abs(get_item_safe(cf, ["CapitalExpenditure", "PurchaseOfPPE"]))
+        fcf = cfo - capex
+        cash = get_item_safe(bs, ["CashAndCashEquivalents", "Cash"])
+        debt = get_item_safe(bs, ["LongTermDebt"]) + get_item_safe(bs, ["LeaseLiabilities", "TotalLiab"])
+
+        gr_fcf = float(data.get("rev_growth", 0) or 0)
+        if gr_fcf <= 0: gr_fcf = scr_gr_fcf / 100.0
+
+        dcf, _, _ = calculate_valuation(
+            0, gr_fcf, 0, scr_wacc / 100.0, 0, 0,
+            revenue, fcf, 0, cash, debt, shares
+        )
+
+        if dcf <= 0: return {"ticker": ticker, "ok": False}
+        upside = (dcf / price - 1.0) * 100.0
+        
+        return {
+            "ticker": ticker, "sector": data.get("sector", "Unknown"),
+            "price": price, "intrinsic": dcf, "upside_pct": upside, "ok": True
+        }
+
+    if st.button("Run Screener"):
+        results = []
+        progress = st.progress(0)
+        status = st.empty()
+        
+        sectors = FINVIZ_SECTORS
+        total_steps = len(sectors) * 2
+        step = 0
+        
+        for (sector_name, sector_code) in sectors:
+            for geo_name, geo_code in [("USA", "geo_usa"), ("Canada", "geo_canada")]:
+                step += 1
+                status.write(f"Fetching {sector_name} ({geo_name})...")
+                tickers = finviz_fetch_tickers(sector_code, geo_code, max_tickers=max_tickers_per_sector*2)
+                tickers = tickers[:max_tickers_per_sector]
+                
+                for t in tickers:
+                    r = intrinsic_dcf_quick(t)
+                    if r.get("ok"):
+                        r["bucket"] = f"{sector_name} ({geo_name})"
+                        results.append(r)
+                progress.progress(min(step / total_steps, 1.0))
+        
+        progress.progress(1.0)
+        status.write("Done.")
+        
+        if results:
+            df = pd.DataFrame(results).sort_values("upside_pct", ascending=False)
+            out = []
+            for bucket, g in df.groupby("bucket"):
+                out.append(g.head(5))
+            out_df = pd.concat(out).reset_index(drop=True)
+            
+            st.dataframe(
+                out_df[["bucket", "ticker", "price", "intrinsic", "upside_pct"]].style.format({
+                    "price": "{:.2f}", "intrinsic": "{:.2f}", "upside_pct": "{:.1f}%"
+                }), use_container_width=True
+            )
+        else:
+            st.error("No results found.")
