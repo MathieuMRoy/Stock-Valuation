@@ -190,7 +190,6 @@ def _safe_df(x) -> pd.DataFrame:
     if hasattr(x, "empty"): return x if not x.empty else pd.DataFrame()
     return pd.DataFrame()
 
-# --- FIX: Fonction PRIX robuste ---
 def _robust_price(stock: yf.Ticker, ticker: str) -> float:
     try:
         if hasattr(stock, 'fast_info'):
@@ -207,7 +206,6 @@ def _robust_price(stock: yf.Ticker, ticker: str) -> float:
     except: pass
     return 0.0
 
-# --- FIX: Fonction SHARES robuste ---
 def _robust_shares(stock: yf.Ticker) -> float:
     shares = 0.0
     try:
@@ -291,7 +289,6 @@ def get_financial_data_secure(ticker: str) -> dict:
         out["trailing_eps"] = float(full_info.get("trailingEps", 0) or 0)
         out["pe_ratio"] = float(full_info.get("trailingPE", 0) or 0)
 
-        # Calcul Market Cap et Shares
         if out["shares_info"] > 0 and out["price"] > 0:
              out["market_cap"] = out["shares_info"] * out["price"]
              out["shares_calc"] = out["shares_info"]
@@ -352,6 +349,7 @@ def get_ttm_or_latest(df: pd.DataFrame, keys_list: list) -> float:
             row = df.loc[matches[0]]
             vals = [v for v in row if isinstance(v, (int, float)) and not pd.isna(v)]
             if not vals: return 0.0
+            # FIX: Force sum if quarterly to get TTM
             if is_q and len(vals) >= 4: return float(sum(vals[:4]))
             return float(vals[0])
     return 0.0
@@ -419,11 +417,10 @@ def calculate_valuation(
         pv_fcf = sum([val / ((1 + wacc_val) ** (i + 1)) for i, val in enumerate(fcf_projections)])
         price_dcf = ((pv_fcf + (terminal_val / ((1 + wacc_val) ** 5))) + cash - debt) / safe_shares
 
-    # --- P/S FIX : UTILISATION DU WACC AU LIEU DE 10% FIXE ---
+    # --- P/S FIX: UTILISATION DU WACC ---
     if revenue <= 0: 
         price_sales = 0.0
     else: 
-        # On utilise wacc_val au lieu de 0.10
         future_market_cap = (revenue * ((1 + gr_sales) ** 5)) * ps_target
         discounted_mc = future_market_cap / ((1 + wacc_val) ** 5)
         price_sales = discounted_mc / safe_shares
@@ -518,6 +515,10 @@ def plot_technical_chart(df: pd.DataFrame, ticker: str):
         return
     fig, ax = plt.subplots(figsize=(8, 4))
     ax.plot(df["Date"], df["Close"], linewidth=2, label="Close")
+    
+    # --- FIX: AJOUT DU SMA20 SUR LE GRAPHIQUE ---
+    if "SMA20" in df.columns: ax.plot(df["Date"], df["SMA20"], linewidth=1, label="SMA20", color="orange")
+    
     if "SMA50" in df.columns: ax.plot(df["Date"], df["SMA50"], linewidth=1, label="SMA50", color="green")
     if "SMA200" in df.columns: ax.plot(df["Date"], df["SMA200"], linewidth=1, label="SMA200", color="red")
     ax.set_title(f"{ticker} — Price History")
@@ -686,7 +687,6 @@ if mode == "Stock Analyzer":
     cash = get_item_safe(bs, ["CashAndCashEquivalents", "Cash"])
     debt = get_item_safe(bs, ["LongTermDebt"]) + get_item_safe(bs, ["LeaseLiabilities", "TotalLiab"])
     
-    # --- P/E FIX ---
     eps_ttm = data.get("trailing_eps", 0)
     if eps_ttm == 0:
         net_inc_ttm = get_ttm_or_latest(inc, ["NetIncome", "Net Income Common Stockholders"])
