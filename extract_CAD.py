@@ -183,7 +183,7 @@ def get_benchmark_data(ticker: str, sector_info: str) -> dict:
     return out
 
 # =========================================================
-# 2) DATA HELPERS (ROBUST & CORRIGÉ)
+# 2) DATA HELPERS (ROBUSTES & CORRIGÉS)
 # =========================================================
 def _safe_df(x) -> pd.DataFrame:
     if x is None: return pd.DataFrame()
@@ -192,18 +192,15 @@ def _safe_df(x) -> pd.DataFrame:
 
 # --- FIX: Fonction PRIX robuste ---
 def _robust_price(stock: yf.Ticker, ticker: str) -> float:
-    # 1. FastInfo
     try:
         if hasattr(stock, 'fast_info'):
             return float(stock.fast_info['last_price'])
     except: pass
-    # 2. History
     try:
         hist = stock.history(period="1d")
         if not hist.empty and "Close" in hist.columns:
             return float(hist["Close"].iloc[-1])
     except: pass
-    # 3. Info
     try:
         info = stock.info or {}
         return float(info.get("currentPrice") or info.get("regularMarketPrice") or 0.0)
@@ -213,12 +210,9 @@ def _robust_price(stock: yf.Ticker, ticker: str) -> float:
 # --- FIX: Fonction SHARES robuste ---
 def _robust_shares(stock: yf.Ticker) -> float:
     shares = 0.0
-    # 1. Info
     try:
         shares = float(stock.info.get("sharesOutstanding", 0))
     except: pass
-    
-    # 2. FastInfo (Calcul inversé : MarketCap / Prix)
     if shares <= 0:
         try:
             if hasattr(stock, 'fast_info'):
@@ -277,7 +271,7 @@ def get_financial_data_secure(ticker: str) -> dict:
         "bs": pd.DataFrame(), "inc": pd.DataFrame(), "cf": pd.DataFrame(),
         "reco_summary": None, "calendar": None, "target_price": None, "ir_news": [],
         "price": 0.0, "shares_info": 0.0, "sector": "Default",
-        "rev_growth": 0.0, "eps_growth": 0.0, "trailing_eps": 0.0,
+        "rev_growth": 0.0, "eps_growth": 0.0, "trailing_eps": 0.0, "pe_ratio": 0.0,
         "long_name": ticker, "error": None, "market_cap": None, "insiders": pd.DataFrame()
     }
     try:
@@ -295,8 +289,10 @@ def get_financial_data_secure(ticker: str) -> dict:
         out["rev_growth"] = float(full_info.get("revenueGrowth", 0) or 0)
         out["eps_growth"] = float(full_info.get("earningsGrowth", 0) or 0)
         out["trailing_eps"] = float(full_info.get("trailingEps", 0) or 0)
+        
+        # --- FIX: ON RECUPERE LE PE DIRECTEMENT ---
+        out["pe_ratio"] = float(full_info.get("trailingPE", 0) or 0)
 
-        # Calcul Market Cap et Shares
         if out["shares_info"] > 0 and out["price"] > 0:
              out["market_cap"] = out["shares_info"] * out["price"]
              out["shares_calc"] = out["shares_info"]
@@ -689,7 +685,12 @@ if mode == "Stock Analyzer":
         net_inc = get_ttm_or_latest(inc, ["NetIncome"])
         eps_ttm = net_inc / shares
 
-    pe = current_price / eps_ttm if eps_ttm > 0 else 0
+    # --- P/E FIX ---
+    # Priorité au P/E fourni par Yahoo, sinon calcul manuel
+    pe = data.get("pe_ratio", 0)
+    if pe == 0 and eps_ttm != 0:
+        pe = current_price / eps_ttm
+        
     ps = market_cap / revenue_ttm if revenue_ttm > 0 else 0
     
     cur_sales_gr = data.get("rev_growth", 0)
