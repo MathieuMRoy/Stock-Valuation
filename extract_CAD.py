@@ -419,13 +419,20 @@ def calculate_valuation(
         pv_fcf = sum([val / ((1 + wacc_val) ** (i + 1)) for i, val in enumerate(fcf_projections)])
         price_dcf = ((pv_fcf + (terminal_val / ((1 + wacc_val) ** 5))) + cash - debt) / safe_shares
 
-    if revenue <= 0: price_sales = 0.0
-    else: price_sales = (((revenue * ((1 + gr_sales) ** 5)) * ps_target) / safe_shares) / (1.10 ** 5)
+    # --- P/S FIX : UTILISATION DU WACC AU LIEU DE 10% FIXE ---
+    if revenue <= 0: 
+        price_sales = 0.0
+    else: 
+        # On utilise wacc_val au lieu de 0.10
+        future_market_cap = (revenue * ((1 + gr_sales) ** 5)) * ps_target
+        discounted_mc = future_market_cap / ((1 + wacc_val) ** 5)
+        price_sales = discounted_mc / safe_shares
 
-    if eps <= 0: price_earnings = 0.0
+    if eps <= 0: 
+        price_earnings = 0.0
     else:
         eps_future = eps * ((1 + gr_eps) ** 5)
-        price_earnings = (eps_future * pe_target) / (1.10 ** 5)
+        price_earnings = (eps_future * pe_target) / ((1 + wacc_val) ** 5)
 
     return float(price_dcf), float(price_sales), float(price_earnings)
 
@@ -658,7 +665,7 @@ if mode == "Stock Analyzer":
     cf = data.get("cf", pd.DataFrame())
     piotroski = calculate_piotroski_score(bs, inc, cf)
     
-    # --- SHARES OVERRIDE (CRITICAL FIX) ---
+    # --- SHARES OVERRIDE ---
     shares = float(data.get("shares_info", 0) or 0)
     st.sidebar.markdown("### 🔧 Data Override")
     manual_shares = st.sidebar.number_input("Manual Shares (Millions)", value=0.0, step=1.0)
@@ -679,15 +686,13 @@ if mode == "Stock Analyzer":
     cash = get_item_safe(bs, ["CashAndCashEquivalents", "Cash"])
     debt = get_item_safe(bs, ["LongTermDebt"]) + get_item_safe(bs, ["LeaseLiabilities", "TotalLiab"])
     
-    # --- P/E FIX : CALCUL MANUEL SI API = 0 ---
+    # --- P/E FIX ---
     eps_ttm = data.get("trailing_eps", 0)
-    # Si API fail, on calcule via les bénéfices nets
     if eps_ttm == 0:
-        net_inc_ttm = get_ttm_or_latest(inc, ["NetIncome", "Net Income Common Stockholders", "Net Income Continuous Operations"])
+        net_inc_ttm = get_ttm_or_latest(inc, ["NetIncome", "Net Income Common Stockholders"])
         if shares > 0:
             eps_ttm = net_inc_ttm / shares
 
-    # On priorise le PE de l'API, sinon on le calcule
     pe = data.get("pe_ratio", 0)
     if pe == 0 and eps_ttm > 0:
         pe = current_price / eps_ttm
@@ -710,7 +715,7 @@ if mode == "Stock Analyzer":
     }
     scores = score_out_of_10(metrics, bench_data)
 
-    # --- SECTION HELP RESTAURÉE (AVEC P/E CORRIGÉ) ---
+    # --- SECTION HELP ---
     with st.expander(f"💡 Help: {bench_data['name']} vs {ticker_final}", expanded=True):
         st.write(f"**Peers:** {bench_data.get('peers', 'N/A')}")
         st.markdown("### 🏢 Sector / Peer Averages")
@@ -727,7 +732,6 @@ if mode == "Stock Analyzer":
         c5.metric("Actual Sales Gr.", f"{cur_sales_gr*100:.1f}%", delta_color="off")
         c6.metric("Actual EPS Gr.", f"{cur_eps_gr*100:.1f}%", delta_color="off")
         c7.metric("Actual P/S", f"{ps:.1f}x", delta_color="off")
-        # Le PE affiché ici sera le PE corrigé
         c8.metric("Actual P/E", f"{pe:.1f}x", delta_color="off")
 
     # --- ASSUMPTIONS ---
@@ -740,7 +744,7 @@ if mode == "Stock Analyzer":
         target_pe = c4.number_input("Target P/E", value=float(bench_data.get('pe', 20)))
         target_ps = c5.number_input("Target P/S", value=float(bench_data['ps']))
 
-    # --- CALCULATION SCENARIOS (RESTORING BEAR/BULL) ---
+    # --- CALCULATION SCENARIOS ---
     def run_calc(g_fac, m_fac, w_adj):
         return calculate_valuation(
             gr_sales/100*g_fac, gr_fcf/100*g_fac, 0.10, wacc/100 + w_adj, 
@@ -771,6 +775,20 @@ if mode == "Stock Analyzer":
         st.markdown("##### Reverse DCF")
         implied_g = solve_reverse_dcf(current_price, fcf_ttm, wacc/100, shares, cash, debt)
         st.metric("Market Implied Growth", f"{implied_g*100:.1f}%")
+        
+        # --- MATRICE DE SENSIBILITÉ RESTAURÉE ---
+        st.markdown("##### 🌡️ Sensitivity Matrix (Price vs Growth & WACC)")
+        sens_wacc = [wacc-1, wacc-0.5, wacc, wacc+0.5, wacc+1]
+        sens_growth = [gr_fcf-2, gr_fcf-1, gr_fcf, gr_fcf+1, gr_fcf+2]
+        res_matrix = []
+        for w in sens_wacc:
+            row_vals = []
+            for g in sens_growth:
+                val, _, _ = calculate_valuation(0, g/100, 0, w/100, 0, 0, revenue_ttm, fcf_ttm, 0, cash, debt, shares)
+                row_vals.append(val)
+            res_matrix.append(row_vals)
+        df_sens = pd.DataFrame(res_matrix, index=[f"WACC {w:.1f}%" for w in sens_wacc], columns=[f"Gr {g:.1f}%" for g in sens_growth])
+        st.dataframe(df_sens.style.background_gradient(cmap='RdYlGn', axis=None).format("{:.2f} $"))
 
     with tabs[1]:
         st.subheader("📈 Buy Price (Sales)")
