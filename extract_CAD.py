@@ -536,7 +536,7 @@ def plot_technical_chart(df: pd.DataFrame, ticker: str):
     st.pyplot(fig)
 
 # =========================================================
-# 5) SCORING & RADAR (AMÉLIORÉ)
+# 5) SCORING & RADAR
 # =========================================================
 def score_out_of_10(metrics: dict, bench: dict) -> dict:
     overall = 5.0
@@ -551,23 +551,16 @@ def plot_radar(scores: dict, tech_score: float = 5.0, dividend_score: float = 5.
     values = [scores.get("valuation", 5), scores.get("growth", 5), scores.get("health", 5), tech_score, dividend_score]
     values += values[:1]
     angles = np.linspace(0, 2 * np.pi, len(labels) + 1)
-    
     fig, ax = plt.subplots(figsize=(5, 5), subplot_kw=dict(polar=True))
-    
-    # --- AMÉLIORATIONS VISUELLES ---
-    ax.set_ylim(0, 10) # Force l'échelle de 0 à 10
+    ax.set_ylim(0, 10)
     ax.set_yticks([2, 4, 6, 8, 10])
     ax.set_yticklabels(["2", "4", "6", "8", "10"], color="gray", size=8)
-    ax.grid(color='#AAAAAA', linestyle='--', linewidth=0.5) # Grille plus discrète
-    
-    ax.plot(angles, values, linewidth=2, color="#4A90E2", linestyle='solid') # Ligne bleue
-    ax.fill(angles, values, alpha=0.3, color="#4A90E2") # Remplissage bleu transparent
-    
+    ax.grid(color='#AAAAAA', linestyle='--', linewidth=0.5)
+    ax.plot(angles, values, linewidth=2, color="#4A90E2", linestyle='solid')
+    ax.fill(angles, values, alpha=0.3, color="#4A90E2")
     ax.set_xticks(angles[:-1])
-    ax.set_xticklabels(labels, size=10, weight='bold') # Étiquettes en gras
-    
+    ax.set_xticklabels(labels, size=10, weight='bold')
     plt.title("Scorecard Analysis (0-10)", size=12, weight='bold', pad=20)
-    
     return fig
 
 # =========================================================
@@ -679,12 +672,13 @@ if mode == "Stock Analyzer":
         c3.metric("Peer Target P/S", f"{bench_data['ps']}x")
         c4.metric("Peer Target P/E", f"{bench_data.get('pe', 20)}x")
         st.divider()
+        # --- MODIFICATION ICI ---
+        st.markdown(f"#### 📍 **{ticker_final}** Current Metrics (Actual)")
         c5, c6, c7, c8 = st.columns(4)
-        # --- CHANGEMENT ICI : Noms des tickers dans les métriques ---
-        c5.metric(f"{ticker_final} Sales Gr.", f"{cur_sales_gr*100:.1f}%")
-        c6.metric(f"{ticker_final} EPS Gr.", f"{cur_eps_gr*100:.1f}%")
-        c7.metric(f"{ticker_final} P/S", f"{ps:.1f}x")
-        c8.metric(f"{ticker_final} P/E", f"{pe:.1f}x")
+        c5.metric("Actual Sales Gr.", f"{cur_sales_gr*100:.1f}%")
+        c6.metric("Actual EPS Gr.", f"{cur_eps_gr*100:.1f}%")
+        c7.metric("Actual P/S", f"{ps:.1f}x")
+        c8.metric("Actual P/E", f"{pe:.1f}x")
 
     with st.expander("⚙️ Edit Assumptions", expanded=False):
         c1, c2, c3 = st.columns(3)
@@ -809,8 +803,6 @@ if mode == "Stock Analyzer":
         c1.metric("Health", f"{scores['health']}/10")
         c2.metric("Growth", f"{scores['growth']}/10")
         c3.metric("Value", f"{scores['valuation']}/10")
-        
-        # --- CHANGEMENT ICI : Nouveau graphique radar amélioré ---
         fig = plot_radar(scores, tech['score'])
         if fig: st.pyplot(fig)
         
