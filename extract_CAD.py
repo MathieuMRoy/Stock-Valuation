@@ -190,7 +190,6 @@ def _safe_df(x) -> pd.DataFrame:
     if hasattr(x, "empty"): return x if not x.empty else pd.DataFrame()
     return pd.DataFrame()
 
-# --- FIX: Fonction PRIX robuste ---
 def _robust_price(stock: yf.Ticker, ticker: str) -> float:
     try:
         if hasattr(stock, 'fast_info'):
@@ -207,7 +206,6 @@ def _robust_price(stock: yf.Ticker, ticker: str) -> float:
     except: pass
     return 0.0
 
-# --- FIX: Fonction SHARES robuste ---
 def _robust_shares(stock: yf.Ticker) -> float:
     shares = 0.0
     try:
@@ -356,6 +354,21 @@ def get_ttm_or_latest(df: pd.DataFrame, keys_list: list) -> float:
             if len(vals) == 1: return float(vals[0]) * 4
             return float(vals[0])
     return 0.0
+
+# --- FIX: Fonction restaurée pour l'onglet Assets ---
+def compute_asset_based_value(bs: pd.DataFrame, shares: float) -> dict:
+    if bs is None or bs.empty or shares <= 0:
+        return {"nav_ps": 0.0, "tnav_ps": 0.0, "notes": "Balance sheet unavailable."}
+    total_assets = get_item_safe(bs, ["TotalAssets", "Total Assets"])
+    total_liab = get_item_safe(bs, ["TotalLiab", "Total Liabilities"])
+    goodwill = get_item_safe(bs, ["Goodwill"])
+    intangibles = get_item_safe(bs, ["IntangibleAssets"])
+    equity = total_assets - total_liab
+    t_equity = (total_assets - goodwill - intangibles) - total_liab
+    nav_ps = equity / shares if shares > 0 else 0.0
+    tnav_ps = t_equity / shares if shares > 0 else 0.0
+    notes = f"Assets={total_assets/1e9:.2f}B, Liab={total_liab/1e9:.2f}B"
+    return {"nav_ps": float(nav_ps), "tnav_ps": float(tnav_ps), "notes": notes}
 
 # Feature 1: Advanced Health Scores
 def calculate_piotroski_score(bs, inc, cf):
@@ -695,11 +708,10 @@ if mode == "Stock Analyzer":
         c_base.metric("🎯 Neutral", f"{base_res[0]:.2f} $")
         c_bull.metric("🐂 Bull", f"{bull_res[0]:.2f} $")
         
-        # --- EXPLICATIONS AJOUTÉES (DEMANDE) ---
         st.markdown("##### 📝 Investment Theses")
-        st.error(f"**🐻 Bear:** FCF Growth slows to **{gr_fcf*0.8:.1f}%**, Exit Multiple contracts to **{target_pe*0.8:.1f}x**.")
-        st.info(f"**🎯 Neutral:** Base case. FCF Growth **{gr_fcf:.1f}%**, WACC **{wacc:.1f}%**, Target P/E **{target_pe:.1f}x**.")
-        st.success(f"**🐂 Bull:** Execution perfect. FCF Growth accelerates to **{gr_fcf*1.2:.1f}%**, Premium multiple **{target_pe*1.2:.1f}x**.")
+        st.error(f"**🐻 Bear:** FCF Growth slows to **{gr_fcf*0.8:.1f}%**, Exit Multiple contracts.")
+        st.info(f"**🎯 Neutral:** Base case. FCF Growth **{gr_fcf:.1f}%**, WACC **{wacc:.1f}%**.")
+        st.success(f"**🐂 Bull:** Execution perfect. FCF Growth accelerates to **{gr_fcf*1.2:.1f}%**.")
 
         st.markdown("##### Reverse DCF")
         implied_g = solve_reverse_dcf(current_price, fcf_ttm, wacc/100, shares, cash, debt)
@@ -728,6 +740,13 @@ if mode == "Stock Analyzer":
         c_bear.metric("🐻 Bear", f"{bear_res[1]:.2f} $")
         c_base.metric("🎯 Neutral", f"{base_res[1]:.2f} $")
         c_bull.metric("🐂 Bull", f"{bull_res[1]:.2f} $")
+        
+        # --- EXPLICATIONS P/S AJOUTÉES ---
+        st.markdown("##### 📝 Investment Theses")
+        st.error(f"**🐻 Bear:** Market sentiment sours, P/S drops to **{target_ps*0.8:.1f}x**.")
+        st.info(f"**🎯 Neutral:** Maintains valuation at **{target_ps:.1f}x** sales.")
+        st.success(f"**🐂 Bull:** High demand, P/S expands to **{target_ps*1.2:.1f}x**.")
+        
         st.write("")
         display_relative_analysis(ps, float(bench_data.get('ps', 3)), "P/S", bench_data['name'])
 
@@ -741,6 +760,13 @@ if mode == "Stock Analyzer":
         c_bear.metric("🐻 Bear", f"{bear_res[2]:.2f} $")
         c_base.metric("🎯 Neutral", f"{base_res[2]:.2f} $")
         c_bull.metric("🐂 Bull", f"{bull_res[2]:.2f} $")
+        
+        # --- EXPLICATIONS P/E AJOUTÉES ---
+        st.markdown("##### 📝 Investment Theses")
+        st.error(f"**🐻 Bear:** EPS growth misses targets, P/E contracts to **{target_pe*0.8:.1f}x**.")
+        st.info(f"**🎯 Neutral:** Stable growth, P/E holds at **{target_pe:.1f}x**.")
+        st.success(f"**🐂 Bull:** Growth beats expectations, P/E expands to **{target_pe*1.2:.1f}x**.")
+        
         st.write("")
         display_relative_analysis(pe, float(bench_data.get('pe', 20)), "P/E", bench_data['name'])
 
