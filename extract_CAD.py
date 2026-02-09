@@ -46,7 +46,7 @@ st.caption("Cash • Sales • Earnings • Health • Insiders • AI + Screene
 # =========================================================
 TICKER_DB = [
     "🔍 Other (Manual Entry)",
-    "--- TECH US (MAGNIFICENT) ---",
+    "--- TECH US (MAGNIFICENT 7) ---",
     "AAPL - Apple Inc.",
     "MSFT - Microsoft Corp.",
     "NVDA - NVIDIA Corp.",
