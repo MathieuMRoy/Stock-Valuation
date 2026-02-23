@@ -146,8 +146,8 @@ def render_stock_analyzer(api_key: str):
     # Display tabs
     st.metric("Current Price", f"{current_price:.2f} $")
     
-    # Define Tabs (Reordered: Fundamentals First, Analyst Added)
-    t_fund, t_dcf, t_sales, t_pe, t_assets, t_analyst, t_ins, t_tech, t_score, t_ai = st.tabs([
+    # Define Section Menu (Dropdown instead of tabs)
+    section = st.selectbox("📂 Section", [
         "📊 Fundamentals", 
         "💵 DCF (Cash)", 
         "📈 Sales (P/S)", 
@@ -160,8 +160,8 @@ def render_stock_analyzer(api_key: str):
         "🤖 AI Agent"
     ])
     
-    # --- TAB 1: FUNDAMENTALS (Moved from Pos 6) ---
-    with t_fund:
+    # --- SECTION: FUNDAMENTALS ---
+    if section == "📊 Fundamentals":
         st.subheader("📊 Extended Financial Dashboard")
         st.caption("Source: StockAnalysis.com")
         
@@ -399,7 +399,7 @@ def render_stock_analyzer(api_key: str):
                                 desc = metrics_descriptions.get(metric_name)
                                 if desc: st.caption(desc)
 
-    with t_dcf:
+    elif section == "💵 DCF (Cash)":
         st.subheader("💵 Buy Price (DCF)")
         c1, c2 = st.columns(2)
         c1.metric("Current Price", f"{current_price:.2f} $")
@@ -428,7 +428,7 @@ def render_stock_analyzer(api_key: str):
         df_sens = pd.DataFrame(res_matrix, index=[f"WACC {w:.1f}%" for w in sens_wacc], columns=[f"Gr {g:.1f}%" for g in sens_growth])
         st.dataframe(df_sens.style.background_gradient(cmap='RdYlGn', axis=None).format("{:.2f} $"))
 
-    with t_sales:
+    elif section == "📈 Sales (P/S)":
         st.subheader("📈 Buy Price (Sales)")
         c1, c2 = st.columns(2)
         c1.metric("Current Price", f"{current_price:.2f} $")
@@ -441,7 +441,7 @@ def render_stock_analyzer(api_key: str):
         st.write("")
         display_relative_analysis(ps, float(bench_data.get('ps', 3)), "P/S", bench_data['name'])
 
-    with t_pe:
+    elif section == "💰 Earnings (P/E)":
         st.subheader("💰 Buy Price (P/E)")
         c1, c2 = st.columns(2)
         c1.metric("Current Price", f"{current_price:.2f} $")
@@ -454,7 +454,7 @@ def render_stock_analyzer(api_key: str):
         st.write("")
         display_relative_analysis(pe, float(bench_data.get('pe', 20)), "P/E", bench_data['name'])
 
-    with t_assets:
+    elif section == "🧱 Assets":
         st.subheader("🧱 Asset Based Value")
         ab = compute_asset_based_value(bs, shares)
         c1, c2 = st.columns(2)
@@ -462,7 +462,7 @@ def render_stock_analyzer(api_key: str):
         c2.metric("Tangible NAV", f"{ab['tnav_ps']:.2f} $")
         st.caption(ab["notes"])
 
-    with t_analyst:
+    elif section == "🎯 Analystes":
         st.subheader("🎯 Analyst Ratings & Price Targets")
         
         # We need fresh info for analysts
@@ -641,14 +641,14 @@ def render_stock_analyzer(api_key: str):
         except Exception as e:
             st.error(f"Error loading analyst data: {e}")
 
-    with t_ins:
+    elif section == "👥 Insiders":
         st.subheader("👥 Insider Trading")
         if not data['insiders'].empty:
             st.dataframe(data['insiders'].head(10))
         else:
             st.info("No insider data found.")
 
-    with t_tech:
+    elif section == "📉 Tech":
         st.subheader("📉 Technical Analysis")
         c1, c2 = st.columns(2)
         c1.metric("Bull Flag Score", f"{tech['score']}/10")
@@ -782,12 +782,7 @@ def render_stock_analyzer(api_key: str):
         except Exception as e:
             st.caption(f"Could not load historical short interest: {e}")
 
-    # Fund (handled above)
-    # with tabs[6]: ...
-    
-    # Fund (handled above)
-    
-    with t_score:
+    elif section == "📊 Scorecard":
         st.subheader("📊 Scorecard Pro")
         c1, c2, c3 = st.columns(3)
         c1.metric("Health", f"{scores['health']}/10")
@@ -799,7 +794,7 @@ def render_stock_analyzer(api_key: str):
         st.markdown(f"**Piotroski F-Score:** {piotroski if piotroski else 'N/A'}/9")
         st.markdown(f"**Altman Z-Score:** {altman_z:.2f}")
 
-    with t_ai:
+    elif section == "🤖 AI Agent":
         st.subheader("🤖 AI Analyst (Groq)")
         if st.button("✨ Generate Full Report"):
             with st.spinner("Analyzing..."):
