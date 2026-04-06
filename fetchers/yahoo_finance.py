@@ -161,6 +161,40 @@ def get_ttm_or_latest(df: pd.DataFrame, keys_list: list) -> float:
     return 0.0
 
 
+def _latest_matching_value(df: pd.DataFrame, keys_list: list) -> float:
+    """Get the latest available value from a row matching one of the provided labels."""
+    if df is None or df.empty:
+        return 0.0
+    for key in keys_list:
+        matches = df.index[df.index.astype(str).str.contains(key, case=False, regex=True)]
+        if not matches.empty:
+            row = df.loc[matches[0]]
+            vals = [v for v in row if isinstance(v, (int, float)) and not pd.isna(v)]
+            if vals:
+                return float(vals[0])
+    return 0.0
+
+
+def _resolve_revenue_ttm(inc_q: pd.DataFrame, inc_a: pd.DataFrame, info_total_revenue: float) -> float:
+    """
+    Resolve trailing revenue robustly.
+
+    `yfinance.info["totalRevenue"]` can behave like a single-quarter figure for some tickers,
+    so we prefer summing quarterly financials when available.
+    """
+    revenue_keys = ["TotalRevenue", "Revenue"]
+
+    quarterly_revenue = get_ttm_or_latest(inc_q, revenue_keys)
+    if quarterly_revenue > 0:
+        return quarterly_revenue
+
+    annual_revenue = _latest_matching_value(inc_a, revenue_keys)
+    if annual_revenue > 0:
+        return annual_revenue
+
+    return float(info_total_revenue or 0)
+
+
 @st.cache_data(ttl=3600)
 def get_financial_data_secure(ticker: str) -> dict:
     """
@@ -192,9 +226,8 @@ def get_financial_data_secure(ticker: str) -> dict:
         out["eps_growth"] = float(full_info.get("earningsGrowth", 0) or 0)
         out["trailing_eps"] = float(full_info.get("trailingEps", 0) or 0)
         out["pe_ratio"] = float(full_info.get("trailingPE", 0) or 0)
-        
-        # Get Total Revenue from Info first
-        out["revenue_ttm"] = float(full_info.get("totalRevenue", 0) or 0)
+
+        info_total_revenue = float(full_info.get("totalRevenue", 0) or 0)
 
         if out["shares_info"] > 0 and out["price"] > 0:
             out["market_cap"] = out["shares_info"] * out["price"]
@@ -215,6 +248,7 @@ def get_financial_data_secure(ticker: str) -> dict:
         out["bs"] = bs_q if not bs_q.empty else bs_a
         out["inc"] = inc_q if not inc_q.empty else inc_a
         out["cf"] = cf_q if not cf_q.empty else cf_a
+        out["revenue_ttm"] = _resolve_revenue_ttm(inc_q, inc_a, info_total_revenue)
         
         # Expose raw dataframes for advanced plotting
         out["bs_a"], out["bs_q"] = bs_a, bs_q
