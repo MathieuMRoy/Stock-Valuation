@@ -4,6 +4,7 @@ Sidebar UI Component - Configuration sidebar for the app
 import os
 
 import streamlit as st
+from fetchers.yahoo_finance import FINANCIAL_DATA_CACHE_VERSION
 
 
 def render_sidebar() -> str:
@@ -40,5 +41,7 @@ def render_sidebar() -> str:
             st.cache_data.clear()
             st.rerun()
         st.caption("À utiliser si les données semblent incorrectes.")
+
+        st.caption(f"Data cache version: {FINANCIAL_DATA_CACHE_VERSION}")
 
     return api_key or stored_api_key

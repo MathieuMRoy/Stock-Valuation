@@ -5,6 +5,7 @@ import pandas as pd
 import streamlit as st
 
 from fetchers import get_financial_data_secure, get_item_safe, get_ttm_or_latest, finviz_fetch_tickers, FINVIZ_SECTORS
+from fetchers.yahoo_finance import FINANCIAL_DATA_CACHE_VERSION
 from valuation import calculate_valuation
 
 
@@ -32,7 +33,7 @@ def render_screener():
 
     def intrinsic_dcf_quick(ticker: str) -> dict:
         """Quick DCF calculation for screening"""
-        d = get_financial_data_secure(ticker)
+        d = get_financial_data_secure(ticker, cache_version=FINANCIAL_DATA_CACHE_VERSION)
         p = float(d.get("price", 0) or 0)
         s = float(d.get("shares_info", 0) or 0)
         if p <= 0 or s <= 0:

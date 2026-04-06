@@ -6,6 +6,7 @@ import streamlit as st
 
 from data import TICKER_DB, get_benchmark_data
 from fetchers import get_financial_data_secure, get_item_safe, get_ttm_or_latest
+from fetchers.yahoo_finance import FINANCIAL_DATA_CACHE_VERSION
 from fetchers.stock_analysis import get_extended_history
 from valuation import calculate_valuation, solve_reverse_dcf, display_relative_analysis, compute_asset_based_value
 from technical import fetch_price_history, add_indicators, bull_flag_score, plot_technical_chart, plot_fundamental_overlay
@@ -32,7 +33,7 @@ def render_stock_analyzer(api_key: str):
         ticker_final = choice.split("-")[0].strip()
 
     st.caption(f"Analyzing: **{ticker_final}**")
-    data = get_financial_data_secure(ticker_final)
+    data = get_financial_data_secure(ticker_final, cache_version=FINANCIAL_DATA_CACHE_VERSION)
     
     if data.get("error"):
         st.warning(f"Data fetch warning: {data['error']}")

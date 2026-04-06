@@ -21,6 +21,7 @@ from google.genai import types
 
 from data import TICKER_DB, get_benchmark_data
 from fetchers import get_financial_data_secure, get_item_safe, get_ttm_or_latest
+from fetchers.yahoo_finance import FINANCIAL_DATA_CACHE_VERSION
 from scoring import score_out_of_10
 from technical import add_indicators, bull_flag_score, fetch_price_history
 
@@ -165,7 +166,7 @@ def _build_technical_snapshot(tech: dict) -> dict[str, Any]:
 
 
 def _compute_stock_context(ticker: str) -> dict[str, Any]:
-    data = get_financial_data_secure(ticker)
+    data = get_financial_data_secure(ticker, cache_version=FINANCIAL_DATA_CACHE_VERSION)
     current_price = float(data.get("price", 0) or 0)
     if current_price <= 0:
         raise ValueError(f"Prix introuvable pour {ticker}.")
