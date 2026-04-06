@@ -56,7 +56,7 @@ except Exception as e:
     pass
 # ---------------------------
 
-from config.settings import configure_page, display_title
+from config.settings import configure_page, display_mode_banner, display_title
 from ui import render_sidebar, render_stock_analyzer, render_screener, render_earnings_calendar
 
 
@@ -73,6 +73,9 @@ def main():
     
     # Mode selection
     mode = st.sidebar.radio("Mode", ["Earnings Calendar", "Stock Analyzer", "AI Screener (Top Upside)"], index=1)
+
+    # Mode presentation
+    display_mode_banner(mode)
     
     # Render appropriate mode
     if mode == "Stock Analyzer":
