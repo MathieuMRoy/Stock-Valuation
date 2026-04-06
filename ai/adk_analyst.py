@@ -5,6 +5,7 @@ Google ADK multi-agent chat analyst for the Streamlit stock analyzer.
 from __future__ import annotations
 
 import asyncio
+from datetime import date
 import hashlib
 import json
 import os
@@ -196,9 +197,13 @@ def _build_company_snapshot(metrics: dict, scores: dict) -> dict[str, Any]:
         "is_financial": bool(metrics.get("is_financial", False)),
         "price": _to_float(metrics.get("price")),
         "pe_ratio": _to_float(metrics.get("pe")),
+        "forward_pe_ratio": _to_float(metrics.get("forward_pe")),
         "ps_ratio": _to_float(metrics.get("ps")),
         "sales_growth_pct": _to_percent(metrics.get("sales_gr")),
         "eps_growth_pct": _to_percent(metrics.get("eps_gr")),
+        "trailing_eps": _to_float(metrics.get("trailing_eps")),
+        "quote_currency": metrics.get("quote_currency"),
+        "financial_currency": metrics.get("financial_currency"),
         "net_cash": _to_float(metrics.get("net_cash")),
         "fcf_yield_pct": _to_percent(metrics.get("fcf_yield")),
         "rule_of_40_pct": _to_percent(metrics.get("rule_40")),
@@ -229,27 +234,87 @@ def _build_technical_snapshot(tech: dict) -> dict[str, Any]:
     }
 
 
+def _extract_earnings_context(calendar_data: Any) -> dict[str, Any]:
+    """Normalize earnings dates so the AI can distinguish upcoming from already passed events."""
+    if calendar_data is None:
+        return {"next_earnings_date": None, "last_known_earnings_date": None, "all_detected_dates": []}
+
+    candidates: list[pd.Timestamp] = []
+
+    def _collect(value: Any):
+        if value is None:
+            return
+        if isinstance(value, (list, tuple, set)):
+            for item in value:
+                _collect(item)
+            return
+        parsed = pd.to_datetime(value, errors="coerce")
+        if pd.notna(parsed):
+            candidates.append(pd.Timestamp(parsed))
+
+    if isinstance(calendar_data, pd.DataFrame):
+        for col in calendar_data.columns:
+            if "earnings" in str(col).lower():
+                _collect(calendar_data[col].tolist())
+        for idx in calendar_data.index:
+            if "earnings" in str(idx).lower():
+                row = calendar_data.loc[idx]
+                _collect(row.tolist() if isinstance(row, pd.Series) else row)
+    elif isinstance(calendar_data, pd.Series):
+        for label, value in calendar_data.items():
+            if "earnings" in str(label).lower():
+                _collect(value)
+    elif isinstance(calendar_data, dict):
+        for label, value in calendar_data.items():
+            if "earnings" in str(label).lower():
+                _collect(value)
+
+    if not candidates:
+        return {"next_earnings_date": None, "last_known_earnings_date": None, "all_detected_dates": []}
+
+    today = pd.Timestamp(date.today())
+    ordered = sorted(ts.normalize() for ts in candidates)
+    future_candidates = [ts for ts in ordered if ts >= today]
+    past_candidates = [ts for ts in ordered if ts < today]
+
+    return {
+        "next_earnings_date": future_candidates[0].strftime("%Y-%m-%d") if future_candidates else None,
+        "last_known_earnings_date": past_candidates[-1].strftime("%Y-%m-%d") if past_candidates else None,
+        "all_detected_dates": [ts.strftime("%Y-%m-%d") for ts in ordered[-4:]],
+    }
+
+
 def _build_recent_news_snapshot(data: dict[str, Any]) -> dict[str, Any]:
-    news_items = []
-    for item in (data.get("ir_news") or [])[:5]:
-        news_items.append(
+    market_news_items = []
+    for item in (data.get("news") or [])[:6]:
+        market_news_items.append(
             {
                 "title": item.get("title"),
                 "link": item.get("link"),
-                "published_at": item.get("pubDate"),
+                "published_at": item.get("published_at"),
+                "source": item.get("source"),
             }
         )
 
-    calendar = data.get("calendar") or {}
-    calendar_snapshot = {}
-    if isinstance(calendar, dict):
-        for key, value in calendar.items():
-            calendar_snapshot[str(key)] = _json_safe(value)
+    press_release_items = []
+    for item in (data.get("ir_news") or [])[:5]:
+        press_release_items.append(
+            {
+                "title": item.get("title"),
+                "link": item.get("link"),
+                "published_at": item.get("published_at") or item.get("pubDate"),
+                "source": item.get("source"),
+            }
+        )
+
+    earnings_context = _extract_earnings_context(data.get("calendar"))
 
     return {
+        "as_of_date": date.today().isoformat(),
         "company_name": data.get("long_name"),
-        "recent_press_releases": news_items,
-        "earnings_calendar": calendar_snapshot,
+        "recent_market_news": market_news_items,
+        "recent_press_releases": press_release_items,
+        "earnings_context": earnings_context,
     }
 
 
@@ -443,7 +508,17 @@ def _compute_stock_context(ticker: str) -> dict[str, Any]:
 
     eps_ttm = float(data.get("trailing_eps", 0) or 0)
     if eps_ttm == 0 and shares > 0:
-        net_income_ttm = get_ttm_or_latest(inc, ["NetIncome", "Net Income Common Stockholders"])
+        inc_q = data.get("inc_q")
+        inc_a = data.get("inc_a")
+        net_income_ttm = (
+            get_ttm_or_latest(inc_q, ["NetIncome", "Net Income Common Stockholders"])
+            if hasattr(inc_q, "empty") and not inc_q.empty
+            else 0.0
+        )
+        if net_income_ttm == 0:
+            net_income_ttm = get_item_safe(inc_a, ["NetIncome", "Net Income Common Stockholders"])
+        if net_income_ttm == 0:
+            net_income_ttm = get_ttm_or_latest(inc, ["NetIncome", "Net Income Common Stockholders"])
         eps_ttm = net_income_ttm / shares if shares else 0
 
     pe = float(data.get("pe_ratio", 0) or 0)
@@ -466,9 +541,13 @@ def _compute_stock_context(ticker: str) -> dict[str, Any]:
         "business_model_hint": _business_model_hint(data.get("sector", "Default"), benchmark.get("name")),
         "price": current_price,
         "pe": pe,
+        "forward_pe": float(data.get("forward_pe", 0) or 0),
         "ps": ps,
         "sales_gr": float(data.get("rev_growth", 0) or 0),
         "eps_gr": float(data.get("eps_growth", 0) or 0),
+        "trailing_eps": eps_ttm,
+        "quote_currency": data.get("quote_currency"),
+        "financial_currency": data.get("financial_currency"),
         "net_cash": 0.0 if is_financial else cash - debt,
         "fcf_yield": 0.0 if is_financial else ((fcf_ttm / market_cap) if market_cap else 0),
         "rule_40": 0.0 if is_financial else float(data.get("rev_growth", 0) or 0) + ((fcf_ttm / revenue_ttm) if revenue_ttm else 0),
@@ -565,6 +644,9 @@ def _build_comparison_payload(current_company: dict[str, Any], current_peer: dic
                 (current_company.get("eps_growth_pct") or 0) - (other_company.get("eps_growth_pct") or 0)
             ),
             "pe_gap": _to_float((current_company.get("pe_ratio") or 0) - (other_company.get("pe_ratio") or 0)),
+            "forward_pe_gap": _to_float(
+                (current_company.get("forward_pe_ratio") or 0) - (other_company.get("forward_pe_ratio") or 0)
+            ),
             "ps_gap": _to_float((current_company.get("ps_ratio") or 0) - (other_company.get("ps_ratio") or 0)),
             "fcf_yield_gap_pct_points": _to_float(
                 (current_company.get("fcf_yield_pct") or 0) - (other_company.get("fcf_yield_pct") or 0)
@@ -596,6 +678,8 @@ def build_ai_chat_signature(metrics: dict, bench: dict, scores: dict, tech: dict
     """
 
     payload = {
+        "cache_version": FINANCIAL_DATA_CACHE_VERSION,
+        "refresh_date": date.today().isoformat(),
         "company": _build_company_snapshot(metrics, scores),
         "peer": _build_peer_snapshot(bench),
         "technical": _build_technical_snapshot(tech),
@@ -742,12 +826,15 @@ Answer in French.
 Use `get_company_snapshot`, `get_peer_snapshot`, `get_technical_snapshot` and `compare_against_other_stock`.
 When the user asks to compare the selected stock with another company or ticker, call `compare_against_other_stock`.
 In every comparison, identify what each company does and whether it is a same-sector or cross-sector comparison.
+When you quote a P/E ratio, say clearly whether it is trailing or forward if that matters.
+If trailing and forward P/E tell different stories, mention that explicitly.
 If it is cross-sector, do not give a single absolute winner without conditions. Explain the trade-off clearly:
 - which stock looks stronger for growth and upside
 - which stock looks stronger for balance-sheet resilience, cash generation or defensiveness
 - what sector-specific risk changes the conclusion
 If one company is an energy producer, bank, insurer, or other cyclical/regulatory business, say so explicitly and explain why the valuation framework differs.
 If the data suggests a split verdict, say for example: "meilleur pour croissance", "meilleur pour profil defensif", or "cela depend de ton objectif".
+If a recent earnings release likely changed the trailing valuation multiple, mention that date and explain the shift briefly.
 When balance-sheet metrics, Piotroski, Altman, net cash or benchmark context change the answer, mention them explicitly.
 Do not invent data. If the comparison tool returns an error, explain it plainly.
 """,
@@ -764,7 +851,11 @@ Answer in French.
 Use `get_recent_news_snapshot` and `get_analyst_market_snapshot`.
 Summarize the most recent available headlines, earnings date information and likely near-term catalysts.
 Be explicit about dates.
-If the available feed looks like press releases or IR news rather than a full newswire, say so clearly.
+Distinguish clearly between broader market/newswire coverage and press-release-style headlines.
+Lead with the freshest dated item available, not with an older earnings-calendar item.
+Never describe a past earnings date as if it were still upcoming.
+If the latest available official release is not very recent, say so plainly instead of implying the news is fresh.
+Mention source names when possible.
 """,
         tools=[get_recent_news_snapshot, get_analyst_market_snapshot],
     )

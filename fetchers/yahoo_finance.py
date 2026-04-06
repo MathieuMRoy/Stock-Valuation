@@ -8,9 +8,9 @@ import streamlit as st
 import requests
 import re
 
-from .news import fetch_ir_press_releases
+from .news import fetch_ir_press_releases, fetch_recent_company_news
 
-FINANCIAL_DATA_CACHE_VERSION = "2026-04-06-revenuefix-v3"
+FINANCIAL_DATA_CACHE_VERSION = "2026-04-06-ai-news-v4"
 
 
 def _safe_df(x) -> pd.DataFrame:
@@ -243,6 +243,23 @@ def _latest_matching_value(df: pd.DataFrame, keys_list: list) -> float:
     return 0.0
 
 
+def _resolve_statement_ttm(metric_q: pd.DataFrame, metric_a: pd.DataFrame, keys_list: list, fallback: float = 0.0) -> float:
+    """
+    Prefer true quarterly TTM, otherwise fall back to the latest annual figure.
+
+    This avoids summing four annual values when only yearly statements are available.
+    """
+    quarterly_value = get_ttm_or_latest(metric_q, keys_list)
+    if quarterly_value != 0:
+        return quarterly_value
+
+    annual_value = _latest_matching_value(metric_a, keys_list)
+    if annual_value != 0:
+        return annual_value
+
+    return float(fallback or 0)
+
+
 def _resolve_revenue_ttm(inc_q: pd.DataFrame, inc_a: pd.DataFrame, info_total_revenue: float) -> float:
     """
     Resolve trailing revenue robustly.
@@ -251,16 +268,7 @@ def _resolve_revenue_ttm(inc_q: pd.DataFrame, inc_a: pd.DataFrame, info_total_re
     so we prefer summing quarterly financials when available.
     """
     revenue_keys = ["TotalRevenue", "Revenue"]
-
-    quarterly_revenue = get_ttm_or_latest(inc_q, revenue_keys)
-    if quarterly_revenue > 0:
-        return quarterly_revenue
-
-    annual_revenue = _latest_matching_value(inc_a, revenue_keys)
-    if annual_revenue > 0:
-        return annual_revenue
-
-    return float(info_total_revenue or 0)
+    return _resolve_statement_ttm(inc_q, inc_a, revenue_keys, fallback=info_total_revenue)
 
 
 @st.cache_data(ttl=3600)
@@ -272,9 +280,10 @@ def get_financial_data_secure(ticker: str, cache_version: str = FINANCIAL_DATA_C
     _ = cache_version
     out = {
         "bs": pd.DataFrame(), "inc": pd.DataFrame(), "cf": pd.DataFrame(),
-        "reco_summary": None, "calendar": None, "target_price": None, "ir_news": [],
+        "reco_summary": None, "calendar": None, "target_price": None, "ir_news": [], "news": [],
         "price": 0.0, "shares_info": 0.0, "sector": "Default",
-        "rev_growth": 0.0, "eps_growth": 0.0, "trailing_eps": 0.0, "pe_ratio": 0.0, "revenue_ttm": 0.0,
+        "rev_growth": 0.0, "eps_growth": 0.0, "trailing_eps": 0.0, "pe_ratio": 0.0, "forward_pe": 0.0, "revenue_ttm": 0.0,
+        "quote_currency": None, "financial_currency": None,
         "long_name": ticker, "error": None, "market_cap": None, "insiders": pd.DataFrame()
     }
     try:
@@ -295,6 +304,9 @@ def get_financial_data_secure(ticker: str, cache_version: str = FINANCIAL_DATA_C
         out["eps_growth"] = float(full_info.get("earningsGrowth", 0) or 0)
         out["trailing_eps"] = float(full_info.get("trailingEps", 0) or 0)
         out["pe_ratio"] = float(full_info.get("trailingPE", 0) or 0)
+        out["forward_pe"] = float(full_info.get("forwardPE", 0) or 0)
+        out["quote_currency"] = full_info.get("currency")
+        out["financial_currency"] = full_info.get("financialCurrency")
 
         info_total_revenue = float(full_info.get("totalRevenue", 0) or 0)
 
@@ -342,6 +354,7 @@ def get_financial_data_secure(ticker: str, cache_version: str = FINANCIAL_DATA_C
             out["calendar"] = getattr(stock, "calendar", None)
         except:
             pass
+        out["news"] = fetch_recent_company_news(ticker, out["long_name"])
         out["ir_news"] = fetch_ir_press_releases(out["long_name"])
         
         return out
