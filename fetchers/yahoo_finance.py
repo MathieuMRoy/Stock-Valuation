@@ -10,6 +10,8 @@ import re
 
 from .news import fetch_ir_press_releases
 
+FINANCIAL_DATA_CACHE_VERSION = "2026-04-06-revenuefix-v3"
+
 
 def _safe_df(x) -> pd.DataFrame:
     """Safely convert to DataFrame"""
@@ -223,11 +225,12 @@ def _resolve_revenue_ttm(inc_q: pd.DataFrame, inc_a: pd.DataFrame, info_total_re
 
 
 @st.cache_data(ttl=3600)
-def get_financial_data_secure(ticker: str) -> dict:
+def get_financial_data_secure(ticker: str, cache_version: str = FINANCIAL_DATA_CACHE_VERSION) -> dict:
     """
     Fetch comprehensive financial data for a ticker.
     Returns a dictionary with all financial metrics, statements, and metadata.
     """
+    _ = cache_version
     out = {
         "bs": pd.DataFrame(), "inc": pd.DataFrame(), "cf": pd.DataFrame(),
         "reco_summary": None, "calendar": None, "target_price": None, "ir_news": [],
