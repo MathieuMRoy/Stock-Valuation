@@ -291,7 +291,17 @@ def render_stock_analyzer(api_key: str, sidebar_state: dict | None = None):
     # EPS and P/E
     eps_ttm = data.get("trailing_eps", 0)
     if eps_ttm == 0:
-        net_inc_ttm = get_ttm_or_latest(inc, ["NetIncome", "Net Income Common Stockholders"])
+        inc_q = data.get("inc_q")
+        inc_a = data.get("inc_a")
+        net_inc_ttm = (
+            get_ttm_or_latest(inc_q, ["NetIncome", "Net Income Common Stockholders"])
+            if hasattr(inc_q, "empty") and not inc_q.empty
+            else 0
+        )
+        if net_inc_ttm == 0:
+            net_inc_ttm = get_item_safe(inc_a, ["NetIncome", "Net Income Common Stockholders"])
+        if net_inc_ttm == 0:
+            net_inc_ttm = get_ttm_or_latest(inc, ["NetIncome", "Net Income Common Stockholders"])
         if shares > 0:
             eps_ttm = net_inc_ttm / shares
 
@@ -314,9 +324,13 @@ def render_stock_analyzer(api_key: str, sidebar_state: dict | None = None):
         "business_model_hint": _business_model_hint(data.get("sector", "Default"), bench_data.get("name")),
         "price": current_price,
         "pe": pe,
+        "forward_pe": float(data.get("forward_pe", 0) or 0),
         "ps": ps,
         "sales_gr": cur_sales_gr,
         "eps_gr": cur_eps_gr,
+        "trailing_eps": eps_ttm,
+        "quote_currency": data.get("quote_currency"),
+        "financial_currency": data.get("financial_currency"),
         "net_cash": 0.0 if is_financial else cash - debt,
         "fcf_yield": 0.0 if is_financial else (fcf_ttm / market_cap if market_cap else 0),
         "rule_40": 0.0 if is_financial else cur_sales_gr + ((fcf_ttm / revenue_ttm) if revenue_ttm else 0),
