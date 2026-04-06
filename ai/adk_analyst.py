@@ -21,7 +21,7 @@ from google.adk.tools import agent_tool
 from google.genai import types
 
 from data import TICKER_DB, get_benchmark_data
-from fetchers import get_financial_data_secure, get_item_safe, get_ttm_or_latest
+from fetchers import get_debt_safe, get_financial_data_secure, get_item_safe, get_ttm_or_latest
 from fetchers.sec_edgar import get_sec_financials
 from fetchers.short_interest import get_historical_short_interest
 from fetchers.yahoo_finance import FINANCIAL_DATA_CACHE_VERSION
@@ -409,7 +409,7 @@ def _compute_stock_context(ticker: str) -> dict[str, Any]:
     capex_ttm = abs(get_item_safe(cf, ["CapitalExpenditure", "PurchaseOfPPE"]))
     fcf_ttm = cfo_ttm - capex_ttm
     cash = get_item_safe(bs, ["CashAndCashEquivalents", "Cash"])
-    debt = get_item_safe(bs, ["LongTermDebt"]) + get_item_safe(bs, ["LeaseLiabilities", "TotalLiab"])
+    debt = get_debt_safe(bs)
 
     eps_ttm = float(data.get("trailing_eps", 0) or 0)
     if eps_ttm == 0 and shares > 0:

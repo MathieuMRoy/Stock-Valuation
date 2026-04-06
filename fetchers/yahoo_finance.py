@@ -173,6 +173,45 @@ def get_item_safe(df: pd.DataFrame, search_terms: list) -> float:
     return 0.0
 
 
+def get_debt_safe(df: pd.DataFrame) -> float:
+    """
+    Resolve debt without falling back to total liabilities.
+
+    We prefer explicit debt rows. Using `TotalLiab` inflates net debt for businesses
+    that simply carry deferred revenue or other operating liabilities.
+    """
+    if df is None or df.empty:
+        return 0.0
+
+    total_debt = get_item_safe(df, ["TotalDebt", "Total Debt"])
+    if total_debt > 0:
+        return total_debt
+
+    current_debt = get_item_safe(
+        df,
+        [
+            "CurrentDebt",
+            "Current Debt",
+            "CurrentDebtAndCapitalLeaseObligation",
+            "Current Debt And Capital Lease Obligation",
+        ],
+    )
+    long_term_debt = get_item_safe(df, ["LongTermDebt", "Long Term Debt"])
+
+    explicit_debt = current_debt + long_term_debt
+    if explicit_debt > 0:
+        return explicit_debt
+
+    finance_lease_debt = (
+        get_item_safe(df, ["CurrentCapitalLeaseObligation", "Current Capital Lease Obligation"])
+        + get_item_safe(df, ["LongTermCapitalLeaseObligation", "Long Term Capital Lease Obligation"])
+    )
+    if finance_lease_debt > 0:
+        return finance_lease_debt
+
+    return 0.0
+
+
 def get_ttm_or_latest(df: pd.DataFrame, keys_list: list) -> float:
     """Get TTM (trailing twelve months) value or latest available"""
     if df is None or df.empty:
