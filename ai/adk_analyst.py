@@ -25,7 +25,7 @@ from fetchers import get_debt_safe, get_financial_data_secure, get_item_safe, ge
 from fetchers.sec_edgar import get_sec_financials
 from fetchers.short_interest import get_historical_short_interest
 from fetchers.yahoo_finance import FINANCIAL_DATA_CACHE_VERSION
-from scoring import score_out_of_10
+from scoring import calculate_altman_z, calculate_piotroski_score, score_out_of_10
 from technical import add_indicators, bull_flag_score, fetch_price_history
 
 
@@ -131,6 +131,22 @@ def _is_financial_company(sector_name: str | None, benchmark_name: str | None) -
     return any(keyword in text for keyword in keywords)
 
 
+def _business_model_hint(sector_name: str | None, benchmark_name: str | None) -> str:
+    """Give the model a compact business description to improve cross-sector comparisons."""
+    text = " ".join([str(sector_name or ""), str(benchmark_name or "")]).lower()
+    if "energy" in text or "oil" in text or "gas" in text:
+        return "energy producer with commodity-price exposure"
+    if "bank" in text or "financial" in text:
+        return "financial institution driven by capital strength and credit quality"
+    if "consumer app" in text or "platform" in text or "streaming" in text:
+        return "consumer platform with growth-sensitive multiples"
+    if "saas" in text or "cloud" in text or "software" in text or "technology" in text:
+        return "software or platform business with valuation sensitivity to growth"
+    if "pharma" in text or "biotech" in text:
+        return "healthcare business influenced by product pipeline and regulation"
+    return f"company exposed to the {sector_name or benchmark_name or 'broader market'} cycle"
+
+
 def _generate_aliases(company_name: str) -> set[str]:
     aliases = {company_name.strip()}
     base_name = company_name.split("(")[0].strip()
@@ -172,7 +188,12 @@ TICKER_ALIAS_MAP = _build_alias_map()
 
 def _build_company_snapshot(metrics: dict, scores: dict) -> dict[str, Any]:
     return {
+        "company_name": metrics.get("company_name"),
         "ticker": metrics.get("ticker"),
+        "sector_name": metrics.get("sector_name"),
+        "benchmark_name": metrics.get("benchmark_name"),
+        "business_model_hint": metrics.get("business_model_hint"),
+        "is_financial": bool(metrics.get("is_financial", False)),
         "price": _to_float(metrics.get("price")),
         "pe_ratio": _to_float(metrics.get("pe")),
         "ps_ratio": _to_float(metrics.get("ps")),
@@ -181,6 +202,8 @@ def _build_company_snapshot(metrics: dict, scores: dict) -> dict[str, Any]:
         "net_cash": _to_float(metrics.get("net_cash")),
         "fcf_yield_pct": _to_percent(metrics.get("fcf_yield")),
         "rule_of_40_pct": _to_percent(metrics.get("rule_40")),
+        "piotroski_score": _to_int(metrics.get("piotroski")),
+        "altman_z_score": _to_float(metrics.get("altman_z")),
         "health_score": _to_float(scores.get("health")),
         "growth_score": _to_float(scores.get("growth")),
         "valuation_score": _to_float(scores.get("valuation")),
@@ -432,9 +455,15 @@ def _compute_stock_context(ticker: str) -> dict[str, Any]:
 
     benchmark = get_benchmark_data(ticker, data.get("sector", "Default"))
     is_financial = _is_financial_company(data.get("sector", "Default"), benchmark.get("name"))
+    piotroski = calculate_piotroski_score(bs, inc, cf)
+    altman_z = None if is_financial else calculate_altman_z(bs, inc, market_cap)
 
     metrics = {
+        "company_name": data.get("long_name", ticker.upper()),
         "ticker": ticker.upper(),
+        "sector_name": data.get("sector", "Default"),
+        "benchmark_name": benchmark.get("name"),
+        "business_model_hint": _business_model_hint(data.get("sector", "Default"), benchmark.get("name")),
         "price": current_price,
         "pe": pe,
         "ps": ps,
@@ -443,6 +472,8 @@ def _compute_stock_context(ticker: str) -> dict[str, Any]:
         "net_cash": 0.0 if is_financial else cash - debt,
         "fcf_yield": 0.0 if is_financial else ((fcf_ttm / market_cap) if market_cap else 0),
         "rule_40": 0.0 if is_financial else float(data.get("rev_growth", 0) or 0) + ((fcf_ttm / revenue_ttm) if revenue_ttm else 0),
+        "piotroski": piotroski,
+        "altman_z": altman_z,
         "is_financial": is_financial,
     }
 
@@ -499,6 +530,9 @@ def _build_comparison_payload(current_company: dict[str, Any], current_peer: dic
     other_company = other_context["company"]
     other_peer = other_context["peer"]
     other_technical = other_context["technical"]
+    is_cross_sector = (current_company.get("benchmark_name") or "") != (other_company.get("benchmark_name") or "")
+    current_name = current_company.get("company_name") or current_company.get("ticker")
+    other_name = other_company.get("company_name") or other_company.get("ticker")
 
     return {
         "current_stock": current_company,
@@ -507,6 +541,22 @@ def _build_comparison_payload(current_company: dict[str, Any], current_peer: dic
         "other_benchmark": other_peer,
         "current_technical": current_technical,
         "other_technical": other_technical,
+        "comparison_context": {
+            "is_cross_sector": is_cross_sector,
+            "current_company_name": current_name,
+            "other_company_name": other_name,
+            "current_sector_name": current_company.get("sector_name"),
+            "other_sector_name": other_company.get("sector_name"),
+            "current_business_model": current_company.get("business_model_hint"),
+            "other_business_model": other_company.get("business_model_hint"),
+            "current_is_financial": current_company.get("is_financial"),
+            "other_is_financial": other_company.get("is_financial"),
+            "framing_note": (
+                f"{current_name} and {other_name} are in different market buckets, so the answer should be conditional on investor objective."
+                if is_cross_sector
+                else f"{current_name} and {other_name} are close enough to compare on a more direct basis."
+            ),
+        },
         "comparison_highlights": {
             "sales_growth_gap_pct_points": _to_float(
                 (current_company.get("sales_growth_pct") or 0) - (other_company.get("sales_growth_pct") or 0)
@@ -518,6 +568,13 @@ def _build_comparison_payload(current_company: dict[str, Any], current_peer: dic
             "ps_gap": _to_float((current_company.get("ps_ratio") or 0) - (other_company.get("ps_ratio") or 0)),
             "fcf_yield_gap_pct_points": _to_float(
                 (current_company.get("fcf_yield_pct") or 0) - (other_company.get("fcf_yield_pct") or 0)
+            ),
+            "net_cash_gap": _to_float((current_company.get("net_cash") or 0) - (other_company.get("net_cash") or 0)),
+            "piotroski_gap": _to_float(
+                (current_company.get("piotroski_score") or 0) - (other_company.get("piotroski_score") or 0)
+            ),
+            "altman_gap": _to_float(
+                (current_company.get("altman_z_score") or 0) - (other_company.get("altman_z_score") or 0)
             ),
             "valuation_score_gap": _to_float(
                 (current_company.get("valuation_score") or 0) - (other_company.get("valuation_score") or 0)
@@ -684,7 +741,14 @@ You are the direct stock-comparison analyst.
 Answer in French.
 Use `get_company_snapshot`, `get_peer_snapshot`, `get_technical_snapshot` and `compare_against_other_stock`.
 When the user asks to compare the selected stock with another company or ticker, call `compare_against_other_stock`.
-Then explain clearly which stock looks stronger on growth, valuation, quality, technical profile and risk/reward.
+In every comparison, identify what each company does and whether it is a same-sector or cross-sector comparison.
+If it is cross-sector, do not give a single absolute winner without conditions. Explain the trade-off clearly:
+- which stock looks stronger for growth and upside
+- which stock looks stronger for balance-sheet resilience, cash generation or defensiveness
+- what sector-specific risk changes the conclusion
+If one company is an energy producer, bank, insurer, or other cyclical/regulatory business, say so explicitly and explain why the valuation framework differs.
+If the data suggests a split verdict, say for example: "meilleur pour croissance", "meilleur pour profil defensif", or "cela depend de ton objectif".
+When balance-sheet metrics, Piotroski, Altman, net cash or benchmark context change the answer, mention them explicitly.
 Do not invent data. If the comparison tool returns an error, explain it plainly.
 """,
         tools=[get_company_snapshot, get_peer_snapshot, get_technical_snapshot, compare_against_other_stock],
@@ -781,6 +845,8 @@ Rules:
 - If the user asks for official filed numbers, SEC filings, accounting quality or multi-year reported trends, call `filings_agent`.
 - For deeper questions, recommendations, risks, buy/sell opinions, or broad summaries, call one or more specialist agents and then synthesize.
 - If the user asks whether the stock looks attractive, mention both upside and risk.
+- For cross-sector comparisons, avoid declaring one stock universally "better" unless the objective is explicit. Prefer a conditional answer that separates growth/upside from defensiveness/resilience.
+- In cross-sector comparisons, state clearly what each company is and why their sector changes the interpretation of valuation and risk metrics.
 - If the user asks follow-up questions, use the conversation context.
 - Do not invent data outside the provided tools.
 - Remind the user this is educational analysis and not professional financial advice whenever the question sounds like an investment decision.

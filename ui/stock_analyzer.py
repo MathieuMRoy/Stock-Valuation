@@ -166,6 +166,22 @@ def _profile_label(
     return "Balanced core compounder"
 
 
+def _business_model_hint(sector_name: str | None, benchmark_name: str | None) -> str:
+    """Provide a compact business-model label for the AI comparison context."""
+    text = " ".join([str(sector_name or ""), str(benchmark_name or "")]).lower()
+    if "energy" in text or "oil" in text or "gas" in text:
+        return "energy producer with commodity-price exposure"
+    if "bank" in text or "financial" in text:
+        return "financial institution driven by capital strength and credit quality"
+    if "consumer app" in text or "platform" in text or "streaming" in text:
+        return "consumer platform with growth-sensitive multiples"
+    if "saas" in text or "cloud" in text or "software" in text or "technology" in text:
+        return "software or platform business with valuation sensitivity to growth"
+    if "pharma" in text or "biotech" in text:
+        return "healthcare business influenced by product pipeline and regulation"
+    return f"company exposed to the {sector_name or benchmark_name or 'broader market'} cycle"
+
+
 def _render_overview_card(
     ticker: str,
     long_name: str,
@@ -291,12 +307,22 @@ def render_stock_analyzer(api_key: str, sidebar_state: dict | None = None):
     is_financial = _is_financial_company(data.get("sector", "Default"), bench_data.get("name"))
     
     metrics = {
-        "ticker": ticker_final, "price": current_price, "pe": pe, "ps": ps, 
+        "company_name": data.get("long_name", ticker_final),
+        "ticker": ticker_final,
+        "sector_name": data.get("sector", "Default"),
+        "benchmark_name": bench_data.get("name"),
+        "business_model_hint": _business_model_hint(data.get("sector", "Default"), bench_data.get("name")),
+        "price": current_price,
+        "pe": pe,
+        "ps": ps,
         "sales_gr": cur_sales_gr,
         "eps_gr": cur_eps_gr,
         "net_cash": 0.0 if is_financial else cash - debt,
         "fcf_yield": 0.0 if is_financial else (fcf_ttm / market_cap if market_cap else 0),
         "rule_40": 0.0 if is_financial else cur_sales_gr + ((fcf_ttm / revenue_ttm) if revenue_ttm else 0),
+        "piotroski": piotroski,
+        "altman_z": None if is_financial else altman_z,
+        "is_financial": is_financial,
     }
     scores = score_out_of_10(metrics, bench_data)
 
