@@ -8,6 +8,7 @@ import asyncio
 import hashlib
 import json
 import os
+import re
 import threading
 import uuid
 from typing import Any
@@ -17,6 +18,11 @@ from google.adk.runners import Runner
 from google.adk.sessions import InMemorySessionService
 from google.adk.tools import agent_tool
 from google.genai import types
+
+from data import TICKER_DB, get_benchmark_data
+from fetchers import get_financial_data_secure, get_item_safe, get_ttm_or_latest
+from scoring import score_out_of_10
+from technical import add_indicators, bull_flag_score, fetch_price_history
 
 
 MODEL_NAME = "gemini-2.5-flash"
@@ -79,6 +85,49 @@ def _resolve_api_key(api_key: str | None) -> str | None:
     return os.getenv("GOOGLE_API_KEY")
 
 
+def _normalize_lookup(value: str) -> str:
+    return "".join(char.lower() for char in value if char.isalnum())
+
+
+def _generate_aliases(company_name: str) -> set[str]:
+    aliases = {company_name.strip()}
+    base_name = company_name.split("(")[0].strip()
+    if base_name:
+        aliases.add(base_name)
+
+    match = re.search(r"\(([^)]+)\)", company_name)
+    if match:
+        aliases.add(match.group(1).strip())
+
+    trimmed = re.sub(
+        r"\b(inc|corp|corporation|technologies|technology|platforms|holdings|group|company|co|ltd|limited|bank|pharma|usa)\b\.?",
+        "",
+        base_name,
+        flags=re.IGNORECASE,
+    )
+    trimmed = " ".join(trimmed.split()).strip(" ,-")
+    if trimmed:
+        aliases.add(trimmed)
+
+    return {alias for alias in aliases if alias}
+
+
+def _build_alias_map() -> dict[str, str]:
+    alias_map: dict[str, str] = {}
+    for entry in TICKER_DB:
+        if entry.startswith("---") or "Other" in entry or " - " not in entry:
+            continue
+        ticker, company_name = entry.split(" - ", 1)
+        clean_ticker = ticker.strip().upper()
+        alias_map[_normalize_lookup(clean_ticker)] = clean_ticker
+        for alias in _generate_aliases(company_name):
+            alias_map[_normalize_lookup(alias)] = clean_ticker
+    return alias_map
+
+
+TICKER_ALIAS_MAP = _build_alias_map()
+
+
 def _build_company_snapshot(metrics: dict, scores: dict) -> dict[str, Any]:
     return {
         "ticker": metrics.get("ticker"),
@@ -115,6 +164,140 @@ def _build_technical_snapshot(tech: dict) -> dict[str, Any]:
     }
 
 
+def _compute_stock_context(ticker: str) -> dict[str, Any]:
+    data = get_financial_data_secure(ticker)
+    current_price = float(data.get("price", 0) or 0)
+    if current_price <= 0:
+        raise ValueError(f"Prix introuvable pour {ticker}.")
+
+    shares = float(data.get("shares_info", 0) or 0)
+    revenue_ttm = float(data.get("revenue_ttm", 0) or 0)
+
+    inc = data.get("inc")
+    cf = data.get("cf")
+    bs = data.get("bs")
+
+    if revenue_ttm == 0:
+        revenue_ttm = get_ttm_or_latest(inc, ["TotalRevenue", "Revenue"])
+
+    cfo_ttm = get_ttm_or_latest(cf, ["OperatingCashFlow", "Operating Cash Flow"])
+    capex_ttm = abs(get_item_safe(cf, ["CapitalExpenditure", "PurchaseOfPPE"]))
+    fcf_ttm = cfo_ttm - capex_ttm
+    cash = get_item_safe(bs, ["CashAndCashEquivalents", "Cash"])
+    debt = get_item_safe(bs, ["LongTermDebt"]) + get_item_safe(bs, ["LeaseLiabilities", "TotalLiab"])
+
+    eps_ttm = float(data.get("trailing_eps", 0) or 0)
+    if eps_ttm == 0 and shares > 0:
+        net_income_ttm = get_ttm_or_latest(inc, ["NetIncome", "Net Income Common Stockholders"])
+        eps_ttm = net_income_ttm / shares if shares else 0
+
+    pe = float(data.get("pe_ratio", 0) or 0)
+    if pe == 0 and eps_ttm > 0:
+        pe = current_price / eps_ttm
+
+    market_cap = shares * current_price if shares > 0 else float(data.get("market_cap", 0) or 0)
+    ps = market_cap / revenue_ttm if market_cap > 0 and revenue_ttm > 0 else 0
+
+    metrics = {
+        "ticker": ticker.upper(),
+        "price": current_price,
+        "pe": pe,
+        "ps": ps,
+        "sales_gr": float(data.get("rev_growth", 0) or 0),
+        "eps_gr": float(data.get("eps_growth", 0) or 0),
+        "net_cash": cash - debt,
+        "fcf_yield": (fcf_ttm / market_cap) if market_cap else 0,
+        "rule_40": float(data.get("rev_growth", 0) or 0) + ((fcf_ttm / revenue_ttm) if revenue_ttm else 0),
+    }
+
+    benchmark = get_benchmark_data(ticker, data.get("sector", "Default"))
+    scores = score_out_of_10(metrics, benchmark)
+
+    price_df = fetch_price_history(ticker, "1y")
+    tech_df = add_indicators(price_df)
+    technical = bull_flag_score(tech_df)
+
+    return {
+        "ticker": ticker.upper(),
+        "company_name": data.get("long_name", ticker.upper()),
+        "company": _build_company_snapshot(metrics, scores),
+        "peer": _build_peer_snapshot(benchmark),
+        "technical": _build_technical_snapshot(technical),
+    }
+
+
+def _resolve_requested_ticker(raw_target: str, current_ticker: str) -> str:
+    cleaned = (raw_target or "").strip()
+    if not cleaned:
+        raise ValueError("Aucun ticker ou nom d'entreprise n'a ete fourni.")
+
+    normalized = _normalize_lookup(cleaned)
+    if normalized in TICKER_ALIAS_MAP:
+        return TICKER_ALIAS_MAP[normalized]
+
+    tokens = re.findall(r"[A-Za-z][A-Za-z\.\-]{0,9}", cleaned.upper())
+    for token in tokens:
+        token_normalized = _normalize_lookup(token)
+        if token_normalized in TICKER_ALIAS_MAP:
+            return TICKER_ALIAS_MAP[token_normalized]
+        if 1 <= len(token) <= 6:
+            return token
+
+    substring_matches = [
+        (alias, ticker)
+        for alias, ticker in TICKER_ALIAS_MAP.items()
+        if alias and alias in normalized
+    ]
+    if substring_matches:
+        best_alias, best_ticker = max(substring_matches, key=lambda item: len(item[0]))
+        if best_alias:
+            return best_ticker
+
+    fallback = cleaned.upper().replace("$", "").split()[0]
+    fallback = fallback.rstrip(".,;:!?")
+    if fallback == current_ticker.upper():
+        return current_ticker.upper()
+    return fallback
+
+
+def _build_comparison_payload(current_company: dict[str, Any], current_peer: dict[str, Any], current_technical: dict[str, Any], other_context: dict[str, Any]) -> dict[str, Any]:
+    other_company = other_context["company"]
+    other_peer = other_context["peer"]
+    other_technical = other_context["technical"]
+
+    return {
+        "current_stock": current_company,
+        "other_stock": other_company,
+        "current_benchmark": current_peer,
+        "other_benchmark": other_peer,
+        "current_technical": current_technical,
+        "other_technical": other_technical,
+        "comparison_highlights": {
+            "sales_growth_gap_pct_points": _to_float(
+                (current_company.get("sales_growth_pct") or 0) - (other_company.get("sales_growth_pct") or 0)
+            ),
+            "eps_growth_gap_pct_points": _to_float(
+                (current_company.get("eps_growth_pct") or 0) - (other_company.get("eps_growth_pct") or 0)
+            ),
+            "pe_gap": _to_float((current_company.get("pe_ratio") or 0) - (other_company.get("pe_ratio") or 0)),
+            "ps_gap": _to_float((current_company.get("ps_ratio") or 0) - (other_company.get("ps_ratio") or 0)),
+            "fcf_yield_gap_pct_points": _to_float(
+                (current_company.get("fcf_yield_pct") or 0) - (other_company.get("fcf_yield_pct") or 0)
+            ),
+            "valuation_score_gap": _to_float(
+                (current_company.get("valuation_score") or 0) - (other_company.get("valuation_score") or 0)
+            ),
+            "growth_score_gap": _to_float(
+                (current_company.get("growth_score") or 0) - (other_company.get("growth_score") or 0)
+            ),
+            "technical_score_gap": _to_float(
+                (current_technical.get("technical_score_out_of_10") or 0)
+                - (other_technical.get("technical_score_out_of_10") or 0)
+            ),
+        },
+    }
+
+
 def build_ai_chat_signature(metrics: dict, bench: dict, scores: dict, tech: dict) -> str:
     """
     Build a stable signature for the currently analyzed stock context.
@@ -133,6 +316,7 @@ def _build_agent(metrics: dict, bench: dict, scores: dict, tech: dict):
     company_snapshot = _build_company_snapshot(metrics, scores)
     peer_snapshot = _build_peer_snapshot(bench)
     technical_snapshot = _build_technical_snapshot(tech)
+    current_ticker = str(metrics.get("ticker", "")).upper()
 
     def get_company_snapshot() -> dict[str, Any]:
         """Returns the core company valuation snapshot for the current Streamlit analysis."""
@@ -156,6 +340,34 @@ def _build_agent(metrics: dict, bench: dict, scores: dict, tech: dict):
             "company": company_snapshot,
             "peer": peer_snapshot,
             "technical": technical_snapshot,
+        }
+
+    def compare_against_other_stock(target: str) -> dict[str, Any]:
+        """Compare the selected stock against another ticker or company name, for example DUOL or Duolingo."""
+
+        resolved_ticker = _resolve_requested_ticker(target, current_ticker)
+        if resolved_ticker == current_ticker:
+            return {
+                "error": f"Le ticker demande ({resolved_ticker}) est le meme que celui deja selectionne ({current_ticker})."
+            }
+
+        try:
+            other_context = _compute_stock_context(resolved_ticker)
+        except Exception as exc:
+            return {
+                "error": f"Impossible de recuperer les donnees pour {resolved_ticker}: {exc}"
+            }
+
+        return {
+            "requested_target": target,
+            "resolved_ticker": resolved_ticker,
+            "resolved_company_name": other_context["company_name"],
+            "comparison": _build_comparison_payload(
+                company_snapshot,
+                peer_snapshot,
+                technical_snapshot,
+                other_context,
+            ),
         }
 
     fundamental_agent = LlmAgent(
@@ -199,6 +411,21 @@ Explain how the stock compares with its benchmark assumptions and peer group.
         tools=[get_company_snapshot, get_peer_snapshot],
     )
 
+    comparison_agent = LlmAgent(
+        name="comparison_agent",
+        model=MODEL_NAME,
+        description="Handles direct comparisons between the selected stock and another stock requested by the user.",
+        instruction="""
+You are the direct stock-comparison analyst.
+Answer in French.
+Use `get_company_snapshot`, `get_peer_snapshot`, `get_technical_snapshot` and `compare_against_other_stock`.
+When the user asks to compare the selected stock with another company or ticker, call `compare_against_other_stock`.
+Then explain clearly which stock looks stronger on growth, valuation, quality, technical profile and risk/reward.
+Do not invent data. If the comparison tool returns an error, explain it plainly.
+""",
+        tools=[get_company_snapshot, get_peer_snapshot, get_technical_snapshot, compare_against_other_stock],
+    )
+
     risk_agent = LlmAgent(
         name="risk_agent",
         model=MODEL_NAME,
@@ -224,12 +451,14 @@ Available specialist agents:
 - `fundamental_agent` for valuation and financial quality
 - `technical_agent` for momentum and trading profile
 - `peer_agent` for benchmark comparison
+- `comparison_agent` for direct stock-vs-stock comparisons
 - `risk_agent` for investor fit and downside
 
-You also have `get_full_snapshot` for quick factual answers.
+You also have `get_full_snapshot` for quick factual answers and `compare_against_other_stock` for comparing the selected stock with another ticker or company name.
 
 Rules:
 - For simple factual questions, you may use `get_full_snapshot`.
+- If the user wants to compare the selected stock with another stock or company, call `comparison_agent` or `compare_against_other_stock`.
 - For deeper questions, recommendations, risks, buy/sell opinions, or broad summaries, call one or more specialist agents and then synthesize.
 - If the user asks whether the stock looks attractive, mention both upside and risk.
 - If the user asks follow-up questions, use the conversation context.
@@ -238,9 +467,11 @@ Rules:
 """,
         tools=[
             get_full_snapshot,
+            compare_against_other_stock,
             agent_tool.AgentTool(agent=fundamental_agent),
             agent_tool.AgentTool(agent=technical_agent),
             agent_tool.AgentTool(agent=peer_agent),
+            agent_tool.AgentTool(agent=comparison_agent),
             agent_tool.AgentTool(agent=risk_agent),
         ],
         output_key="last_answer",

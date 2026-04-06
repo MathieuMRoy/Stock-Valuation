@@ -827,7 +827,7 @@ def render_stock_analyzer(api_key: str):
             with st.chat_message(message["role"]):
                 st.markdown(message["content"])
 
-        user_prompt = st.chat_input(f"Pose une question sur {ticker_final}...")
+        user_prompt = st.chat_input(f"Pose une question sur {ticker_final} ou compare-le a une autre action...")
         if user_prompt:
             st.session_state["ai_agent_messages"].append({"role": "user", "content": user_prompt})
             with st.chat_message("user"):
