@@ -163,6 +163,96 @@ def inject_global_styles():
             line-height: 1.55;
         }
 
+        .vmp-overview {
+            position: relative;
+            overflow: hidden;
+            margin: 1rem 0 1rem 0;
+            padding: 1.35rem 1.35rem 1.15rem 1.35rem;
+            border-radius: 24px;
+            border: 1px solid var(--vmp-border);
+            background:
+                radial-gradient(circle at top right, rgba(243, 178, 79, 0.12), transparent 26%),
+                radial-gradient(circle at left center, rgba(61, 184, 178, 0.12), transparent 28%),
+                linear-gradient(145deg, rgba(14, 24, 38, 0.96), rgba(10, 18, 28, 0.92));
+            box-shadow: var(--vmp-shadow);
+        }
+
+        .vmp-overview-kicker {
+            color: var(--vmp-accent);
+            font-size: 0.8rem;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+        }
+
+        .vmp-overview-title {
+            margin-top: 0.4rem;
+            font-family: "Sora", sans-serif;
+            font-size: clamp(1.45rem, 3vw, 2.35rem);
+            font-weight: 700;
+            color: var(--vmp-text);
+            letter-spacing: -0.03em;
+        }
+
+        .vmp-overview-copy {
+            max-width: 860px;
+            margin-top: 0.5rem;
+            color: var(--vmp-muted);
+            line-height: 1.65;
+        }
+
+        .vmp-chip-row {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.55rem;
+            margin-top: 0.9rem;
+        }
+
+        .vmp-chip {
+            padding: 0.45rem 0.75rem;
+            border-radius: 999px;
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            background: rgba(255, 255, 255, 0.05);
+            color: var(--vmp-text);
+            font-size: 0.86rem;
+            font-weight: 600;
+        }
+
+        .vmp-insight-card {
+            height: 100%;
+            min-height: 168px;
+            margin: 0.5rem 0 1rem 0;
+            padding: 1rem 1rem 0.95rem 1rem;
+            border-radius: 20px;
+            border: 1px solid var(--vmp-border);
+            background: linear-gradient(180deg, rgba(16, 27, 41, 0.90), rgba(12, 20, 32, 0.86));
+            box-shadow: 0 12px 28px rgba(0, 0, 0, 0.15);
+        }
+
+        .vmp-insight-label {
+            color: var(--vmp-muted);
+            font-size: 0.78rem;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+        }
+
+        .vmp-insight-value {
+            margin-top: 0.45rem;
+            font-family: "Sora", sans-serif;
+            font-size: 1.1rem;
+            font-weight: 700;
+            color: var(--vmp-text);
+            letter-spacing: -0.03em;
+        }
+
+        .vmp-insight-copy {
+            margin-top: 0.5rem;
+            color: var(--vmp-muted);
+            line-height: 1.6;
+            font-size: 0.92rem;
+        }
+
         [data-testid="stMetric"] {
             padding: 0.9rem 1rem;
             border-radius: 18px;
