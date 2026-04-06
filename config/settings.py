@@ -253,6 +253,73 @@ def inject_global_styles():
             font-size: 0.92rem;
         }
 
+        .vmp-provenance-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+            gap: 0.85rem;
+            margin: 0.25rem 0 1rem 0;
+        }
+
+        .vmp-provenance-card {
+            min-height: 142px;
+            padding: 0.95rem 1rem;
+            border-radius: 18px;
+            border: 1px solid var(--vmp-border);
+            background: linear-gradient(180deg, rgba(16, 27, 41, 0.88), rgba(10, 18, 28, 0.84));
+            box-shadow: 0 12px 24px rgba(0, 0, 0, 0.12);
+        }
+
+        .vmp-provenance-label {
+            color: var(--vmp-accent);
+            font-size: 0.78rem;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+        }
+
+        .vmp-provenance-source {
+            margin-top: 0.45rem;
+            color: var(--vmp-text);
+            font-size: 0.98rem;
+            font-weight: 700;
+        }
+
+        .vmp-provenance-meta {
+            margin-top: 0.3rem;
+            color: var(--vmp-muted);
+            font-size: 0.82rem;
+            line-height: 1.45;
+        }
+
+        .vmp-provenance-copy {
+            margin-top: 0.45rem;
+            color: var(--vmp-muted);
+            font-size: 0.9rem;
+            line-height: 1.55;
+        }
+
+        .vmp-context-banner {
+            margin: 0.3rem 0 1rem 0;
+            padding: 0.95rem 1rem;
+            border-radius: 18px;
+            border: 1px solid var(--vmp-border);
+            background: linear-gradient(180deg, rgba(16, 27, 41, 0.88), rgba(10, 18, 28, 0.82));
+            box-shadow: 0 10px 20px rgba(0, 0, 0, 0.12);
+        }
+
+        .vmp-context-title {
+            color: var(--vmp-text);
+            font-size: 0.96rem;
+            font-weight: 700;
+        }
+
+        .vmp-context-copy {
+            margin-top: 0.3rem;
+            color: var(--vmp-muted);
+            font-size: 0.9rem;
+            line-height: 1.55;
+        }
+
         [data-testid="stMetric"] {
             padding: 0.9rem 1rem;
             border-radius: 18px;
