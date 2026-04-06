@@ -10,7 +10,7 @@ from fetchers.stock_analysis import get_extended_history
 from valuation import calculate_valuation, solve_reverse_dcf, display_relative_analysis, compute_asset_based_value
 from technical import fetch_price_history, add_indicators, bull_flag_score, plot_technical_chart, plot_fundamental_overlay
 from scoring import calculate_piotroski_score, calculate_altman_z, score_out_of_10, plot_radar
-from ai import ai_analyst_report
+from ai import build_ai_chat_signature, chat_with_ai_analyst, create_ai_chat_session
 
 
 def render_stock_analyzer(api_key: str):
@@ -795,12 +795,59 @@ def render_stock_analyzer(api_key: str):
         st.markdown(f"**Altman Z-Score:** {altman_z:.2f}")
 
     elif section == "🤖 AI Agent":
-        st.subheader("🤖 AI Analyst (Multi-Agent ADK)")
-        st.caption("Le rapport est produit par plusieurs sous-agents specialises: fondamentaux, technique, comparaison et risque.")
-        if st.button("✨ Generate Multi-Agent Report"):
-            with st.spinner("Analyzing..."):
-                rep, err = ai_analyst_report(metrics, bench_data, scores, tech, api_key)
-                if rep:
-                    st.markdown(rep)
-                else:
-                    st.error(err)
+        st.subheader("🤖 AI Analyst Chat (Multi-Agent ADK)")
+        st.caption("Tu peux maintenant discuter avec l'agent. Il utilise plusieurs sous-agents specialises: fondamentaux, technique, comparaison et risque.")
+
+        chat_signature = build_ai_chat_signature(metrics, bench_data, scores, tech)
+        if st.session_state.get("ai_agent_signature") != chat_signature:
+            st.session_state["ai_agent_signature"] = chat_signature
+            st.session_state["ai_agent_context"] = None
+            st.session_state["ai_agent_messages"] = [
+                {
+                    "role": "assistant",
+                    "content": f"Bonjour. Je suis ton analyste multi-agents pour {ticker_final}. Pose-moi une question sur l'action, sa valorisation, ses risques ou son profil d'investisseur.",
+                }
+            ]
+
+        col_intro, col_reset = st.columns([4, 1])
+        with col_intro:
+            st.caption("Exemples: « Quels sont les risques principaux ? », « Cette action semble-t-elle chere ? », « Quel profil d'investisseur lui correspond ? »")
+        with col_reset:
+            if st.button("Reset chat", key=f"reset_ai_chat_{ticker_final}"):
+                st.session_state["ai_agent_context"] = None
+                st.session_state["ai_agent_messages"] = [
+                    {
+                        "role": "assistant",
+                        "content": f"Chat reinitialise pour {ticker_final}. Pose-moi une nouvelle question.",
+                    }
+                ]
+                st.rerun()
+
+        for message in st.session_state.get("ai_agent_messages", []):
+            with st.chat_message(message["role"]):
+                st.markdown(message["content"])
+
+        user_prompt = st.chat_input(f"Pose une question sur {ticker_final}...")
+        if user_prompt:
+            st.session_state["ai_agent_messages"].append({"role": "user", "content": user_prompt})
+            with st.chat_message("user"):
+                st.markdown(user_prompt)
+
+            if not st.session_state.get("ai_agent_context"):
+                chat_context, init_error = create_ai_chat_session(metrics, bench_data, scores, tech, api_key)
+                if init_error:
+                    with st.chat_message("assistant"):
+                        st.error(init_error)
+                    st.session_state["ai_agent_messages"].append({"role": "assistant", "content": init_error})
+                    st.stop()
+                st.session_state["ai_agent_context"] = chat_context
+
+            with st.chat_message("assistant"):
+                with st.spinner("Analyse en cours..."):
+                    reply, err = chat_with_ai_analyst(st.session_state["ai_agent_context"], user_prompt)
+                    if reply:
+                        st.markdown(reply)
+                        st.session_state["ai_agent_messages"].append({"role": "assistant", "content": reply})
+                    else:
+                        st.error(err)
+                        st.session_state["ai_agent_messages"].append({"role": "assistant", "content": err})

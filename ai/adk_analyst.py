@@ -1,21 +1,50 @@
 """
-Google ADK multi-agent analyst for the Streamlit stock analyzer.
+Google ADK multi-agent chat analyst for the Streamlit stock analyzer.
 """
 
 from __future__ import annotations
 
+import asyncio
+import hashlib
+import json
 import os
+import threading
 import uuid
 from typing import Any
 
-from google.adk.agents import LlmAgent, ParallelAgent, SequentialAgent
+from google.adk.agents import LlmAgent
 from google.adk.runners import Runner
 from google.adk.sessions import InMemorySessionService
+from google.adk.tools import agent_tool
 from google.genai import types
 
 
 MODEL_NAME = "gemini-2.5-flash"
 APP_NAME = "stock_valuation_multi_agent"
+
+
+def _run_coro(coro):
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(coro)
+
+    result: dict[str, Any] = {}
+    error: dict[str, Exception] = {}
+
+    def _worker():
+        try:
+            result["value"] = asyncio.run(coro)
+        except Exception as exc:
+            error["value"] = exc
+
+    thread = threading.Thread(target=_worker)
+    thread.start()
+    thread.join()
+
+    if error:
+        raise error["value"]
+    return result.get("value")
 
 
 def _to_percent(value: Any) -> float | None:
@@ -86,6 +115,20 @@ def _build_technical_snapshot(tech: dict) -> dict[str, Any]:
     }
 
 
+def build_ai_chat_signature(metrics: dict, bench: dict, scores: dict, tech: dict) -> str:
+    """
+    Build a stable signature for the currently analyzed stock context.
+    """
+
+    payload = {
+        "company": _build_company_snapshot(metrics, scores),
+        "peer": _build_peer_snapshot(bench),
+        "technical": _build_technical_snapshot(tech),
+    }
+    serialized = json.dumps(payload, sort_keys=True, ensure_ascii=True)
+    return hashlib.sha1(serialized.encode("utf-8")).hexdigest()
+
+
 def _build_agent(metrics: dict, bench: dict, scores: dict, tech: dict):
     company_snapshot = _build_company_snapshot(metrics, scores)
     peer_snapshot = _build_peer_snapshot(bench)
@@ -97,7 +140,7 @@ def _build_agent(metrics: dict, bench: dict, scores: dict, tech: dict):
         return company_snapshot
 
     def get_peer_snapshot() -> dict[str, Any]:
-        """Returns the benchmark and peer data used by the Streamlit app."""
+        """Returns the benchmark and peer assumptions used by the Streamlit app."""
 
         return peer_snapshot
 
@@ -106,125 +149,107 @@ def _build_agent(metrics: dict, bench: dict, scores: dict, tech: dict):
 
         return technical_snapshot
 
+    def get_full_snapshot() -> dict[str, Any]:
+        """Returns the full stock-analysis context for the current Streamlit session."""
+
+        return {
+            "company": company_snapshot,
+            "peer": peer_snapshot,
+            "technical": technical_snapshot,
+        }
+
     fundamental_agent = LlmAgent(
         name="fundamental_agent",
         model=MODEL_NAME,
-        description="Analyzes valuation, growth, profitability and balance-sheet quality.",
+        description="Handles valuation, growth, profitability and balance-sheet questions.",
         instruction="""
-You are the fundamental analyst.
+You are the fundamental analyst for the currently selected stock.
 Use `get_company_snapshot` and `get_peer_snapshot`.
-Write in French and produce:
-- Lecture fondamentale
-- Forces
-- Points de vigilance
-- Conclusion fondamentale
-Mention the most relevant figures.
+Answer in French.
+Focus on valuation, growth, profitability, free cash flow and relative positioning.
+Quote relevant figures whenever possible.
 """,
         tools=[get_company_snapshot, get_peer_snapshot],
-        output_key="fundamental_report",
     )
 
     technical_agent = LlmAgent(
         name="technical_agent",
         model=MODEL_NAME,
-        description="Analyzes technical score, trading profile and short-term momentum.",
+        description="Handles technical, momentum and trading-profile questions.",
         instruction="""
-You are the technical analyst.
+You are the technical analyst for the currently selected stock.
 Use `get_company_snapshot` and `get_technical_snapshot`.
-Write in French and produce:
-- Lecture technique
-- Signaux favorables
-- Signaux de risque
-- Conclusion technique
-Keep the tone prudent.
+Answer in French.
+Focus on trend, trading profile, momentum and risk level.
+Keep the tone prudent and practical.
 """,
         tools=[get_company_snapshot, get_technical_snapshot],
-        output_key="technical_report",
     )
 
     peer_agent = LlmAgent(
         name="peer_agent",
         model=MODEL_NAME,
-        description="Compares the stock to its benchmark and peer assumptions from the app.",
+        description="Handles peer and benchmark comparison questions.",
         instruction="""
 You are the peer comparison analyst.
 Use `get_company_snapshot` and `get_peer_snapshot`.
-Write in French and produce:
-- Comparaison au benchmark
-- Avantages relatifs
-- Faiblesses relatives
-- Conclusion comparative
-Explain whether the stock looks stronger or weaker than its benchmark assumptions.
+Answer in French.
+Explain how the stock compares with its benchmark assumptions and peer group.
 """,
         tools=[get_company_snapshot, get_peer_snapshot],
-        output_key="peer_report",
     )
 
     risk_agent = LlmAgent(
         name="risk_agent",
         model=MODEL_NAME,
-        description="Assesses investor fit, downside risk and profile suitability.",
+        description="Handles investor fit, downside risk and suitability questions.",
         instruction="""
 You are the risk analyst.
 Use `get_company_snapshot`, `get_peer_snapshot` and `get_technical_snapshot`.
-Write in French and produce:
-- Profil de risque
-- Points de resilience
-- Sources de fragilite
-- Profil investisseur adapte
+Answer in French.
+Explain the main downside risks, resilience factors and suitable investor profile.
 """,
         tools=[get_company_snapshot, get_peer_snapshot, get_technical_snapshot],
-        output_key="risk_report",
     )
 
-    analysis_team = ParallelAgent(
-        name="analysis_team",
-        description="Runs the specialized finance sub-agents in parallel.",
-        sub_agents=[fundamental_agent, technical_agent, peer_agent, risk_agent],
-    )
-
-    decision_agent = LlmAgent(
-        name="decision_agent",
+    return LlmAgent(
+        name="stock_chat_supervisor",
         model=MODEL_NAME,
-        description="Builds the final investment memo from the sub-agent outputs.",
+        description="Interactive French chat analyst for the currently selected stock.",
         instruction="""
-You are the final investment memo writer.
+You are an interactive multi-agent stock-analysis assistant for the currently selected stock.
+You answer in French and you keep the conversation natural and concise unless the user asks for detail.
 
-Fundamental analysis:
-{fundamental_report?}
+Available specialist agents:
+- `fundamental_agent` for valuation and financial quality
+- `technical_agent` for momentum and trading profile
+- `peer_agent` for benchmark comparison
+- `risk_agent` for investor fit and downside
 
-Technical analysis:
-{technical_report?}
+You also have `get_full_snapshot` for quick factual answers.
 
-Peer comparison:
-{peer_report?}
-
-Risk analysis:
-{risk_report?}
-
-Write the final answer in French with this structure:
-## Synthese executive
-## Forces principales
-## Risques principaux
-## Verdict final
-## Avertissement
-
-The verdict must be one of: favorable, neutre, prudent.
-Mention an investor profile: defensif, equilibre, offensif.
-Finish by saying this is educational analysis and not professional financial advice.
+Rules:
+- For simple factual questions, you may use `get_full_snapshot`.
+- For deeper questions, recommendations, risks, buy/sell opinions, or broad summaries, call one or more specialist agents and then synthesize.
+- If the user asks whether the stock looks attractive, mention both upside and risk.
+- If the user asks follow-up questions, use the conversation context.
+- Do not invent data outside the provided tools.
+- Remind the user this is educational analysis and not professional financial advice whenever the question sounds like an investment decision.
 """,
+        tools=[
+            get_full_snapshot,
+            agent_tool.AgentTool(agent=fundamental_agent),
+            agent_tool.AgentTool(agent=technical_agent),
+            agent_tool.AgentTool(agent=peer_agent),
+            agent_tool.AgentTool(agent=risk_agent),
+        ],
+        output_key="last_answer",
     )
 
-    return SequentialAgent(
-        name="stock_analysis_pipeline",
-        description="Multi-agent finance analysis pipeline for the Streamlit app.",
-        sub_agents=[analysis_team, decision_agent],
-    )
 
-
-def ai_analyst_report(metrics: dict, bench: dict, scores: dict, tech: dict, api_key: str) -> tuple[str | None, str | None]:
+def create_ai_chat_session(metrics: dict, bench: dict, scores: dict, tech: dict, api_key: str) -> tuple[dict[str, Any] | None, str | None]:
     """
-    Generate a stock report using a Google ADK multi-agent pipeline.
+    Create a reusable ADK chat session for the current Streamlit stock context.
     """
 
     resolved_api_key = _resolve_api_key(api_key)
@@ -239,22 +264,64 @@ def ai_analyst_report(metrics: dict, bench: dict, scores: dict, tech: dict, api_
         session_service = InMemorySessionService()
         user_id = "streamlit-user"
         session_id = str(uuid.uuid4())
-        session_service.create_session(app_name=APP_NAME, user_id=user_id, session_id=session_id)
+        _run_coro(session_service.create_session(app_name=APP_NAME, user_id=user_id, session_id=session_id))
 
-        runner = Runner(agent=agent, app_name=APP_NAME, session_service=session_service)
-        content = types.Content(
-            role="user",
-            parts=[types.Part(text=f"Analyse l'action {metrics.get('ticker', 'N/A')} a partir des donnees deja calculees par l'application.")],
+        return {
+            "runner": Runner(agent=agent, app_name=APP_NAME, session_service=session_service),
+            "session_service": session_service,
+            "user_id": user_id,
+            "session_id": session_id,
+        }, None
+    except Exception as exc:
+        return None, f"Echec de l'initialisation du chat multi-agents: {exc}"
+
+
+def chat_with_ai_analyst(chat_context: dict[str, Any], user_message: str) -> tuple[str | None, str | None]:
+    """
+    Send a new user message to the ADK analyst chat session.
+    """
+
+    try:
+        content = types.Content(role="user", parts=[types.Part(text=user_message)])
+        final_answer = None
+        events = chat_context["runner"].run(
+            user_id=chat_context["user_id"],
+            session_id=chat_context["session_id"],
+            new_message=content,
         )
 
-        final_answer = None
-        events = runner.run(user_id=user_id, session_id=session_id, new_message=content)
         for event in events:
             if event.is_final_response() and event.content:
-                final_answer = _text_from_parts(event.content.parts)
+                text = _text_from_parts(event.content.parts)
+                if text:
+                    final_answer = text
 
         if not final_answer:
-            return None, "Le pipeline multi-agents n'a pas retourne de reponse finale."
+            session = chat_context["session_service"].get_session(
+                app_name=APP_NAME,
+                user_id=chat_context["user_id"],
+                session_id=chat_context["session_id"],
+            )
+            session = _run_coro(session)
+            if session and getattr(session, "state", None):
+                final_answer = session.state.get("last_answer")
+
+        if not final_answer:
+            return None, "Le chat multi-agents n'a pas retourne de reponse finale."
         return final_answer, None
     except Exception as exc:
-        return None, f"Echec de l'analyse multi-agents: {exc}"
+        return None, f"Echec du chat multi-agents: {exc}"
+
+
+def ai_analyst_report(metrics: dict, bench: dict, scores: dict, tech: dict, api_key: str) -> tuple[str | None, str | None]:
+    """
+    Backward-compatible one-shot report generation using the chat engine.
+    """
+
+    chat_context, error = create_ai_chat_session(metrics, bench, scores, tech, api_key)
+    if error:
+        return None, error
+    return chat_with_ai_analyst(
+        chat_context,
+        f"Donne-moi une synthese executive de l'action {metrics.get('ticker', 'N/A')} avec forces, risques, verdict et avertissement.",
+    )
