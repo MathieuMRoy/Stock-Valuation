@@ -18,7 +18,7 @@ def render_stock_analyzer(api_key: str):
     Render the Stock Analyzer mode UI.
     
     Args:
-        api_key: Groq API key for AI analysis
+        api_key: Google API key for AI analysis
     """
     st.subheader("Search for a Company")
     choice = st.selectbox("Choose a popular stock:", TICKER_DB, index=2)
@@ -795,8 +795,9 @@ def render_stock_analyzer(api_key: str):
         st.markdown(f"**Altman Z-Score:** {altman_z:.2f}")
 
     elif section == "🤖 AI Agent":
-        st.subheader("🤖 AI Analyst (Groq)")
-        if st.button("✨ Generate Full Report"):
+        st.subheader("🤖 AI Analyst (Multi-Agent ADK)")
+        st.caption("Le rapport est produit par plusieurs sous-agents specialises: fondamentaux, technique, comparaison et risque.")
+        if st.button("✨ Generate Multi-Agent Report"):
             with st.spinner("Analyzing..."):
                 rep, err = ai_analyst_report(metrics, bench_data, scores, tech, api_key)
                 if rep:
