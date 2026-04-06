@@ -2,6 +2,7 @@
 Stock Analyzer UI - Main stock analysis interface
 """
 from datetime import date
+from html import escape
 
 import pandas as pd
 import streamlit as st
@@ -28,6 +29,40 @@ SECTION_OPTIONS = [
     "Scorecard",
     "AI Chat",
 ]
+
+
+INVESTOR_OBJECTIVES = {
+    "balanced": {
+        "label": "Equilibre",
+        "description": "mix upside, qualite financiere et valorisation",
+        "decision_frame": "balanced mix of upside, quality and valuation",
+    },
+    "growth": {
+        "label": "Croissance",
+        "description": "priorite a la croissance, au rerating et aux catalyseurs",
+        "decision_frame": "prioritize revenue growth, EPS acceleration and upside optionality",
+    },
+    "value": {
+        "label": "Value",
+        "description": "priorite a la valorisation et au potentiel de rerating",
+        "decision_frame": "prioritize valuation support, cheaper multiples and mean reversion",
+    },
+    "defensive": {
+        "label": "Defensif",
+        "description": "priorite au bilan, a la resilience et a la stabilite",
+        "decision_frame": "prioritize balance-sheet resilience, profitability quality and lower cyclicality",
+    },
+    "income": {
+        "label": "Revenu",
+        "description": "priorite au rendement, aux retours cash et a la stabilite",
+        "decision_frame": "prioritize income, cash returns and dividend support when available",
+    },
+    "short_term": {
+        "label": "Court terme",
+        "description": "priorite au momentum, aux catalyseurs et au setup de marche",
+        "decision_frame": "prioritize momentum, near-term catalysts and trading setup",
+    },
+}
 
 
 def _format_currency(value: float | None) -> str:
@@ -182,6 +217,56 @@ def _business_model_hint(sector_name: str | None, benchmark_name: str | None) ->
     return f"company exposed to the {sector_name or benchmark_name or 'broader market'} cycle"
 
 
+def _build_investor_objective_snapshot(objective_key: str) -> dict:
+    """Build the comparison objective context passed into the AI chat."""
+    preset = INVESTOR_OBJECTIVES.get(objective_key, INVESTOR_OBJECTIVES["balanced"])
+    return {
+        "key": objective_key if objective_key in INVESTOR_OBJECTIVES else "balanced",
+        "label": preset["label"],
+        "description": preset["description"],
+        "decision_frame": preset["decision_frame"],
+    }
+
+
+def _statement_basis_label(df_quarterly, df_annual, fallback_label: str) -> str:
+    """Describe which financial statement basis is currently driving a metric."""
+    if hasattr(df_quarterly, "empty") and not df_quarterly.empty:
+        return "Quarterly TTM"
+    if hasattr(df_annual, "empty") and not df_annual.empty:
+        return "Latest annual statement"
+    return fallback_label
+
+
+def _render_context_banner(title: str, copy: str):
+    """Render a compact context banner above the chat or data source blocks."""
+    st.markdown(
+        f"""
+        <div class="vmp-context-banner">
+            <div class="vmp-context-title">{escape(title)}</div>
+            <div class="vmp-context-copy">{escape(copy)}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def _render_provenance_panel(entries: list[dict]):
+    """Render a compact provenance grid for the key metrics shown on screen."""
+    cards = []
+    for entry in entries:
+        cards.append(
+            f"""
+            <div class="vmp-provenance-card">
+                <div class="vmp-provenance-label">{escape(str(entry.get("label", "")))}</div>
+                <div class="vmp-provenance-source">{escape(str(entry.get("source", "")))}</div>
+                <div class="vmp-provenance-meta">{escape(str(entry.get("meta", "")))}</div>
+                <div class="vmp-provenance-copy">{escape(str(entry.get("copy", "")))}</div>
+            </div>
+            """
+        )
+    st.markdown(f"""<div class="vmp-provenance-grid">{''.join(cards)}</div>""", unsafe_allow_html=True)
+
+
 def _render_overview_card(
     ticker: str,
     long_name: str,
@@ -308,6 +393,9 @@ def render_stock_analyzer(api_key: str, sidebar_state: dict | None = None):
     pe = data.get("pe_ratio", 0)
     if pe == 0 and eps_ttm > 0:
         pe = current_price / eps_ttm
+    forward_pe = float(data.get("forward_pe", 0) or 0)
+    quote_currency = str(data.get("quote_currency") or "N/A")
+    financial_currency = str(data.get("financial_currency") or quote_currency or "N/A")
         
     ps = market_cap / revenue_ttm if revenue_ttm > 0 else 0
     
@@ -324,13 +412,14 @@ def render_stock_analyzer(api_key: str, sidebar_state: dict | None = None):
         "business_model_hint": _business_model_hint(data.get("sector", "Default"), bench_data.get("name")),
         "price": current_price,
         "pe": pe,
-        "forward_pe": float(data.get("forward_pe", 0) or 0),
+        "forward_pe": forward_pe,
         "ps": ps,
         "sales_gr": cur_sales_gr,
         "eps_gr": cur_eps_gr,
+        "dividend_yield": float(data.get("dividend_yield", 0) or 0),
         "trailing_eps": eps_ttm,
-        "quote_currency": data.get("quote_currency"),
-        "financial_currency": data.get("financial_currency"),
+        "quote_currency": quote_currency,
+        "financial_currency": financial_currency,
         "net_cash": 0.0 if is_financial else cash - debt,
         "fcf_yield": 0.0 if is_financial else (fcf_ttm / market_cap if market_cap else 0),
         "rule_40": 0.0 if is_financial else cur_sales_gr + ((fcf_ttm / revenue_ttm) if revenue_ttm else 0),
@@ -425,6 +514,50 @@ def render_stock_analyzer(api_key: str, sidebar_state: dict | None = None):
     else:
         top_metrics[3].metric("Net Cash / Debt", _format_market_cap(cash - debt))
     top_metrics[4].metric("Next Earnings", next_earnings)
+
+    revenue_basis = _statement_basis_label(data.get("inc_q"), data.get("inc_a"), "Yahoo info fallback")
+    eps_basis = "Yahoo trailing EPS" if float(data.get("trailing_eps", 0) or 0) else _statement_basis_label(data.get("inc_q"), data.get("inc_a"), "Net income fallback")
+    pe_basis = "Yahoo trailing P/E" if float(data.get("pe_ratio", 0) or 0) else "Computed from price / EPS TTM"
+    as_of_date = date.today().isoformat()
+    recent_news_count = len(data.get("news") or [])
+    press_release_count = len(data.get("ir_news") or [])
+
+    _render_context_banner(
+        "Data provenance",
+        f"As of {as_of_date}. Cache {FINANCIAL_DATA_CACHE_VERSION}. This panel shows where the key metrics and AI context come from.",
+    )
+    _render_provenance_panel(
+        [
+            {
+                "label": "Market data",
+                "source": "Yahoo Finance quote + recommendations",
+                "meta": f"As of {as_of_date} | Quote ccy {quote_currency}",
+                "copy": f"Current price and analyst target come from the live quote payload for {ticker_final}.",
+            },
+            {
+                "label": "P/E context",
+                "source": f"{pe_basis} + Yahoo forward P/E",
+                "meta": f"As of {as_of_date} | Financial ccy {financial_currency}",
+                "copy": f"Trailing P/E {pe:.1f}x, forward P/E {forward_pe:.1f}x and EPS TTM {eps_ttm:.2f}. EPS basis: {eps_basis}.",
+            },
+            {
+                "label": "Revenue and balance sheet",
+                "source": "Yahoo quarterly / annual statements",
+                "meta": f"As of {as_of_date} | Revenue basis: {revenue_basis}",
+                "copy": (
+                    f"Revenue TTM {_format_market_cap(revenue_ttm)}, cash {_format_market_cap(cash)} and debt {_format_market_cap(debt)} feed the valuation model."
+                    if not is_financial
+                    else f"Revenue TTM {_format_market_cap(revenue_ttm)} and latest statement rows are used, but banks/financials avoid net-debt shortcuts."
+                ),
+            },
+            {
+                "label": "AI news context",
+                "source": "yfinance news + Google News RSS + Yahoo calendar",
+                "meta": f"As of {as_of_date} | {recent_news_count} market items, {press_release_count} press-release items",
+                "copy": f"The chat uses dated headlines plus the earnings calendar, with links when they are available.",
+            },
+        ]
+    )
 
     insight_cols = st.columns(3)
     with insight_cols[0]:
@@ -800,6 +933,11 @@ def render_stock_analyzer(api_key: str, sidebar_state: dict | None = None):
         c1, c2 = st.columns(2)
         c1.metric("Current Price", f"{current_price:.2f} $")
         c2.metric("Intrinsic (Neutral)", f"{base_res[1]:.2f} $", delta=f"{base_res[1]-current_price:.2f}")
+        s1, s2, s3 = st.columns(3)
+        s1.metric("Current P/S", f"{ps:.1f}x")
+        s2.metric("Revenue TTM", _format_market_cap(revenue_ttm))
+        s3.metric("Peer Target P/S", f"{float(bench_data.get('ps', 0) or 0):.1f}x")
+        st.caption(f"Source: market cap from Yahoo quote, revenue from {revenue_basis}. As of {as_of_date}.")
         st.divider()
         c_bear, c_base, c_bull = st.columns(3)
         c_bear.metric("🐻 Bear", f"{bear_res[1]:.2f} $")
@@ -813,6 +951,13 @@ def render_stock_analyzer(api_key: str, sidebar_state: dict | None = None):
         c1, c2 = st.columns(2)
         c1.metric("Current Price", f"{current_price:.2f} $")
         c2.metric("Intrinsic (Neutral)", f"{base_res[2]:.2f} $", delta=f"{base_res[2]-current_price:.2f}")
+        p1, p2, p3 = st.columns(3)
+        p1.metric("Trailing P/E", f"{pe:.1f}x")
+        p2.metric("Forward P/E", f"{forward_pe:.1f}x" if forward_pe > 0 else "N/A")
+        p3.metric("EPS TTM", f"{eps_ttm:.2f}")
+        st.caption(
+            f"Trailing basis: {pe_basis}. Forward P/E comes from Yahoo consensus. Quote ccy {quote_currency}; financial ccy {financial_currency}. As of {as_of_date}."
+        )
         st.divider()
         c_bear, c_base, c_bull = st.columns(3)
         c_bear.metric("🐻 Bear", f"{bear_res[2]:.2f} $")
@@ -1168,28 +1313,54 @@ def render_stock_analyzer(api_key: str, sidebar_state: dict | None = None):
         st.subheader("🤖 AI Analyst Chat (Multi-Agent ADK)")
         st.caption("Tu peux maintenant discuter avec l'agent. Il utilise plusieurs sous-agents specialises: fondamentaux, technique, comparaison, actualites, signaux de marche, filings SEC et risque.")
 
-        chat_signature = build_ai_chat_signature(metrics, bench_data, scores, tech)
+        objective_labels = [preset["label"] for preset in INVESTOR_OBJECTIVES.values()]
+        selected_objective_label = st.radio(
+            "Objectif de comparaison",
+            objective_labels,
+            horizontal=True,
+            key=f"ai_objective_{ticker_final}",
+        )
+        objective_key = next(
+            (key for key, preset in INVESTOR_OBJECTIVES.items() if preset["label"] == selected_objective_label),
+            "balanced",
+        )
+        objective_snapshot = _build_investor_objective_snapshot(objective_key)
+
+        _render_context_banner(
+            "Comparison lens",
+            f"{objective_snapshot['label']}: {objective_snapshot['description']}. The AI uses this as the default comparison frame unless your prompt asks for another lens.",
+        )
+
+        chat_signature = build_ai_chat_signature(metrics, bench_data, scores, tech, objective_snapshot)
         if st.session_state.get("ai_agent_signature") != chat_signature:
             st.session_state["ai_agent_signature"] = chat_signature
             st.session_state["ai_agent_context"] = None
             st.session_state["ai_agent_messages"] = [
                 {
                     "role": "assistant",
-                    "content": f"Bonjour. Je suis ton analyste multi-agents pour {ticker_final}. Tu peux me demander la valorisation, les risques, l'actualite recente, les analystes, les insiders, le short interest ou les filings SEC.",
+                    "content": (
+                        f"Bonjour. Je suis ton analyste multi-agents pour {ticker_final}. "
+                        f"Objectif actif: {objective_snapshot['label']}. "
+                        "Tu peux me demander la valorisation, les risques, l'actualite recente, les analystes, les insiders, le short interest, les filings SEC ou une comparaison avec une autre action."
+                    ),
                 }
             ]
 
         col_intro, col_reset = st.columns([4, 1])
         with col_intro:
             st.caption("Exemples: « Quels sont les risques principaux ? », « Cette action semble-t-elle chere ? », « Quel profil d'investisseur lui correspond ? »")
-            st.caption("Tu peux aussi demander: actualite recente, analystes, achats insiders, short interest, prochaine publication ou chiffres SEC officiels.")
+            st.caption("Tu peux aussi demander: actualite recente, analystes, achats insiders, short interest, prochaine publication, chiffres SEC officiels ou une comparaison selon un objectif croissance / value / defensif / revenu / court terme.")
         with col_reset:
             if st.button("Reset chat", key=f"reset_ai_chat_{ticker_final}"):
                 st.session_state["ai_agent_context"] = None
                 st.session_state["ai_agent_messages"] = [
                     {
                         "role": "assistant",
-                        "content": f"Chat reinitialise pour {ticker_final}. Tu peux maintenant me poser une question sur l'actualite, les analystes, les insiders, le short interest, les filings SEC ou la valorisation.",
+                        "content": (
+                            f"Chat reinitialise pour {ticker_final}. "
+                            f"Objectif actif: {objective_snapshot['label']}. "
+                            "Tu peux maintenant me poser une question sur l'actualite, les analystes, les insiders, le short interest, les filings SEC, la valorisation ou une comparaison."
+                        ),
                     }
                 ]
                 st.rerun()
@@ -1198,14 +1369,16 @@ def render_stock_analyzer(api_key: str, sidebar_state: dict | None = None):
             with st.chat_message(message["role"]):
                 st.markdown(message["content"])
 
-        user_prompt = st.chat_input(f"Pose une question sur {ticker_final}, son actualite, ses analystes ou compare-le a une autre action...")
+        user_prompt = st.chat_input(
+            f"Pose une question sur {ticker_final}, son actualite, ses analystes ou compare-le a une autre action avec un angle {objective_snapshot['label'].lower()}..."
+        )
         if user_prompt:
             st.session_state["ai_agent_messages"].append({"role": "user", "content": user_prompt})
             with st.chat_message("user"):
                 st.markdown(user_prompt)
 
             if not st.session_state.get("ai_agent_context"):
-                chat_context, init_error = create_ai_chat_session(metrics, bench_data, scores, tech, api_key)
+                chat_context, init_error = create_ai_chat_session(metrics, bench_data, scores, tech, api_key, objective_snapshot)
                 if init_error:
                     with st.chat_message("assistant"):
                         st.error(init_error)

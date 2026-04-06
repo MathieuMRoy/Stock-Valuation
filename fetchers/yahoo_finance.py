@@ -282,7 +282,7 @@ def get_financial_data_secure(ticker: str, cache_version: str = FINANCIAL_DATA_C
         "bs": pd.DataFrame(), "inc": pd.DataFrame(), "cf": pd.DataFrame(),
         "reco_summary": None, "calendar": None, "target_price": None, "ir_news": [], "news": [],
         "price": 0.0, "shares_info": 0.0, "sector": "Default",
-        "rev_growth": 0.0, "eps_growth": 0.0, "trailing_eps": 0.0, "pe_ratio": 0.0, "forward_pe": 0.0, "revenue_ttm": 0.0,
+        "rev_growth": 0.0, "eps_growth": 0.0, "trailing_eps": 0.0, "pe_ratio": 0.0, "forward_pe": 0.0, "dividend_yield": 0.0, "revenue_ttm": 0.0,
         "quote_currency": None, "financial_currency": None,
         "long_name": ticker, "error": None, "market_cap": None, "insiders": pd.DataFrame()
     }
@@ -305,6 +305,7 @@ def get_financial_data_secure(ticker: str, cache_version: str = FINANCIAL_DATA_C
         out["trailing_eps"] = float(full_info.get("trailingEps", 0) or 0)
         out["pe_ratio"] = float(full_info.get("trailingPE", 0) or 0)
         out["forward_pe"] = float(full_info.get("forwardPE", 0) or 0)
+        out["dividend_yield"] = float(full_info.get("dividendYield", 0) or 0)
         out["quote_currency"] = full_info.get("currency")
         out["financial_currency"] = full_info.get("financialCurrency")
 

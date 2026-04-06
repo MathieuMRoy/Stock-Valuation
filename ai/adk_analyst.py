@@ -201,6 +201,7 @@ def _build_company_snapshot(metrics: dict, scores: dict) -> dict[str, Any]:
         "ps_ratio": _to_float(metrics.get("ps")),
         "sales_growth_pct": _to_percent(metrics.get("sales_gr")),
         "eps_growth_pct": _to_percent(metrics.get("eps_gr")),
+        "dividend_yield_pct": _to_percent(metrics.get("dividend_yield")),
         "trailing_eps": _to_float(metrics.get("trailing_eps")),
         "quote_currency": metrics.get("quote_currency"),
         "financial_currency": metrics.get("financial_currency"),
@@ -231,6 +232,57 @@ def _build_technical_snapshot(tech: dict) -> dict[str, Any]:
     return {
         "technical_score_out_of_10": _to_float(tech.get("score")),
         "bull_flag_detected": bool(tech.get("is_bull_flag")),
+    }
+
+
+def _quote_page_url(ticker: str) -> str:
+    return f"https://finance.yahoo.com/quote/{ticker}"
+
+
+def _sec_company_url(ticker: str) -> str:
+    return f"https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK={ticker}&owner=exclude&count=40"
+
+
+def _compact_source_links(items: list[dict[str, Any]], limit: int) -> list[dict[str, Any]]:
+    links = []
+    for item in items[:limit]:
+        if not item.get("title") or not item.get("link"):
+            continue
+        links.append(
+            {
+                "title": item.get("title"),
+                "url": item.get("link"),
+                "published_at": item.get("published_at") or item.get("pubDate"),
+                "source": item.get("source"),
+            }
+        )
+    return links
+
+
+def _build_source_refs(ticker: str, data: dict[str, Any]) -> dict[str, Any]:
+    """Provide URLs and source notes that the chat can cite explicitly."""
+    market_links = _compact_source_links(data.get("news") or [], limit=4)
+    press_links = _compact_source_links(data.get("ir_news") or [], limit=3)
+
+    return {
+        "as_of_date": date.today().isoformat(),
+        "quote_page": {
+            "label": f"{ticker} quote page",
+            "url": _quote_page_url(ticker),
+            "source": "Yahoo Finance",
+        },
+        "sec_filings_page": {
+            "label": f"{ticker} SEC filings",
+            "url": _sec_company_url(ticker),
+            "source": "SEC EDGAR",
+        },
+        "market_news_links": market_links,
+        "press_release_links": press_links,
+        "valuation_notes": [
+            "Trailing P/E prefers Yahoo trailingPE and falls back to current price divided by TTM EPS.",
+            "Forward P/E uses Yahoo consensus when available.",
+            "Revenue TTM prefers quarterly statements and falls back to the latest annual figure.",
+        ],
     }
 
 
@@ -315,6 +367,7 @@ def _build_recent_news_snapshot(data: dict[str, Any]) -> dict[str, Any]:
         "recent_market_news": market_news_items,
         "recent_press_releases": press_release_items,
         "earnings_context": earnings_context,
+        "source_links": (market_news_items + press_release_items)[:6],
     }
 
 
@@ -545,6 +598,7 @@ def _compute_stock_context(ticker: str) -> dict[str, Any]:
         "ps": ps,
         "sales_gr": float(data.get("rev_growth", 0) or 0),
         "eps_gr": float(data.get("eps_growth", 0) or 0),
+        "dividend_yield": float(data.get("dividend_yield", 0) or 0),
         "trailing_eps": eps_ttm,
         "quote_currency": data.get("quote_currency"),
         "financial_currency": data.get("financial_currency"),
@@ -568,6 +622,7 @@ def _compute_stock_context(ticker: str) -> dict[str, Any]:
         "company": _build_company_snapshot(metrics, scores),
         "peer": _build_peer_snapshot(benchmark),
         "technical": _build_technical_snapshot(technical),
+        "sources": _build_source_refs(ticker.upper(), data),
     }
 
 
@@ -605,7 +660,14 @@ def _resolve_requested_ticker(raw_target: str, current_ticker: str) -> str:
     return fallback
 
 
-def _build_comparison_payload(current_company: dict[str, Any], current_peer: dict[str, Any], current_technical: dict[str, Any], other_context: dict[str, Any]) -> dict[str, Any]:
+def _build_comparison_payload(
+    current_company: dict[str, Any],
+    current_peer: dict[str, Any],
+    current_technical: dict[str, Any],
+    current_sources: dict[str, Any],
+    investor_objective: dict[str, Any],
+    other_context: dict[str, Any],
+) -> dict[str, Any]:
     other_company = other_context["company"]
     other_peer = other_context["peer"]
     other_technical = other_context["technical"]
@@ -620,6 +682,7 @@ def _build_comparison_payload(current_company: dict[str, Any], current_peer: dic
         "other_benchmark": other_peer,
         "current_technical": current_technical,
         "other_technical": other_technical,
+        "investor_objective": investor_objective,
         "comparison_context": {
             "is_cross_sector": is_cross_sector,
             "current_company_name": current_name,
@@ -635,6 +698,14 @@ def _build_comparison_payload(current_company: dict[str, Any], current_peer: dic
                 if is_cross_sector
                 else f"{current_name} and {other_name} are close enough to compare on a more direct basis."
             ),
+        },
+        "source_refs": {
+            "current_quote_page": current_sources.get("quote_page"),
+            "other_quote_page": (other_context.get("sources") or {}).get("quote_page"),
+            "current_recent_links": (current_sources.get("market_news_links") or [])[:2],
+            "other_recent_links": ((other_context.get("sources") or {}).get("market_news_links") or [])[:2],
+            "current_press_links": (current_sources.get("press_release_links") or [])[:2],
+            "other_press_links": ((other_context.get("sources") or {}).get("press_release_links") or [])[:2],
         },
         "comparison_highlights": {
             "sales_growth_gap_pct_points": _to_float(
@@ -672,7 +743,7 @@ def _build_comparison_payload(current_company: dict[str, Any], current_peer: dic
     }
 
 
-def build_ai_chat_signature(metrics: dict, bench: dict, scores: dict, tech: dict) -> str:
+def build_ai_chat_signature(metrics: dict, bench: dict, scores: dict, tech: dict, objective_snapshot: dict | None = None) -> str:
     """
     Build a stable signature for the currently analyzed stock context.
     """
@@ -680,6 +751,7 @@ def build_ai_chat_signature(metrics: dict, bench: dict, scores: dict, tech: dict
     payload = {
         "cache_version": FINANCIAL_DATA_CACHE_VERSION,
         "refresh_date": date.today().isoformat(),
+        "investor_objective": objective_snapshot or {"key": "balanced"},
         "company": _build_company_snapshot(metrics, scores),
         "peer": _build_peer_snapshot(bench),
         "technical": _build_technical_snapshot(tech),
@@ -688,7 +760,7 @@ def build_ai_chat_signature(metrics: dict, bench: dict, scores: dict, tech: dict
     return hashlib.sha1(serialized.encode("utf-8")).hexdigest()
 
 
-def _build_agent(metrics: dict, bench: dict, scores: dict, tech: dict):
+def _build_agent(metrics: dict, bench: dict, scores: dict, tech: dict, objective_snapshot: dict | None = None):
     company_snapshot = _build_company_snapshot(metrics, scores)
     peer_snapshot = _build_peer_snapshot(bench)
     technical_snapshot = _build_technical_snapshot(tech)
@@ -697,6 +769,13 @@ def _build_agent(metrics: dict, bench: dict, scores: dict, tech: dict):
     news_snapshot = _build_recent_news_snapshot(current_data)
     analyst_snapshot = _build_analyst_snapshot(current_data)
     insider_snapshot = _build_insider_snapshot(current_data)
+    source_snapshot = _build_source_refs(current_ticker, current_data)
+    objective_snapshot = objective_snapshot or {
+        "key": "balanced",
+        "label": "Equilibre",
+        "description": "mix upside, qualite financiere et valorisation",
+        "decision_frame": "balanced mix of upside, quality and valuation",
+    }
 
     def get_company_snapshot() -> dict[str, Any]:
         """Returns the core company valuation snapshot for the current Streamlit analysis."""
@@ -720,7 +799,19 @@ def _build_agent(metrics: dict, bench: dict, scores: dict, tech: dict):
             "company": company_snapshot,
             "peer": peer_snapshot,
             "technical": technical_snapshot,
+            "investor_objective": objective_snapshot,
+            "sources": source_snapshot,
         }
+
+    def get_investor_objective_snapshot() -> dict[str, Any]:
+        """Returns the active investor objective selected in the Streamlit UI."""
+
+        return objective_snapshot
+
+    def get_context_sources() -> dict[str, Any]:
+        """Returns source links and provenance notes for the selected stock."""
+
+        return source_snapshot
 
     def get_recent_news_snapshot() -> dict[str, Any]:
         """Returns recent IR headlines and earnings-calendar catalysts for the selected stock."""
@@ -771,6 +862,8 @@ def _build_agent(metrics: dict, bench: dict, scores: dict, tech: dict):
                 company_snapshot,
                 peer_snapshot,
                 technical_snapshot,
+                source_snapshot,
+                objective_snapshot,
                 other_context,
             ),
         }
@@ -823,22 +916,25 @@ Explain how the stock compares with its benchmark assumptions and peer group.
         instruction="""
 You are the direct stock-comparison analyst.
 Answer in French.
-Use `get_company_snapshot`, `get_peer_snapshot`, `get_technical_snapshot` and `compare_against_other_stock`.
+Use `get_company_snapshot`, `get_peer_snapshot`, `get_technical_snapshot`, `get_investor_objective_snapshot`, `get_context_sources` and `compare_against_other_stock`.
 When the user asks to compare the selected stock with another company or ticker, call `compare_against_other_stock`.
 In every comparison, identify what each company does and whether it is a same-sector or cross-sector comparison.
+Use the active investor objective as the default framing unless the user explicitly asks for another angle.
 When you quote a P/E ratio, say clearly whether it is trailing or forward if that matters.
 If trailing and forward P/E tell different stories, mention that explicitly.
 If it is cross-sector, do not give a single absolute winner without conditions. Explain the trade-off clearly:
 - which stock looks stronger for growth and upside
 - which stock looks stronger for balance-sheet resilience, cash generation or defensiveness
+- which stock looks stronger for income or shareholder return if the active objective is income
 - what sector-specific risk changes the conclusion
 If one company is an energy producer, bank, insurer, or other cyclical/regulatory business, say so explicitly and explain why the valuation framework differs.
 If the data suggests a split verdict, say for example: "meilleur pour croissance", "meilleur pour profil defensif", or "cela depend de ton objectif".
 If a recent earnings release likely changed the trailing valuation multiple, mention that date and explain the shift briefly.
 When balance-sheet metrics, Piotroski, Altman, net cash or benchmark context change the answer, mention them explicitly.
+End with a short `Sources` section in markdown bullets when URLs are available.
 Do not invent data. If the comparison tool returns an error, explain it plainly.
 """,
-        tools=[get_company_snapshot, get_peer_snapshot, get_technical_snapshot, compare_against_other_stock],
+        tools=[get_company_snapshot, get_peer_snapshot, get_technical_snapshot, get_investor_objective_snapshot, get_context_sources, compare_against_other_stock],
     )
 
     news_agent = LlmAgent(
@@ -848,7 +944,7 @@ Do not invent data. If the comparison tool returns an error, explain it plainly.
         instruction="""
 You are the recent-news and catalysts analyst.
 Answer in French.
-Use `get_recent_news_snapshot` and `get_analyst_market_snapshot`.
+Use `get_recent_news_snapshot`, `get_analyst_market_snapshot` and `get_context_sources`.
 Summarize the most recent available headlines, earnings date information and likely near-term catalysts.
 Be explicit about dates.
 Distinguish clearly between broader market/newswire coverage and press-release-style headlines.
@@ -856,8 +952,9 @@ Lead with the freshest dated item available, not with an older earnings-calendar
 Never describe a past earnings date as if it were still upcoming.
 If the latest available official release is not very recent, say so plainly instead of implying the news is fresh.
 Mention source names when possible.
+End with a short `Sources` section using markdown links when URLs are available.
 """,
-        tools=[get_recent_news_snapshot, get_analyst_market_snapshot],
+        tools=[get_recent_news_snapshot, get_analyst_market_snapshot, get_context_sources],
     )
 
     market_signal_agent = LlmAgent(
@@ -921,6 +1018,8 @@ Available specialist agents:
 
 You also have direct tools for quick factual answers:
 - `get_full_snapshot`
+- `get_investor_objective_snapshot`
+- `get_context_sources`
 - `compare_against_other_stock`
 - `get_recent_news_snapshot`
 - `get_analyst_market_snapshot`
@@ -931,6 +1030,7 @@ You also have direct tools for quick factual answers:
 Rules:
 - For simple factual questions, you may use `get_full_snapshot`.
 - If the user wants to compare the selected stock with another stock or company, call `comparison_agent` or `compare_against_other_stock`.
+- Use the active investor objective as the default frame for comparisons unless the user specifies another lens.
 - If the user asks about recent news, latest updates, catalysts, press releases or the next earnings date, call `news_agent`.
 - If the user asks about analysts, price targets, insider trades, short interest or market sentiment, call `market_signal_agent`.
 - If the user asks for official filed numbers, SEC filings, accounting quality or multi-year reported trends, call `filings_agent`.
@@ -938,12 +1038,15 @@ Rules:
 - If the user asks whether the stock looks attractive, mention both upside and risk.
 - For cross-sector comparisons, avoid declaring one stock universally "better" unless the objective is explicit. Prefer a conditional answer that separates growth/upside from defensiveness/resilience.
 - In cross-sector comparisons, state clearly what each company is and why their sector changes the interpretation of valuation and risk metrics.
+- If the answer relies on news, filings or a comparison payload with URLs, finish with a short `Sources` section in markdown bullets.
 - If the user asks follow-up questions, use the conversation context.
 - Do not invent data outside the provided tools.
 - Remind the user this is educational analysis and not professional financial advice whenever the question sounds like an investment decision.
 """,
         tools=[
             get_full_snapshot,
+            get_investor_objective_snapshot,
+            get_context_sources,
             compare_against_other_stock,
             get_recent_news_snapshot,
             get_analyst_market_snapshot,
@@ -963,7 +1066,14 @@ Rules:
     )
 
 
-def create_ai_chat_session(metrics: dict, bench: dict, scores: dict, tech: dict, api_key: str) -> tuple[dict[str, Any] | None, str | None]:
+def create_ai_chat_session(
+    metrics: dict,
+    bench: dict,
+    scores: dict,
+    tech: dict,
+    api_key: str,
+    objective_snapshot: dict | None = None,
+) -> tuple[dict[str, Any] | None, str | None]:
     """
     Create a reusable ADK chat session for the current Streamlit stock context.
     """
@@ -976,7 +1086,7 @@ def create_ai_chat_session(metrics: dict, bench: dict, scores: dict, tech: dict,
     os.environ["GOOGLE_GENAI_USE_VERTEXAI"] = "FALSE"
 
     try:
-        agent = _build_agent(metrics, bench, scores, tech)
+        agent = _build_agent(metrics, bench, scores, tech, objective_snapshot=objective_snapshot)
         session_service = InMemorySessionService()
         user_id = "streamlit-user"
         session_id = str(uuid.uuid4())
@@ -987,6 +1097,7 @@ def create_ai_chat_session(metrics: dict, bench: dict, scores: dict, tech: dict,
             "session_service": session_service,
             "user_id": user_id,
             "session_id": session_id,
+            "investor_objective": objective_snapshot or {"label": "Equilibre", "description": "mix upside, qualite financiere et valorisation"},
         }, None
     except Exception as exc:
         return None, f"Echec de l'initialisation du chat multi-agents: {exc}"
@@ -998,7 +1109,21 @@ def chat_with_ai_analyst(chat_context: dict[str, Any], user_message: str) -> tup
     """
 
     try:
-        content = types.Content(role="user", parts=[types.Part(text=user_message)])
+        objective = chat_context.get("investor_objective") or {}
+        objective_note = ""
+        if objective:
+            objective_note = (
+                f"\n\n[Contexte interface: objectif d'investisseur actif = {objective.get('label', 'Equilibre')} - "
+                f"{objective.get('description', 'mix upside, qualite financiere et valorisation')}. "
+                "Utilise-le comme cadrage par defaut pour les comparaisons si l'utilisateur n'en precise pas un autre.]"
+            )
+
+        format_note = (
+            "\n[Format souhaite: si tu cites de l'actualite, des filings ou une comparaison avec des URLs disponibles, "
+            "termine par une section `Sources` avec 1 a 4 puces markdown.]"
+        )
+
+        content = types.Content(role="user", parts=[types.Part(text=user_message + objective_note + format_note)])
         final_answer = None
         events = chat_context["runner"].run(
             user_id=chat_context["user_id"],
