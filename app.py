@@ -65,21 +65,18 @@ def main():
     # Configure page (must be first Streamlit command)
     configure_page()
     
-    # Render sidebar and get API key
-    api_key = render_sidebar()
+    # Render sidebar and collect global state
+    api_key, mode, sidebar_state = render_sidebar()
     
     # Display main title
     display_title()
-    
-    # Mode selection
-    mode = st.sidebar.radio("Mode", ["Earnings Calendar", "Stock Analyzer", "AI Screener (Top Upside)"], index=1)
 
     # Mode presentation
     display_mode_banner(mode)
     
     # Render appropriate mode
     if mode == "Stock Analyzer":
-        render_stock_analyzer(api_key)
+        render_stock_analyzer(api_key, sidebar_state=sidebar_state)
     elif mode == "Earnings Calendar":
         render_earnings_calendar()
     else:

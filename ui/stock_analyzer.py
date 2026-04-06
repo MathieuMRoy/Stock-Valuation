@@ -1,6 +1,8 @@
 """
 Stock Analyzer UI - Main stock analysis interface
 """
+from datetime import date
+
 import pandas as pd
 import streamlit as st
 
@@ -14,13 +16,188 @@ from scoring import calculate_piotroski_score, calculate_altman_z, score_out_of_
 from ai import build_ai_chat_signature, chat_with_ai_analyst, create_ai_chat_session
 
 
-def render_stock_analyzer(api_key: str):
+SECTION_OPTIONS = [
+    "Fundamentals",
+    "DCF",
+    "Sales",
+    "Earnings",
+    "Assets",
+    "Analysts",
+    "Insiders",
+    "Tech",
+    "Scorecard",
+    "AI Chat",
+]
+
+
+def _format_currency(value: float | None) -> str:
+    """Format a currency number for overview cards."""
+    if value is None:
+        return "N/A"
+    try:
+        return f"{float(value):,.2f} $"
+    except Exception:
+        return "N/A"
+
+
+def _format_market_cap(value: float | None) -> str:
+    """Format large market-cap style numbers in compact form."""
+    if value is None:
+        return "N/A"
+    try:
+        value = float(value)
+    except Exception:
+        return "N/A"
+    if abs(value) >= 1_000_000_000_000:
+        return f"{value / 1_000_000_000_000:.2f} T$"
+    if abs(value) >= 1_000_000_000:
+        return f"{value / 1_000_000_000:.2f} B$"
+    if abs(value) >= 1_000_000:
+        return f"{value / 1_000_000:.2f} M$"
+    return f"{value:,.0f} $"
+
+
+def _blend_intrinsic(values: list[float]) -> float:
+    """Blend positive valuation outputs into a single quick-read figure."""
+    positives = [float(value) for value in values if value and float(value) > 0]
+    if not positives:
+        return 0.0
+    return sum(positives) / len(positives)
+
+
+def _extract_next_earnings(calendar_data) -> str:
+    """Extract the next earnings date from a Yahoo calendar payload."""
+    if calendar_data is None:
+        return "N/A"
+
+    candidates: list[pd.Timestamp] = []
+
+    def _collect(value):
+        if value is None:
+            return
+        if isinstance(value, (list, tuple, set)):
+            for item in value:
+                _collect(item)
+            return
+        parsed = pd.to_datetime(value, errors="coerce")
+        if pd.notna(parsed):
+            candidates.append(pd.Timestamp(parsed))
+
+    if isinstance(calendar_data, pd.DataFrame):
+        for col in calendar_data.columns:
+            if "earnings" in str(col).lower():
+                _collect(calendar_data[col].tolist())
+        for idx in calendar_data.index:
+            if "earnings" in str(idx).lower():
+                row = calendar_data.loc[idx]
+                if isinstance(row, pd.Series):
+                    _collect(row.tolist())
+                else:
+                    _collect(row)
+    elif isinstance(calendar_data, pd.Series):
+        for label, value in calendar_data.items():
+            if "earnings" in str(label).lower():
+                _collect(value)
+    elif isinstance(calendar_data, dict):
+        for label, value in calendar_data.items():
+            if "earnings" in str(label).lower():
+                _collect(value)
+
+    if not candidates:
+        return "N/A"
+
+    today = pd.Timestamp(date.today())
+    future_candidates = sorted(ts for ts in candidates if ts.normalize() >= today)
+    target = future_candidates[0] if future_candidates else sorted(candidates)[0]
+    day_gap = (target.normalize() - today).days
+
+    if day_gap == 0:
+        return f"{target:%Y-%m-%d} (today)"
+    if day_gap > 0:
+        return f"{target:%Y-%m-%d} ({day_gap}d)"
+    return f"{target:%Y-%m-%d}"
+
+
+def _risk_label(altman_z: float, piotroski: int | None) -> str:
+    """Describe risk with a simple quality heuristic."""
+    if altman_z >= 3 and (piotroski or 0) >= 7:
+        return "Lower risk"
+    if altman_z < 1.8 or (piotroski or 0) <= 3:
+        return "Higher risk"
+    return "Balanced risk"
+
+
+def _valuation_label(gap_pct: float) -> str:
+    """Convert valuation gap into a readable verdict."""
+    if gap_pct >= 18:
+        return "Undervalued setup"
+    if gap_pct <= -18:
+        return "Rich valuation"
+    return "Fairly priced"
+
+
+def _profile_label(sales_growth: float, eps_growth: float, ps_ratio: float, peer_ps: float) -> str:
+    """Suggest the dominant investor profile for the stock."""
+    if sales_growth >= 0.18 and ps_ratio >= peer_ps:
+        return "Growth-oriented profile"
+    if eps_growth > 0.12 and ps_ratio <= peer_ps:
+        return "Quality / value blend"
+    return "Balanced core compounder"
+
+
+def _render_overview_card(
+    ticker: str,
+    long_name: str,
+    sector_name: str,
+    benchmark_name: str,
+    valuation_label: str,
+    risk_label: str,
+    profile_label: str,
+):
+    """Render the high-level presentation card for the selected stock."""
+    st.markdown(
+        f"""
+        <div class="vmp-overview">
+            <div class="vmp-overview-kicker">{ticker} | {sector_name}</div>
+            <div class="vmp-overview-title">{long_name}</div>
+            <div class="vmp-overview-copy">
+                Quick read: {valuation_label.lower()}, {risk_label.lower()} and a {profile_label.lower()}
+                relative to the {benchmark_name} benchmark.
+            </div>
+            <div class="vmp-chip-row">
+                <span class="vmp-chip">{valuation_label}</span>
+                <span class="vmp-chip">{risk_label}</span>
+                <span class="vmp-chip">{profile_label}</span>
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def _render_insight_card(label: str, value: str, copy: str):
+    """Render a compact insight card."""
+    st.markdown(
+        f"""
+        <div class="vmp-insight-card">
+            <div class="vmp-insight-label">{label}</div>
+            <div class="vmp-insight-value">{value}</div>
+            <div class="vmp-insight-copy">{copy}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def render_stock_analyzer(api_key: str, sidebar_state: dict | None = None):
     """
     Render the Stock Analyzer mode UI.
     
     Args:
         api_key: Google API key for AI analysis
     """
+    sidebar_state = sidebar_state or {}
+
     st.subheader("Search for a Company")
     choice = st.selectbox("Choose a popular stock:", TICKER_DB, index=2)
     
@@ -52,7 +229,7 @@ def render_stock_analyzer(api_key: str):
     # Shares override
     shares = float(data.get("shares_info", 0) or 0)
     st.sidebar.markdown("### 🔧 Data Override")
-    manual_shares = st.sidebar.number_input("Manual Shares (Millions)", value=0.0, step=1.0)
+    manual_shares = float(sidebar_state.get("manual_shares", 0.0) or 0.0)
     if manual_shares > 0:
         shares = manual_shares * 1_000_000
         st.sidebar.success(f"Using manual shares: {shares:,.0f}")
@@ -91,10 +268,6 @@ def render_stock_analyzer(api_key: str):
     cur_eps_gr = data.get("eps_growth", 0)
     bench_data = get_benchmark_data(ticker_final, data.get("sector", "Default"))
     
-    price_df = fetch_price_history(ticker_final, "1y")
-    tech_df = add_indicators(price_df)
-    tech = bull_flag_score(tech_df)
-
     metrics = {
         "ticker": ticker_final, "price": current_price, "pe": pe, "ps": ps, 
         "sales_gr": cur_sales_gr, "eps_gr": cur_eps_gr, "net_cash": cash-debt, 
@@ -103,8 +276,20 @@ def render_stock_analyzer(api_key: str):
     }
     scores = score_out_of_10(metrics, bench_data)
 
+    tech_bundle: dict | None = None
+
+    def load_technical_bundle() -> dict:
+        nonlocal tech_bundle
+        if tech_bundle is None:
+            with st.spinner("Loading technical dataset..."):
+                price_df = fetch_price_history(ticker_final, "1y")
+                tech_df = add_indicators(price_df)
+                tech = bull_flag_score(tech_df)
+            tech_bundle = {"price_df": price_df, "tech_df": tech_df, "tech": tech}
+        return tech_bundle
+
     # Help section
-    with st.expander(f"💡 Help: {bench_data['name']} vs {ticker_final}", expanded=True):
+    with st.expander(f"Market context: {bench_data['name']} vs {ticker_final}", expanded=False):
         st.write(f"**Peers:** {bench_data.get('peers', 'N/A')}")
         st.markdown("### 🏢 Sector / Peer Averages")
         c1, c2, c3, c4 = st.columns(4)
@@ -144,23 +329,123 @@ def render_stock_analyzer(api_key: str):
     base_res = run_calc(1.0, 1.0, 0.0)
     bull_res = run_calc(1.2, 1.2, -0.01)
 
-    # Display tabs
-    st.metric("Current Price", f"{current_price:.2f} $")
+    blended_intrinsic = _blend_intrinsic([base_res[0], base_res[1], base_res[2]])
+    valuation_gap = ((blended_intrinsic / current_price) - 1) * 100 if blended_intrinsic and current_price else 0.0
+    analyst_target = float(data.get("target_price") or 0)
+    analyst_gap = ((analyst_target / current_price) - 1) * 100 if analyst_target and current_price else 0.0
+    next_earnings = _extract_next_earnings(data.get("calendar"))
+    valuation_label = _valuation_label(valuation_gap)
+    risk_label = _risk_label(altman_z, piotroski)
+    profile_label = _profile_label(cur_sales_gr, cur_eps_gr, ps, float(bench_data.get("ps", 0) or 0))
+
+    _render_overview_card(
+        ticker=ticker_final,
+        long_name=str(data.get("long_name") or ticker_final),
+        sector_name=str(data.get("sector") or "Default"),
+        benchmark_name=bench_data["name"],
+        valuation_label=valuation_label,
+        risk_label=risk_label,
+        profile_label=profile_label,
+    )
+
+    top_metrics = st.columns(5)
+    top_metrics[0].metric("Current Price", f"{current_price:.2f} $")
+    top_metrics[1].metric("Blended Fair Value", _format_currency(blended_intrinsic), delta=f"{valuation_gap:+.1f}%")
+    top_metrics[2].metric(
+        "Analyst Mean Target",
+        _format_currency(analyst_target if analyst_target > 0 else None),
+        delta=f"{analyst_gap:+.1f}%" if analyst_target > 0 else None,
+    )
+    top_metrics[3].metric("Net Cash / Debt", _format_market_cap(cash - debt))
+    top_metrics[4].metric("Next Earnings", next_earnings)
+
+    insight_cols = st.columns(3)
+    with insight_cols[0]:
+        _render_insight_card(
+            "Market context",
+            bench_data["name"],
+            f"Peers: {bench_data.get('peers', 'N/A')}. Peer P/S {bench_data['ps']}x and peer P/E {bench_data.get('pe', 20)}x.",
+        )
+    with insight_cols[1]:
+        _render_insight_card(
+            "Operating profile",
+            f"Sales {cur_sales_gr * 100:.1f}% | EPS {cur_eps_gr * 100:.1f}%",
+            f"FCF yield {(fcf_ttm / market_cap) * 100:.1f}% and Rule of 40 {metrics['rule_40'] * 100:.1f}%.",
+        )
+    with insight_cols[2]:
+        _render_insight_card(
+            "Quality snapshot",
+            f"Piotroski {piotroski if piotroski else 'N/A'} | Altman {altman_z:.2f}",
+            f"Market cap {_format_market_cap(market_cap)} with {shares / 1_000_000:.1f}M shares in the model.",
+        )
     
-    # Define Section Menu (Dropdown instead of tabs)
-    section = st.selectbox("📂 Section", [
-        "📊 Fundamentals", 
-        "💵 DCF (Cash)", 
-        "📈 Sales (P/S)", 
-        "💰 Earnings (P/E)", 
-        "🧱 Assets", 
-        "🎯 Analystes",
-        "👥 Insiders", 
-        "📉 Tech", 
-        "📊 Scorecard", 
-        "🤖 AI Agent"
-    ])
-    
+    st.markdown("### Deep Dive")
+
+    # Define Section Menu
+    section = st.radio(
+        "Section",
+        [
+            "📊 Fundamentals",
+            "💵 DCF (Cash)",
+            "📈 Sales (P/S)",
+            "💰 Earnings (P/E)",
+            "🧱 Assets",
+            "🎯 Analystes",
+            "👥 Insiders",
+            "📉 Tech",
+            "📊 Scorecard",
+            "🤖 AI Agent",
+        ],
+        horizontal=True,
+        label_visibility="collapsed",
+    )
+
+    if "Fundamentals" in section:
+        section_key = "Fundamentals"
+    elif "DCF" in section:
+        section_key = "DCF"
+    elif "Sales" in section:
+        section_key = "Sales"
+    elif "Earnings" in section:
+        section_key = "Earnings"
+    elif "Assets" in section:
+        section_key = "Assets"
+    elif "Analyst" in section:
+        section_key = "Analysts"
+    elif "Insiders" in section:
+        section_key = "Insiders"
+    elif "Tech" in section:
+        section_key = "Tech"
+    elif "Scorecard" in section:
+        section_key = "Scorecard"
+    else:
+        section_key = "AI Chat"
+
+    st.caption(
+        {
+            "Fundamentals": "Historical statements, margins, liquidity and operating quality.",
+            "DCF": "Cash-flow-based valuation with scenarios and sensitivity matrix.",
+            "Sales": "Revenue multiple view against the peer group benchmark.",
+            "Earnings": "Earnings multiple view and market relative positioning.",
+            "Assets": "Balance-sheet-driven value floor.",
+            "Analysts": "Consensus, price targets and recent rating changes.",
+            "Insiders": "Recent insider transactions from Yahoo Finance.",
+            "Tech": "Trend structure, overlays, oscillators and short interest.",
+            "Scorecard": "Health, growth and valuation summary in one place.",
+            "AI Chat": "Multi-agent conversation for valuation, news, catalysts and comparisons.",
+        }[section_key]
+    )
+
+    if section_key in {"Analysts", "Tech", "Scorecard", "AI Chat"}:
+        technical_data = load_technical_bundle()
+        price_df = technical_data["price_df"]
+        tech_df = technical_data["tech_df"]
+        tech = technical_data["tech"]
+    else:
+        price_df = pd.DataFrame()
+        tech_df = pd.DataFrame()
+        tech = {"score": 0, "is_bull_flag": False}
+
     # --- SECTION: FUNDAMENTALS ---
     if section == "📊 Fundamentals":
         st.subheader("📊 Extended Financial Dashboard")
