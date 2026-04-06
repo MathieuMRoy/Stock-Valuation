@@ -4,7 +4,7 @@ Screener UI - AI-powered stock screener interface
 import pandas as pd
 import streamlit as st
 
-from fetchers import get_financial_data_secure, get_item_safe, get_ttm_or_latest, finviz_fetch_tickers, FINVIZ_SECTORS
+from fetchers import get_debt_safe, get_financial_data_secure, get_item_safe, get_ttm_or_latest, finviz_fetch_tickers, FINVIZ_SECTORS
 from fetchers.yahoo_finance import FINANCIAL_DATA_CACHE_VERSION
 from valuation import calculate_valuation
 
@@ -46,7 +46,7 @@ def render_screener():
         cap = abs(get_item_safe(d["cf"], ["CapitalExpenditure"]))
         fcf = cf - cap
         c = get_item_safe(d["bs"], ["Cash"])
-        db = get_item_safe(d["bs"], ["LongTermDebt"])
+        db = get_debt_safe(d["bs"])
         
         g = float(d.get("rev_growth", 0) or 0)
         if g <= 0:

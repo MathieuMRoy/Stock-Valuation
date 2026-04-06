@@ -7,7 +7,7 @@ import pandas as pd
 import streamlit as st
 
 from data import TICKER_DB, get_benchmark_data
-from fetchers import get_financial_data_secure, get_item_safe, get_ttm_or_latest
+from fetchers import get_debt_safe, get_financial_data_secure, get_item_safe, get_ttm_or_latest
 from fetchers.yahoo_finance import FINANCIAL_DATA_CACHE_VERSION
 from fetchers.stock_analysis import get_extended_history
 from valuation import calculate_valuation, solve_reverse_dcf, display_relative_analysis, compute_asset_based_value
@@ -249,7 +249,7 @@ def render_stock_analyzer(api_key: str, sidebar_state: dict | None = None):
     capex_ttm = abs(get_item_safe(cf, ["CapitalExpenditure", "PurchaseOfPPE"]))
     fcf_ttm = cfo_ttm - capex_ttm
     cash = get_item_safe(bs, ["CashAndCashEquivalents", "Cash"])
-    debt = get_item_safe(bs, ["LongTermDebt"]) + get_item_safe(bs, ["LeaseLiabilities", "TotalLiab"])
+    debt = get_debt_safe(bs)
     
     # EPS and P/E
     eps_ttm = data.get("trailing_eps", 0)
