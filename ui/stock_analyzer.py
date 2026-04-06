@@ -118,8 +118,21 @@ def _extract_next_earnings(calendar_data) -> str:
     return f"{target:%Y-%m-%d}"
 
 
-def _risk_label(altman_z: float, piotroski: int | None) -> str:
+def _is_financial_company(sector_name: str | None, benchmark_name: str | None) -> bool:
+    """Detect financial institutions that need bank-specific presentation logic."""
+    text = " ".join([str(sector_name or ""), str(benchmark_name or "")]).lower()
+    keywords = ["financial", "bank", "banks", "insurance", "capital markets", "asset management"]
+    return any(keyword in text for keyword in keywords)
+
+
+def _risk_label(altman_z: float, piotroski: int | None, is_financial: bool = False) -> str:
     """Describe risk with a simple quality heuristic."""
+    if is_financial:
+        if (piotroski or 0) >= 7:
+            return "Stable bank profile"
+        if (piotroski or 0) <= 3:
+            return "Watch bank fundamentals"
+        return "Bank-specific risk view"
     if altman_z >= 3 and (piotroski or 0) >= 7:
         return "Lower risk"
     if altman_z < 1.8 or (piotroski or 0) <= 3:
@@ -136,8 +149,16 @@ def _valuation_label(gap_pct: float) -> str:
     return "Fairly priced"
 
 
-def _profile_label(sales_growth: float, eps_growth: float, ps_ratio: float, peer_ps: float) -> str:
+def _profile_label(
+    sales_growth: float,
+    eps_growth: float,
+    ps_ratio: float,
+    peer_ps: float,
+    is_financial: bool = False,
+) -> str:
     """Suggest the dominant investor profile for the stock."""
+    if is_financial:
+        return "Regulated bank model"
     if sales_growth >= 0.18 and ps_ratio >= peer_ps:
         return "Growth-oriented profile"
     if eps_growth > 0.12 and ps_ratio <= peer_ps:
@@ -267,12 +288,15 @@ def render_stock_analyzer(api_key: str, sidebar_state: dict | None = None):
     cur_sales_gr = data.get("rev_growth", 0)
     cur_eps_gr = data.get("eps_growth", 0)
     bench_data = get_benchmark_data(ticker_final, data.get("sector", "Default"))
+    is_financial = _is_financial_company(data.get("sector", "Default"), bench_data.get("name"))
     
     metrics = {
         "ticker": ticker_final, "price": current_price, "pe": pe, "ps": ps, 
-        "sales_gr": cur_sales_gr, "eps_gr": cur_eps_gr, "net_cash": cash-debt, 
-        "fcf_yield": fcf_ttm/market_cap if market_cap else 0,
-        "rule_40": cur_sales_gr + ((fcf_ttm/revenue_ttm) if revenue_ttm else 0)
+        "sales_gr": cur_sales_gr,
+        "eps_gr": cur_eps_gr,
+        "net_cash": 0.0 if is_financial else cash - debt,
+        "fcf_yield": 0.0 if is_financial else (fcf_ttm / market_cap if market_cap else 0),
+        "rule_40": 0.0 if is_financial else cur_sales_gr + ((fcf_ttm / revenue_ttm) if revenue_ttm else 0),
     }
     scores = score_out_of_10(metrics, bench_data)
 
@@ -335,8 +359,8 @@ def render_stock_analyzer(api_key: str, sidebar_state: dict | None = None):
     analyst_gap = ((analyst_target / current_price) - 1) * 100 if analyst_target and current_price else 0.0
     next_earnings = _extract_next_earnings(data.get("calendar"))
     valuation_label = _valuation_label(valuation_gap)
-    risk_label = _risk_label(altman_z, piotroski)
-    profile_label = _profile_label(cur_sales_gr, cur_eps_gr, ps, float(bench_data.get("ps", 0) or 0))
+    risk_label = _risk_label(altman_z, piotroski, is_financial=is_financial)
+    profile_label = _profile_label(cur_sales_gr, cur_eps_gr, ps, float(bench_data.get("ps", 0) or 0), is_financial=is_financial)
 
     _render_overview_card(
         ticker=ticker_final,
@@ -356,7 +380,10 @@ def render_stock_analyzer(api_key: str, sidebar_state: dict | None = None):
         _format_currency(analyst_target if analyst_target > 0 else None),
         delta=f"{analyst_gap:+.1f}%" if analyst_target > 0 else None,
     )
-    top_metrics[3].metric("Net Cash / Debt", _format_market_cap(cash - debt))
+    if is_financial:
+        top_metrics[3].metric("Balance Sheet", "Bank model")
+    else:
+        top_metrics[3].metric("Net Cash / Debt", _format_market_cap(cash - debt))
     top_metrics[4].metric("Next Earnings", next_earnings)
 
     insight_cols = st.columns(3)
@@ -367,17 +394,31 @@ def render_stock_analyzer(api_key: str, sidebar_state: dict | None = None):
             f"Peers: {bench_data.get('peers', 'N/A')}. Peer P/S {bench_data['ps']}x and peer P/E {bench_data.get('pe', 20)}x.",
         )
     with insight_cols[1]:
-        _render_insight_card(
-            "Operating profile",
-            f"Sales {cur_sales_gr * 100:.1f}% | EPS {cur_eps_gr * 100:.1f}%",
-            f"FCF yield {(fcf_ttm / market_cap) * 100:.1f}% and Rule of 40 {metrics['rule_40'] * 100:.1f}%.",
-        )
+        if is_financial:
+            _render_insight_card(
+                "Banking profile",
+                f"EPS {cur_eps_gr * 100:.1f}% | P/E {pe:.1f}x",
+                "For banks, deposits, funding mix and capital ratios matter more than FCF yield or Rule of 40.",
+            )
+        else:
+            _render_insight_card(
+                "Operating profile",
+                f"Sales {cur_sales_gr * 100:.1f}% | EPS {cur_eps_gr * 100:.1f}%",
+                f"FCF yield {(fcf_ttm / market_cap) * 100:.1f}% and Rule of 40 {metrics['rule_40'] * 100:.1f}%.",
+            )
     with insight_cols[2]:
-        _render_insight_card(
-            "Quality snapshot",
-            f"Piotroski {piotroski if piotroski else 'N/A'} | Altman {altman_z:.2f}",
-            f"Market cap {_format_market_cap(market_cap)} with {shares / 1_000_000:.1f}M shares in the model.",
-        )
+        if is_financial:
+            _render_insight_card(
+                "Quality snapshot",
+                f"Piotroski {piotroski if piotroski else 'N/A'} | Altman N/A",
+                f"Market cap {_format_market_cap(market_cap)} with {shares / 1_000_000:.1f}M shares. Altman Z and net debt are not reliable shortcuts for banks.",
+            )
+        else:
+            _render_insight_card(
+                "Quality snapshot",
+                f"Piotroski {piotroski if piotroski else 'N/A'} | Altman {altman_z:.2f}",
+                f"Market cap {_format_market_cap(market_cap)} with {shares / 1_000_000:.1f}M shares in the model.",
+            )
     
     st.markdown("### Deep Dive")
 
@@ -1078,7 +1119,10 @@ def render_stock_analyzer(api_key: str, sidebar_state: dict | None = None):
         if fig:
             st.pyplot(fig)
         st.markdown(f"**Piotroski F-Score:** {piotroski if piotroski else 'N/A'}/9")
-        st.markdown(f"**Altman Z-Score:** {altman_z:.2f}")
+        if is_financial:
+            st.markdown("**Altman Z-Score:** N/A for banks and other financial institutions")
+        else:
+            st.markdown(f"**Altman Z-Score:** {altman_z:.2f}")
 
     elif section == "🤖 AI Agent":
         st.subheader("🤖 AI Analyst Chat (Multi-Agent ADK)")

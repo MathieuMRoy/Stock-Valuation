@@ -124,6 +124,13 @@ def _normalize_lookup(value: str) -> str:
     return "".join(char.lower() for char in value if char.isalnum())
 
 
+def _is_financial_company(sector_name: str | None, benchmark_name: str | None) -> bool:
+    """Detect financial institutions that should avoid operating-company shortcuts."""
+    text = " ".join([str(sector_name or ""), str(benchmark_name or "")]).lower()
+    keywords = ["financial", "bank", "banks", "insurance", "capital markets", "asset management"]
+    return any(keyword in text for keyword in keywords)
+
+
 def _generate_aliases(company_name: str) -> set[str]:
     aliases = {company_name.strip()}
     base_name = company_name.split("(")[0].strip()
@@ -423,6 +430,9 @@ def _compute_stock_context(ticker: str) -> dict[str, Any]:
     market_cap = shares * current_price if shares > 0 else float(data.get("market_cap", 0) or 0)
     ps = market_cap / revenue_ttm if market_cap > 0 and revenue_ttm > 0 else 0
 
+    benchmark = get_benchmark_data(ticker, data.get("sector", "Default"))
+    is_financial = _is_financial_company(data.get("sector", "Default"), benchmark.get("name"))
+
     metrics = {
         "ticker": ticker.upper(),
         "price": current_price,
@@ -430,12 +440,12 @@ def _compute_stock_context(ticker: str) -> dict[str, Any]:
         "ps": ps,
         "sales_gr": float(data.get("rev_growth", 0) or 0),
         "eps_gr": float(data.get("eps_growth", 0) or 0),
-        "net_cash": cash - debt,
-        "fcf_yield": (fcf_ttm / market_cap) if market_cap else 0,
-        "rule_40": float(data.get("rev_growth", 0) or 0) + ((fcf_ttm / revenue_ttm) if revenue_ttm else 0),
+        "net_cash": 0.0 if is_financial else cash - debt,
+        "fcf_yield": 0.0 if is_financial else ((fcf_ttm / market_cap) if market_cap else 0),
+        "rule_40": 0.0 if is_financial else float(data.get("rev_growth", 0) or 0) + ((fcf_ttm / revenue_ttm) if revenue_ttm else 0),
+        "is_financial": is_financial,
     }
 
-    benchmark = get_benchmark_data(ticker, data.get("sector", "Default"))
     scores = score_out_of_10(metrics, benchmark)
 
     price_df = fetch_price_history(ticker, "1y")
