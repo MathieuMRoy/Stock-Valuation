@@ -797,7 +797,7 @@ def render_stock_analyzer(api_key: str):
 
     elif section == "🤖 AI Agent":
         st.subheader("🤖 AI Analyst Chat (Multi-Agent ADK)")
-        st.caption("Tu peux maintenant discuter avec l'agent. Il utilise plusieurs sous-agents specialises: fondamentaux, technique, comparaison et risque.")
+        st.caption("Tu peux maintenant discuter avec l'agent. Il utilise plusieurs sous-agents specialises: fondamentaux, technique, comparaison, actualites, signaux de marche, filings SEC et risque.")
 
         chat_signature = build_ai_chat_signature(metrics, bench_data, scores, tech)
         if st.session_state.get("ai_agent_signature") != chat_signature:
@@ -806,20 +806,21 @@ def render_stock_analyzer(api_key: str):
             st.session_state["ai_agent_messages"] = [
                 {
                     "role": "assistant",
-                    "content": f"Bonjour. Je suis ton analyste multi-agents pour {ticker_final}. Pose-moi une question sur l'action, sa valorisation, ses risques ou son profil d'investisseur.",
+                    "content": f"Bonjour. Je suis ton analyste multi-agents pour {ticker_final}. Tu peux me demander la valorisation, les risques, l'actualite recente, les analystes, les insiders, le short interest ou les filings SEC.",
                 }
             ]
 
         col_intro, col_reset = st.columns([4, 1])
         with col_intro:
             st.caption("Exemples: « Quels sont les risques principaux ? », « Cette action semble-t-elle chere ? », « Quel profil d'investisseur lui correspond ? »")
+            st.caption("Tu peux aussi demander: actualite recente, analystes, achats insiders, short interest, prochaine publication ou chiffres SEC officiels.")
         with col_reset:
             if st.button("Reset chat", key=f"reset_ai_chat_{ticker_final}"):
                 st.session_state["ai_agent_context"] = None
                 st.session_state["ai_agent_messages"] = [
                     {
                         "role": "assistant",
-                        "content": f"Chat reinitialise pour {ticker_final}. Pose-moi une nouvelle question.",
+                        "content": f"Chat reinitialise pour {ticker_final}. Tu peux maintenant me poser une question sur l'actualite, les analystes, les insiders, le short interest, les filings SEC ou la valorisation.",
                     }
                 ]
                 st.rerun()
@@ -828,7 +829,7 @@ def render_stock_analyzer(api_key: str):
             with st.chat_message(message["role"]):
                 st.markdown(message["content"])
 
-        user_prompt = st.chat_input(f"Pose une question sur {ticker_final} ou compare-le a une autre action...")
+        user_prompt = st.chat_input(f"Pose une question sur {ticker_final}, son actualite, ses analystes ou compare-le a une autre action...")
         if user_prompt:
             st.session_state["ai_agent_messages"].append({"role": "user", "content": user_prompt})
             with st.chat_message("user"):

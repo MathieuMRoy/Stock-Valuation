@@ -13,6 +13,7 @@ import threading
 import uuid
 from typing import Any
 
+import pandas as pd
 from google.adk.agents import LlmAgent
 from google.adk.runners import Runner
 from google.adk.sessions import InMemorySessionService
@@ -21,6 +22,8 @@ from google.genai import types
 
 from data import TICKER_DB, get_benchmark_data
 from fetchers import get_financial_data_secure, get_item_safe, get_ttm_or_latest
+from fetchers.sec_edgar import get_sec_financials
+from fetchers.short_interest import get_historical_short_interest
 from fetchers.yahoo_finance import FINANCIAL_DATA_CACHE_VERSION
 from scoring import score_out_of_10
 from technical import add_indicators, bull_flag_score, fetch_price_history
@@ -69,6 +72,37 @@ def _to_float(value: Any) -> float | None:
         return round(float(value), 2)
     except (TypeError, ValueError):
         return None
+
+
+def _to_int(value: Any) -> int | None:
+    try:
+        return int(float(value))
+    except (TypeError, ValueError):
+        return None
+
+
+def _json_safe(value: Any) -> Any:
+    if value is None:
+        return None
+    if isinstance(value, (str, bool, int)):
+        return value
+    if isinstance(value, float):
+        return _to_float(value)
+    if isinstance(value, (list, tuple)):
+        return [_json_safe(item) for item in value]
+    if isinstance(value, dict):
+        return {str(key): _json_safe(val) for key, val in value.items()}
+    if hasattr(value, "item"):
+        try:
+            return _json_safe(value.item())
+        except Exception:
+            pass
+    if hasattr(value, "isoformat"):
+        try:
+            return value.isoformat()
+        except Exception:
+            pass
+    return str(value)
 
 
 def _text_from_parts(parts: list[Any]) -> str:
@@ -163,6 +197,196 @@ def _build_technical_snapshot(tech: dict) -> dict[str, Any]:
         "technical_score_out_of_10": _to_float(tech.get("score")),
         "bull_flag_detected": bool(tech.get("is_bull_flag")),
     }
+
+
+def _build_recent_news_snapshot(data: dict[str, Any]) -> dict[str, Any]:
+    news_items = []
+    for item in (data.get("ir_news") or [])[:5]:
+        news_items.append(
+            {
+                "title": item.get("title"),
+                "link": item.get("link"),
+                "published_at": item.get("pubDate"),
+            }
+        )
+
+    calendar = data.get("calendar") or {}
+    calendar_snapshot = {}
+    if isinstance(calendar, dict):
+        for key, value in calendar.items():
+            calendar_snapshot[str(key)] = _json_safe(value)
+
+    return {
+        "company_name": data.get("long_name"),
+        "recent_press_releases": news_items,
+        "earnings_calendar": calendar_snapshot,
+    }
+
+
+def _dominant_rating_label(counts: dict[str, int]) -> str | None:
+    if not counts:
+        return None
+    label_map = {
+        "strongBuy": "Strong Buy",
+        "buy": "Buy",
+        "hold": "Hold",
+        "sell": "Sell",
+        "strongSell": "Strong Sell",
+    }
+    best_key = max(counts, key=lambda key: counts[key])
+    if counts.get(best_key, 0) <= 0:
+        return None
+    return label_map.get(best_key, best_key)
+
+
+def _build_analyst_snapshot(data: dict[str, Any]) -> dict[str, Any]:
+    current_price = float(data.get("price", 0) or 0)
+    target_price = data.get("target_price")
+    reco_summary = data.get("reco_summary")
+
+    snapshot: dict[str, Any] = {
+        "current_price": _to_float(current_price),
+        "target_price": _to_float(target_price),
+        "target_upside_pct": _to_percent(((float(target_price) - current_price) / current_price) if target_price and current_price > 0 else None),
+    }
+
+    if hasattr(reco_summary, "empty") and not reco_summary.empty:
+        latest = reco_summary.iloc[0].to_dict()
+        counts = {
+            "strongBuy": int(latest.get("strongBuy", 0) or 0),
+            "buy": int(latest.get("buy", 0) or 0),
+            "hold": int(latest.get("hold", 0) or 0),
+            "sell": int(latest.get("sell", 0) or 0),
+            "strongSell": int(latest.get("strongSell", 0) or 0),
+        }
+        snapshot["ratings_period"] = latest.get("period")
+        snapshot["ratings_breakdown"] = counts
+        snapshot["dominant_rating"] = _dominant_rating_label(counts)
+
+    calendar = data.get("calendar") or {}
+    if isinstance(calendar, dict):
+        snapshot["earnings_calendar"] = {str(key): _json_safe(value) for key, value in calendar.items()}
+
+    return snapshot
+
+
+def _build_insider_snapshot(data: dict[str, Any]) -> dict[str, Any]:
+    insiders = data.get("insiders")
+    if not hasattr(insiders, "empty") or insiders.empty:
+        return {"available": False, "recent_transactions": []}
+
+    snapshot: dict[str, Any] = {"available": True}
+    recent_transactions = []
+    for _, row in insiders.head(8).iterrows():
+        recent_transactions.append(
+            {
+                "date": _json_safe(row.get("Start Date")),
+                "insider": row.get("Insider"),
+                "position": row.get("Position"),
+                "transaction": row.get("Transaction"),
+                "shares": _to_int(row.get("Shares")),
+                "value": _to_float(row.get("Value")),
+                "ownership": row.get("Ownership"),
+            }
+        )
+
+    tx_series = insiders["Transaction"].fillna("").astype(str).str.lower()
+    value_series = pd.to_numeric(insiders["Value"], errors="coerce").fillna(0)
+    snapshot["recent_transactions"] = recent_transactions
+    snapshot["purchase_count"] = int(tx_series.str.contains("purchase").sum())
+    snapshot["sale_count"] = int(tx_series.str.contains("sale").sum())
+    snapshot["award_count"] = int(tx_series.str.contains("award").sum())
+    snapshot["total_purchase_value"] = _to_float(value_series[tx_series.str.contains("purchase")].sum())
+    snapshot["total_sale_value"] = _to_float(value_series[tx_series.str.contains("sale")].sum())
+    return snapshot
+
+
+def _build_short_interest_snapshot(ticker: str) -> dict[str, Any]:
+    df = get_historical_short_interest(ticker)
+    if df is None or df.empty:
+        return {"ticker": ticker, "available": False}
+
+    working = df.copy()
+    for column in ["Short Interest", "Avg Daily Volume", "Days to Cover"]:
+        if column in working.columns:
+            working[column] = pd.to_numeric(
+                working[column].astype(str).str.replace(",", "", regex=False),
+                errors="coerce",
+            )
+
+    working = working.sort_values("Date", ascending=False).reset_index(drop=True)
+    latest = working.iloc[0]
+    previous = working.iloc[1] if len(working) > 1 else None
+
+    snapshot: dict[str, Any] = {
+        "ticker": ticker,
+        "available": True,
+        "latest_settlement_date": _json_safe(latest.get("Date")),
+        "latest_short_interest": _to_int(latest.get("Short Interest")),
+        "latest_avg_daily_volume": _to_int(latest.get("Avg Daily Volume")),
+        "latest_days_to_cover": _to_float(latest.get("Days to Cover")),
+        "recent_history": [],
+    }
+
+    if previous is not None and pd.notna(previous.get("Short Interest")) and float(previous.get("Short Interest") or 0) > 0:
+        latest_short = float(latest.get("Short Interest") or 0)
+        previous_short = float(previous.get("Short Interest") or 0)
+        snapshot["short_interest_change_pct"] = _to_percent((latest_short - previous_short) / previous_short)
+
+    for _, row in working.head(6).iterrows():
+        snapshot["recent_history"].append(
+            {
+                "date": _json_safe(row.get("Date")),
+                "short_interest": _to_int(row.get("Short Interest")),
+                "days_to_cover": _to_float(row.get("Days to Cover")),
+            }
+        )
+
+    return snapshot
+
+
+def _series_history(df: pd.DataFrame, metric_name: str, limit: int) -> list[dict[str, Any]]:
+    if df is None or df.empty or metric_name not in df.index:
+        return []
+    row = df.loc[metric_name]
+    history = []
+    for period, value in row.items():
+        if pd.notna(value):
+            history.append({"period": _json_safe(period), "value": _to_float(value)})
+    return history[-limit:]
+
+
+def _build_sec_snapshot(ticker: str) -> dict[str, Any]:
+    sec_data = get_sec_financials(ticker)
+    if sec_data.get("error"):
+        return {"ticker": ticker, "available": False, "error": sec_data.get("error")}
+
+    annual_df = sec_data.get("inc_a", pd.DataFrame())
+    quarterly_df = sec_data.get("inc_q", pd.DataFrame())
+    snapshot: dict[str, Any] = {"ticker": ticker, "available": True, "source": "SEC EDGAR"}
+
+    latest_annual = {}
+    if hasattr(annual_df, "empty") and not annual_df.empty:
+        latest_year = annual_df.columns[-1]
+        snapshot["latest_annual_period"] = _json_safe(latest_year)
+        for metric in ["Total Revenue", "Net Income", "Operating Income", "Gross Profit", "Cash From Operations", "Free Cash Flow", "EPS"]:
+            if metric in annual_df.index:
+                latest_annual[metric] = _to_float(annual_df.loc[metric, latest_year])
+        snapshot["latest_annual_metrics"] = latest_annual
+        snapshot["annual_revenue_history"] = _series_history(annual_df, "Total Revenue", limit=5)
+        snapshot["annual_net_income_history"] = _series_history(annual_df, "Net Income", limit=5)
+
+    latest_quarter = {}
+    if hasattr(quarterly_df, "empty") and not quarterly_df.empty:
+        latest_period = quarterly_df.columns[-1]
+        snapshot["latest_quarter_period"] = _json_safe(latest_period)
+        for metric in ["Total Revenue", "Net Income", "Operating Income", "Cash From Operations", "Free Cash Flow", "EPS"]:
+            if metric in quarterly_df.index:
+                latest_quarter[metric] = _to_float(quarterly_df.loc[metric, latest_period])
+        snapshot["latest_quarter_metrics"] = latest_quarter
+        snapshot["quarterly_revenue_history"] = _series_history(quarterly_df, "Total Revenue", limit=4)
+
+    return snapshot
 
 
 def _compute_stock_context(ticker: str) -> dict[str, Any]:
@@ -318,6 +542,10 @@ def _build_agent(metrics: dict, bench: dict, scores: dict, tech: dict):
     peer_snapshot = _build_peer_snapshot(bench)
     technical_snapshot = _build_technical_snapshot(tech)
     current_ticker = str(metrics.get("ticker", "")).upper()
+    current_data = get_financial_data_secure(current_ticker, cache_version=FINANCIAL_DATA_CACHE_VERSION)
+    news_snapshot = _build_recent_news_snapshot(current_data)
+    analyst_snapshot = _build_analyst_snapshot(current_data)
+    insider_snapshot = _build_insider_snapshot(current_data)
 
     def get_company_snapshot() -> dict[str, Any]:
         """Returns the core company valuation snapshot for the current Streamlit analysis."""
@@ -342,6 +570,31 @@ def _build_agent(metrics: dict, bench: dict, scores: dict, tech: dict):
             "peer": peer_snapshot,
             "technical": technical_snapshot,
         }
+
+    def get_recent_news_snapshot() -> dict[str, Any]:
+        """Returns recent IR headlines and earnings-calendar catalysts for the selected stock."""
+
+        return news_snapshot
+
+    def get_analyst_market_snapshot() -> dict[str, Any]:
+        """Returns target-price and Wall Street ratings information for the selected stock."""
+
+        return analyst_snapshot
+
+    def get_insider_activity_snapshot() -> dict[str, Any]:
+        """Returns recent insider transactions and a simple buy/sell summary."""
+
+        return insider_snapshot
+
+    def get_short_interest_snapshot() -> dict[str, Any]:
+        """Returns recent short-interest history and days-to-cover for the selected stock."""
+
+        return _build_short_interest_snapshot(current_ticker)
+
+    def get_sec_filing_snapshot() -> dict[str, Any]:
+        """Returns summarized official SEC filing data for the selected stock."""
+
+        return _build_sec_snapshot(current_ticker)
 
     def compare_against_other_stock(target: str) -> dict[str, Any]:
         """Compare the selected stock against another ticker or company name, for example DUOL or Duolingo."""
@@ -427,6 +680,49 @@ Do not invent data. If the comparison tool returns an error, explain it plainly.
         tools=[get_company_snapshot, get_peer_snapshot, get_technical_snapshot, compare_against_other_stock],
     )
 
+    news_agent = LlmAgent(
+        name="news_agent",
+        model=MODEL_NAME,
+        description="Handles recent news, investor-relations headlines, earnings dates and near-term catalysts.",
+        instruction="""
+You are the recent-news and catalysts analyst.
+Answer in French.
+Use `get_recent_news_snapshot` and `get_analyst_market_snapshot`.
+Summarize the most recent available headlines, earnings date information and likely near-term catalysts.
+Be explicit about dates.
+If the available feed looks like press releases or IR news rather than a full newswire, say so clearly.
+""",
+        tools=[get_recent_news_snapshot, get_analyst_market_snapshot],
+    )
+
+    market_signal_agent = LlmAgent(
+        name="market_signal_agent",
+        model=MODEL_NAME,
+        description="Handles analyst ratings, target prices, insider activity and short-interest questions.",
+        instruction="""
+You are the market-signals analyst.
+Answer in French.
+Use `get_analyst_market_snapshot`, `get_insider_activity_snapshot` and `get_short_interest_snapshot`.
+Explain what analyst sentiment, insider transactions and short-interest signals suggest, but avoid overclaiming.
+If the data is incomplete, say so plainly.
+""",
+        tools=[get_analyst_market_snapshot, get_insider_activity_snapshot, get_short_interest_snapshot],
+    )
+
+    filings_agent = LlmAgent(
+        name="filings_agent",
+        model=MODEL_NAME,
+        description="Handles official SEC filing questions and accounting-quality discussions.",
+        instruction="""
+You are the SEC filings and accounting-quality analyst.
+Answer in French.
+Use `get_sec_filing_snapshot` and `get_company_snapshot`.
+Focus on official filed numbers, revenue trend, profitability trend, cash-flow quality and notable changes in recent quarters or years.
+When the user asks for 'official' numbers, rely on the SEC snapshot first.
+""",
+        tools=[get_sec_filing_snapshot, get_company_snapshot],
+    )
+
     risk_agent = LlmAgent(
         name="risk_agent",
         model=MODEL_NAME,
@@ -453,13 +749,26 @@ Available specialist agents:
 - `technical_agent` for momentum and trading profile
 - `peer_agent` for benchmark comparison
 - `comparison_agent` for direct stock-vs-stock comparisons
+- `news_agent` for recent news, catalysts and earnings dates
+- `market_signal_agent` for analysts, insiders and short interest
+- `filings_agent` for official SEC filings and accounting quality
 - `risk_agent` for investor fit and downside
 
-You also have `get_full_snapshot` for quick factual answers and `compare_against_other_stock` for comparing the selected stock with another ticker or company name.
+You also have direct tools for quick factual answers:
+- `get_full_snapshot`
+- `compare_against_other_stock`
+- `get_recent_news_snapshot`
+- `get_analyst_market_snapshot`
+- `get_insider_activity_snapshot`
+- `get_short_interest_snapshot`
+- `get_sec_filing_snapshot`
 
 Rules:
 - For simple factual questions, you may use `get_full_snapshot`.
 - If the user wants to compare the selected stock with another stock or company, call `comparison_agent` or `compare_against_other_stock`.
+- If the user asks about recent news, latest updates, catalysts, press releases or the next earnings date, call `news_agent`.
+- If the user asks about analysts, price targets, insider trades, short interest or market sentiment, call `market_signal_agent`.
+- If the user asks for official filed numbers, SEC filings, accounting quality or multi-year reported trends, call `filings_agent`.
 - For deeper questions, recommendations, risks, buy/sell opinions, or broad summaries, call one or more specialist agents and then synthesize.
 - If the user asks whether the stock looks attractive, mention both upside and risk.
 - If the user asks follow-up questions, use the conversation context.
@@ -469,10 +778,18 @@ Rules:
         tools=[
             get_full_snapshot,
             compare_against_other_stock,
+            get_recent_news_snapshot,
+            get_analyst_market_snapshot,
+            get_insider_activity_snapshot,
+            get_short_interest_snapshot,
+            get_sec_filing_snapshot,
             agent_tool.AgentTool(agent=fundamental_agent),
             agent_tool.AgentTool(agent=technical_agent),
             agent_tool.AgentTool(agent=peer_agent),
             agent_tool.AgentTool(agent=comparison_agent),
+            agent_tool.AgentTool(agent=news_agent),
+            agent_tool.AgentTool(agent=market_signal_agent),
+            agent_tool.AgentTool(agent=filings_agent),
             agent_tool.AgentTool(agent=risk_agent),
         ],
         output_key="last_answer",
