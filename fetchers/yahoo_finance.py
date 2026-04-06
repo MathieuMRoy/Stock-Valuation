@@ -20,6 +20,40 @@ def _safe_df(x) -> pd.DataFrame:
     return pd.DataFrame()
 
 
+def _normalize_metric_label(value: str) -> str:
+    """Normalize row labels so exact metric matching works despite spacing differences."""
+    return re.sub(r"[^a-z0-9]+", "", str(value).lower())
+
+
+def _find_matching_index(df: pd.DataFrame, search_terms: list) -> str | None:
+    """Find the best-matching row label, preferring exact normalized matches over broad contains checks."""
+    if df is None or df.empty:
+        return None
+
+    normalized_terms = [_normalize_metric_label(term) for term in search_terms if term]
+    if not normalized_terms:
+        return None
+
+    normalized_index = {idx: _normalize_metric_label(idx) for idx in df.index}
+
+    for term in normalized_terms:
+        for idx, normalized_idx in normalized_index.items():
+            if normalized_idx == term:
+                return idx
+
+    candidates: list[tuple[int, int, str]] = []
+    for idx, normalized_idx in normalized_index.items():
+        if any(term in normalized_idx for term in normalized_terms):
+            best_gap = min(len(normalized_idx) - len(term) for term in normalized_terms if term in normalized_idx)
+            candidates.append((best_gap, len(normalized_idx), idx))
+
+    if not candidates:
+        return None
+
+    candidates.sort(key=lambda item: (item[0], item[1], str(item[2])))
+    return candidates[0][2]
+
+
 
 def _scrape_yahoo_price(ticker: str) -> float:
     """Fallback: Scrape price from Yahoo Finance HTML"""
@@ -107,14 +141,10 @@ def get_growth_manual(df: pd.DataFrame, keys: list) -> float:
     try:
         if df is None or df.empty:
             return 0.0
-        row = None
-        for key in keys:
-            matches = df.index[df.index.astype(str).str.contains(key, case=False, regex=True)]
-            if not matches.empty:
-                row = df.loc[matches[0]]
-                break
-        if row is None:
+        matched_idx = _find_matching_index(df, keys)
+        if matched_idx is None:
             return 0.0
+        row = df.loc[matched_idx]
         vals = [v for v in row if isinstance(v, (int, float)) and not pd.isna(v)]
         if len(vals) >= 5 and vals[4] != 0:
             return float((vals[0] - vals[4]) / abs(vals[4]))
@@ -129,16 +159,15 @@ def get_item_safe(df: pd.DataFrame, search_terms: list) -> float:
     """Safely get an item from a DataFrame by searching for matching index terms"""
     if df is None or df.empty:
         return 0.0
-    for term in search_terms:
-        matches = df.index[df.index.astype(str).str.contains(term, case=False, regex=True)]
-        if not matches.empty:
-            try:
-                val = df.loc[matches[0]]
-                if isinstance(val, pd.Series):
-                    return float(val.iloc[0])
-                return float(val)
-            except:
-                return 0.0
+    matched_idx = _find_matching_index(df, search_terms)
+    if matched_idx is not None:
+        try:
+            val = df.loc[matched_idx]
+            if isinstance(val, pd.Series):
+                return float(val.iloc[0])
+            return float(val)
+        except:
+            return 0.0
     return 0.0
 
 
@@ -146,18 +175,17 @@ def get_ttm_or_latest(df: pd.DataFrame, keys_list: list) -> float:
     """Get TTM (trailing twelve months) value or latest available"""
     if df is None or df.empty:
         return 0.0
-    for key in keys_list:
-        matches = df.index[df.index.astype(str).str.contains(key, case=False, regex=True)]
-        if not matches.empty:
-            row = df.loc[matches[0]]
-            vals = [v for v in row if isinstance(v, (int, float)) and not pd.isna(v)]
-            if not vals:
-                return 0.0
-            if len(vals) >= 4:
-                return float(sum(vals[:4]))  # Sum 4 quarters
-            if len(vals) == 1:
-                return float(vals[0]) * 4  # Estimate annual if only 1 qtr
-            return float(vals[0])
+    matched_idx = _find_matching_index(df, keys_list)
+    if matched_idx is not None:
+        row = df.loc[matched_idx]
+        vals = [v for v in row if isinstance(v, (int, float)) and not pd.isna(v)]
+        if not vals:
+            return 0.0
+        if len(vals) >= 4:
+            return float(sum(vals[:4]))  # Sum 4 quarters
+        if len(vals) == 1:
+            return float(vals[0]) * 4  # Estimate annual if only 1 qtr
+        return float(vals[0])
     return 0.0
 
 
@@ -165,13 +193,12 @@ def _latest_matching_value(df: pd.DataFrame, keys_list: list) -> float:
     """Get the latest available value from a row matching one of the provided labels."""
     if df is None or df.empty:
         return 0.0
-    for key in keys_list:
-        matches = df.index[df.index.astype(str).str.contains(key, case=False, regex=True)]
-        if not matches.empty:
-            row = df.loc[matches[0]]
-            vals = [v for v in row if isinstance(v, (int, float)) and not pd.isna(v)]
-            if vals:
-                return float(vals[0])
+    matched_idx = _find_matching_index(df, keys_list)
+    if matched_idx is not None:
+        row = df.loc[matched_idx]
+        vals = [v for v in row if isinstance(v, (int, float)) and not pd.isna(v)]
+        if vals:
+            return float(vals[0])
     return 0.0
 
 
