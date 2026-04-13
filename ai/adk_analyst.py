@@ -11,10 +11,12 @@ import json
 import os
 import re
 import threading
+import unicodedata
 import uuid
 from typing import Any, Callable
 
 import pandas as pd
+from google import genai
 from google.adk.agents import LlmAgent
 from google.adk.runners import Runner
 from google.adk.sessions import InMemorySessionService
@@ -33,7 +35,7 @@ from technical import add_indicators, bull_flag_score, fetch_price_history
 MODEL_NAME = "gemini-2.5-flash"
 APP_NAME = "stock_valuation_multi_agent"
 SUPERVISOR_AGENT_NAME = "stock_chat_supervisor"
-CHAT_ENGINE_VERSION = "2026-04-13-local-compare-v1"
+CHAT_ENGINE_VERSION = "2026-04-13-specialist-ai-v1"
 
 AGENT_DISPLAY_NAMES = {
     SUPERVISOR_AGENT_NAME: "Superviseur",
@@ -465,14 +467,65 @@ def _extract_text_from_session_events(session: Any) -> str | None:
     return None
 
 
+def _generate_specialist_ai_response(
+    *,
+    specialist_name: str,
+    user_message: str,
+    context_payload: dict[str, Any],
+    system_instruction: str,
+) -> str | None:
+    """Generate a stock-specific answer with a dedicated Gemini specialist prompt."""
+    try:
+        api_key = _resolve_api_key(None)
+        if not api_key:
+            return None
+
+        os.environ["GOOGLE_API_KEY"] = api_key
+        client = genai.Client()
+        prompt = (
+            f"Question utilisateur:\n{user_message}\n\n"
+            f"Contexte structure pour {specialist_name}:\n"
+            f"{json.dumps(_json_safe(context_payload), ensure_ascii=False, indent=2)}\n\n"
+            "Reponds en francais, de facon personnalisee au titre et a la question. "
+            "Utilise les chiffres utiles du contexte, evite les phrases generiques, "
+            "dis quand une donnee est absente, et n'invente rien."
+        )
+        response = client.models.generate_content(
+            model=MODEL_NAME,
+            contents=prompt,
+            config=types.GenerateContentConfig(
+                system_instruction=system_instruction,
+                temperature=0.35,
+                max_output_tokens=700,
+            ),
+        )
+        text = getattr(response, "text", None)
+        if text and str(text).strip():
+            return str(text).strip()
+        candidates = getattr(response, "candidates", None) or []
+        for candidate in candidates:
+            candidate_text = _text_from_parts(getattr(getattr(candidate, "content", None), "parts", None) or [])
+            if candidate_text:
+                return candidate_text.strip()
+        return None
+    except Exception:
+        return None
+
+
+def _intent_text(value: str) -> str:
+    normalized = unicodedata.normalize("NFKD", value or "")
+    ascii_text = normalized.encode("ascii", "ignore").decode("ascii")
+    return ascii_text.lower()
+
+
 def _looks_like_comparison_request(user_message: str) -> bool:
-    message = (user_message or "").lower()
+    message = _intent_text(user_message)
     markers = ["compare", "compar", "versus", "vs", "avec", "contre", "entre "]
     return any(marker in message for marker in markers)
 
 
 def _looks_like_news_request(user_message: str) -> bool:
-    message = (user_message or "").lower()
+    message = _intent_text(user_message)
     markers = [
         "actualite",
         "actualité",
@@ -490,31 +543,31 @@ def _looks_like_news_request(user_message: str) -> bool:
 
 
 def _looks_like_market_signal_request(user_message: str) -> bool:
-    message = (user_message or "").lower()
+    message = _intent_text(user_message)
     markers = ["analyst", "analyste", "target", "price target", "insider", "short interest", "sentiment", "rating"]
     return any(marker in message for marker in markers)
 
 
 def _looks_like_filing_request(user_message: str) -> bool:
-    message = (user_message or "").lower()
+    message = _intent_text(user_message)
     markers = ["sec", "filing", "10-k", "10-q", "officiel", "official", "reported", "reporté", "etats financiers"]
     return any(marker in message for marker in markers)
 
 
 def _looks_like_technical_request(user_message: str) -> bool:
-    message = (user_message or "").lower()
+    message = _intent_text(user_message)
     markers = ["technique", "technical", "chart", "momentum", "rsi", "bull flag", "setup", "trend", "tendance"]
     return any(marker in message for marker in markers)
 
 
 def _looks_like_risk_request(user_message: str) -> bool:
-    message = (user_message or "").lower()
+    message = _intent_text(user_message)
     markers = ["risque", "risk", "safe", "defensif", "profil", "downside", "reward", "robuste", "resilient"]
     return any(marker in message for marker in markers)
 
 
 def _looks_like_fundamental_request(user_message: str) -> bool:
-    message = (user_message or "").lower()
+    message = _intent_text(user_message)
     markers = ["valorisation", "valuation", "cheap", "chere", "cher", "pe", "p/e", "ps", "p/s", "fcf", "growth", "croissance"]
     return any(marker in message for marker in markers)
 
@@ -562,8 +615,8 @@ def _build_local_fallback_context(metrics: dict, bench: dict, scores: dict, tech
     }
 
 
-def _build_local_news_response(chat_context: dict[str, Any]) -> tuple[str | None, dict[str, Any] | None]:
-    """Generate a deterministic news answer for the current ticker."""
+def _build_local_news_response(chat_context: dict[str, Any], user_message: str) -> tuple[str | None, dict[str, Any] | None]:
+    """Generate a personalized news answer for the current ticker."""
     fallback_context = chat_context.get("fallback_context") or {}
     current_ticker = fallback_context.get("ticker") or chat_context.get("current_ticker")
     if not current_ticker:
@@ -573,6 +626,29 @@ def _build_local_news_response(chat_context: dict[str, Any]) -> tuple[str | None
         current_data = get_financial_data_secure(current_ticker, cache_version=FINANCIAL_DATA_CACHE_VERSION)
         news_snapshot = _build_recent_news_snapshot(current_data)
         company_name = news_snapshot.get("company_name") or fallback_context.get("company_name") or current_ticker
+        trace = _build_agent_trace(["news_agent", SUPERVISOR_AGENT_NAME], SUPERVISOR_AGENT_NAME)
+        ai_text = _generate_specialist_ai_response(
+            specialist_name="news_agent",
+            user_message=user_message,
+            context_payload={
+                "ticker": current_ticker,
+                "company_name": company_name,
+                "as_of_date": date.today().isoformat(),
+                "question": user_message,
+                "news_snapshot": news_snapshot,
+                "company_snapshot": fallback_context.get("company"),
+                "source_refs": fallback_context.get("sources") or _build_source_refs(current_ticker, current_data),
+            },
+            system_instruction=(
+                "Tu es le news_agent d'une application finance. Reponds en francais a la question exacte de l'utilisateur. "
+                "Priorise les informations les plus recentes et datees. Distingue bien les news de marche, les communiques "
+                "et le contexte earnings. Si l'actualite est maigre ou pas tres recente, dis-le franchement. "
+                "Evite les formulations generiques et adapte la reponse a l'entreprise demandee. "
+                "Termine par une section `Sources` en puces markdown si des URLs sont disponibles."
+            ),
+        )
+        if ai_text:
+            return ai_text, trace
 
         lines = [f"Voici l'actualite recente disponible pour {company_name} ({current_ticker})."]
         market_news = news_snapshot.get("recent_market_news") or []
@@ -615,14 +691,13 @@ def _build_local_news_response(chat_context: dict[str, Any]) -> tuple[str | None
         if source_lines:
             lines.append("Sources:\n" + "\n".join(source_lines[:4]))
 
-        trace = _build_agent_trace(["news_agent", SUPERVISOR_AGENT_NAME], SUPERVISOR_AGENT_NAME)
         return "\n\n".join(lines), trace
     except Exception as exc:
         trace = _build_agent_trace(["news_agent"], "news_agent")
         return f"Je n'ai pas pu construire le resume d'actualite localement pour {current_ticker}: {exc}", trace
 
 
-def _build_local_market_signal_response(chat_context: dict[str, Any]) -> tuple[str | None, dict[str, Any] | None]:
+def _build_local_market_signal_response(chat_context: dict[str, Any], user_message: str) -> tuple[str | None, dict[str, Any] | None]:
     fallback_context = chat_context.get("fallback_context") or {}
     current_ticker = fallback_context.get("ticker") or chat_context.get("current_ticker")
     if not current_ticker:
@@ -633,6 +708,27 @@ def _build_local_market_signal_response(chat_context: dict[str, Any]) -> tuple[s
         analyst_snapshot = _build_analyst_snapshot(current_data)
         insider_snapshot = _build_insider_snapshot(current_data)
         short_snapshot = _build_short_interest_snapshot(current_ticker)
+        trace = _build_agent_trace(["market_signal_agent", SUPERVISOR_AGENT_NAME], SUPERVISOR_AGENT_NAME)
+        ai_text = _generate_specialist_ai_response(
+            specialist_name="market_signal_agent",
+            user_message=user_message,
+            context_payload={
+                "ticker": current_ticker,
+                "question": user_message,
+                "company_snapshot": fallback_context.get("company"),
+                "analyst_snapshot": analyst_snapshot,
+                "insider_snapshot": insider_snapshot,
+                "short_interest_snapshot": short_snapshot,
+                "source_refs": fallback_context.get("sources") or _build_source_refs(current_ticker, current_data),
+            },
+            system_instruction=(
+                "Tu es le market_signal_agent. Reponds en francais a la question exacte de l'utilisateur. "
+                "Interprete les signaux analystes, insiders et short interest sans sur-vendre la conclusion. "
+                "Explique ce que les donnees suggerent pour ce titre precis et signale clairement les zones manquantes."
+            ),
+        )
+        if ai_text:
+            return ai_text, trace
 
         lines = [f"Voici les signaux de marche disponibles pour {current_ticker}."]
         dominant_rating = analyst_snapshot.get("dominant_rating")
@@ -653,14 +749,13 @@ def _build_local_market_signal_response(chat_context: dict[str, Any]) -> tuple[s
                 f"Short interest: { _format_compact_number(short_snapshot.get('latest_short_interest')) } actions a la derniere date, days to cover {short_snapshot.get('latest_days_to_cover', 'N/A')}."
             )
 
-        trace = _build_agent_trace(["market_signal_agent", SUPERVISOR_AGENT_NAME], SUPERVISOR_AGENT_NAME)
         return "\n\n".join(lines), trace
     except Exception as exc:
         trace = _build_agent_trace(["market_signal_agent"], "market_signal_agent")
         return f"Je n'ai pas pu construire le resume de signaux de marche pour {current_ticker}: {exc}", trace
 
 
-def _build_local_filings_response(chat_context: dict[str, Any]) -> tuple[str | None, dict[str, Any] | None]:
+def _build_local_filings_response(chat_context: dict[str, Any], user_message: str) -> tuple[str | None, dict[str, Any] | None]:
     fallback_context = chat_context.get("fallback_context") or {}
     current_ticker = fallback_context.get("ticker") or chat_context.get("current_ticker")
     if not current_ticker:
@@ -668,9 +763,29 @@ def _build_local_filings_response(chat_context: dict[str, Any]) -> tuple[str | N
 
     try:
         snapshot = _build_sec_snapshot(current_ticker)
+        trace = _build_agent_trace(["filings_agent", SUPERVISOR_AGENT_NAME], SUPERVISOR_AGENT_NAME)
         if not snapshot.get("available"):
             message = snapshot.get("error") or f"Les donnees SEC officielles ne sont pas disponibles pour {current_ticker}."
             return message, _build_agent_trace(["filings_agent"], "filings_agent")
+
+        ai_text = _generate_specialist_ai_response(
+            specialist_name="filings_agent",
+            user_message=user_message,
+            context_payload={
+                "ticker": current_ticker,
+                "question": user_message,
+                "company_snapshot": fallback_context.get("company"),
+                "sec_snapshot": snapshot,
+                "source_refs": fallback_context.get("sources"),
+            },
+            system_instruction=(
+                "Tu es le filings_agent. Reponds en francais en t'appuyant d'abord sur les chiffres officiels SEC fournis. "
+                "Adapte la reponse a la question posee: tendance des revenus, qualite des profits, evolution recente, ou credibilite du bilan. "
+                "Mentionne les periodes exactes quand elles existent, et n'invente pas de donnees."
+            ),
+        )
+        if ai_text:
+            return ai_text, trace
 
         latest_annual = snapshot.get("latest_annual_metrics") or {}
         latest_quarter = snapshot.get("latest_quarter_metrics") or {}
@@ -684,20 +799,39 @@ def _build_local_filings_response(chat_context: dict[str, Any]) -> tuple[str | N
                 f"Trimestriel ({snapshot.get('latest_quarter_period', 'N/A')}): revenus { _format_compact_number(latest_quarter.get('Total Revenue'), '$') }, net income { _format_compact_number(latest_quarter.get('Net Income'), '$') }."
             )
         lines.append(f"Source principale: {snapshot.get('source', 'SEC EDGAR')}.")
-        trace = _build_agent_trace(["filings_agent", SUPERVISOR_AGENT_NAME], SUPERVISOR_AGENT_NAME)
         return "\n\n".join(lines), trace
     except Exception as exc:
         trace = _build_agent_trace(["filings_agent"], "filings_agent")
         return f"Je n'ai pas pu construire le resume SEC pour {current_ticker}: {exc}", trace
 
 
-def _build_local_technical_response(chat_context: dict[str, Any]) -> tuple[str | None, dict[str, Any] | None]:
+def _build_local_technical_response(chat_context: dict[str, Any], user_message: str) -> tuple[str | None, dict[str, Any] | None]:
     fallback_context = chat_context.get("fallback_context") or {}
     technical = fallback_context.get("technical") or {}
     company = fallback_context.get("company") or {}
     ticker = company.get("ticker") or fallback_context.get("ticker")
     if not ticker:
         return None, None
+
+    trace = _build_agent_trace(["technical_agent", SUPERVISOR_AGENT_NAME], SUPERVISOR_AGENT_NAME)
+    ai_text = _generate_specialist_ai_response(
+        specialist_name="technical_agent",
+        user_message=user_message,
+        context_payload={
+            "ticker": ticker,
+            "question": user_message,
+            "company_snapshot": company,
+            "technical_snapshot": technical,
+            "investor_objective": chat_context.get("investor_objective"),
+        },
+        system_instruction=(
+            "Tu es le technical_agent. Reponds en francais et adapte la lecture technique a la question precise de l'utilisateur. "
+            "Explique le setup, le momentum et le risque de court terme sans transformer cela en conseil ferme. "
+            "Utilise les chiffres techniques fournis et dis quand le signal est faible ou incomplet."
+        ),
+    )
+    if ai_text:
+        return ai_text, trace
 
     score = technical.get("technical_score_out_of_10", "N/A")
     bull_flag = "oui" if technical.get("bull_flag_detected") else "non"
@@ -706,17 +840,39 @@ def _build_local_technical_response(chat_context: dict[str, Any]) -> tuple[str |
         f"Bull flag detecte: {bull_flag}. "
         "A utiliser surtout comme lecture de momentum / setup, pas comme these d'investissement complete."
     )
-    trace = _build_agent_trace(["technical_agent", SUPERVISOR_AGENT_NAME], SUPERVISOR_AGENT_NAME)
     return text, trace
 
 
-def _build_local_risk_response(chat_context: dict[str, Any]) -> tuple[str | None, dict[str, Any] | None]:
+def _build_local_risk_response(chat_context: dict[str, Any], user_message: str) -> tuple[str | None, dict[str, Any] | None]:
     fallback_context = chat_context.get("fallback_context") or {}
     company = fallback_context.get("company") or {}
     technical = fallback_context.get("technical") or {}
+    peer = fallback_context.get("peer") or {}
     ticker = company.get("ticker") or fallback_context.get("ticker")
     if not ticker:
         return None, None
+
+    trace = _build_agent_trace(["risk_agent", SUPERVISOR_AGENT_NAME], SUPERVISOR_AGENT_NAME)
+    ai_text = _generate_specialist_ai_response(
+        specialist_name="risk_agent",
+        user_message=user_message,
+        context_payload={
+            "ticker": ticker,
+            "question": user_message,
+            "company_snapshot": company,
+            "technical_snapshot": technical,
+            "peer_snapshot": peer,
+            "investor_objective": chat_context.get("investor_objective"),
+            "business_profile": _business_model_sentence(company),
+        },
+        system_instruction=(
+            "Tu es le risk_agent. Reponds en francais de maniere personnalisee au titre et a la question. "
+            "Explique les principaux risques, les facteurs de resilience et le type d'investisseur auquel le dossier correspond. "
+            "Si l'entreprise est financiere, bancaire, energetique ou cyclique, adapte clairement le raisonnement."
+        ),
+    )
+    if ai_text:
+        return ai_text, trace
 
     lines = [
         f"Lecture risque pour {ticker}: {_format_balance_sheet_profile(company)}.",
@@ -726,11 +882,10 @@ def _build_local_risk_response(chat_context: dict[str, Any]) -> tuple[str | None
         lines.append("Comme il s'agit d'un titre financier, il faut surtout surveiller la qualite du capital et du credit plutot que la dette nette.")
     else:
         lines.append("Le point cle est de savoir si le bilan et la generation de cash compensent le risque de valorisation ou de cyclicite.")
-    trace = _build_agent_trace(["risk_agent", SUPERVISOR_AGENT_NAME], SUPERVISOR_AGENT_NAME)
     return "\n\n".join(lines), trace
 
 
-def _build_local_fundamental_response(chat_context: dict[str, Any]) -> tuple[str | None, dict[str, Any] | None]:
+def _build_local_fundamental_response(chat_context: dict[str, Any], user_message: str) -> tuple[str | None, dict[str, Any] | None]:
     fallback_context = chat_context.get("fallback_context") or {}
     company = fallback_context.get("company") or {}
     peer = fallback_context.get("peer") or {}
@@ -738,32 +893,53 @@ def _build_local_fundamental_response(chat_context: dict[str, Any]) -> tuple[str
     if not ticker:
         return None, None
 
+    trace = _build_agent_trace(["fundamental_agent", SUPERVISOR_AGENT_NAME], SUPERVISOR_AGENT_NAME)
+    ai_text = _generate_specialist_ai_response(
+        specialist_name="fundamental_agent",
+        user_message=user_message,
+        context_payload={
+            "ticker": ticker,
+            "question": user_message,
+            "company_snapshot": company,
+            "peer_snapshot": peer,
+            "investor_objective": chat_context.get("investor_objective"),
+            "business_profile": _business_model_sentence(company),
+            "source_refs": fallback_context.get("sources"),
+        },
+        system_instruction=(
+            "Tu es le fundamental_agent. Reponds en francais en adaptant la reponse a la question exacte de l'utilisateur. "
+            "Utilise les multiples, la croissance, le cash-flow, le bilan et le benchmark fournis. "
+            "Ne recopie pas toujours le meme plan: choisis l'angle le plus pertinent pour ce titre et cette question."
+        ),
+    )
+    if ai_text:
+        return ai_text, trace
+
     lines = [
         f"Lecture fondamentale pour {ticker}: trailing P/E {_format_ratio(company.get('pe_ratio'))}, forward P/E {_format_ratio(company.get('forward_pe_ratio'))}, P/S {_format_ratio(company.get('ps_ratio'))}.",
         f"Croissance: ventes {_format_pct(company.get('sales_growth_pct'))}, EPS {_format_pct(company.get('eps_growth_pct'))}.",
         f"Benchmark: {peer.get('benchmark_name', 'N/A')} avec cible P/E {_format_ratio(peer.get('peer_target_pe'))} et cible P/S {_format_ratio(peer.get('peer_target_ps'))}.",
         f"Score value {company.get('valuation_score', 'N/A')}/10, score croissance {company.get('growth_score', 'N/A')}/10.",
     ]
-    trace = _build_agent_trace(["fundamental_agent", SUPERVISOR_AGENT_NAME], SUPERVISOR_AGENT_NAME)
     return "\n\n".join(lines), trace
 
 
 def _route_local_agent_response(chat_context: dict[str, Any], user_message: str) -> tuple[str | None, dict[str, Any] | None]:
-    """Route common prompts to deterministic specialist handlers before ADK."""
+    """Route common prompts to specialist AI handlers before ADK."""
     if _looks_like_comparison_request(user_message):
         return _build_local_comparison_response(chat_context, user_message)
     if _looks_like_news_request(user_message):
-        return _build_local_news_response(chat_context)
+        return _build_local_news_response(chat_context, user_message)
     if _looks_like_market_signal_request(user_message):
-        return _build_local_market_signal_response(chat_context)
+        return _build_local_market_signal_response(chat_context, user_message)
     if _looks_like_filing_request(user_message):
-        return _build_local_filings_response(chat_context)
+        return _build_local_filings_response(chat_context, user_message)
     if _looks_like_technical_request(user_message):
-        return _build_local_technical_response(chat_context)
+        return _build_local_technical_response(chat_context, user_message)
     if _looks_like_risk_request(user_message):
-        return _build_local_risk_response(chat_context)
+        return _build_local_risk_response(chat_context, user_message)
     if _looks_like_fundamental_request(user_message):
-        return _build_local_fundamental_response(chat_context)
+        return _build_local_fundamental_response(chat_context, user_message)
     return None, None
 
 
@@ -792,7 +968,7 @@ def _build_local_generic_response(chat_context: dict[str, Any]) -> tuple[str | N
 
 
 def _build_local_comparison_response(chat_context: dict[str, Any], user_message: str) -> tuple[str | None, dict[str, Any] | None]:
-    """Generate a deterministic comparison answer when ADK fails to synthesize one."""
+    """Generate a personalized comparison answer even when ADK fails to synthesize one."""
     fallback_context = chat_context.get("fallback_context") or {}
     current_ticker = fallback_context.get("ticker") or chat_context.get("current_ticker")
     if not current_ticker or not _looks_like_comparison_request(user_message):
@@ -824,10 +1000,33 @@ def _build_local_comparison_response(chat_context: dict[str, Any], user_message:
                 other_context,
             ),
         }
+        trace = _build_agent_trace(["comparison_agent", SUPERVISOR_AGENT_NAME], SUPERVISOR_AGENT_NAME)
+        comparison_payload = payload.get("comparison") or {}
+        comparison_context = comparison_payload.get("comparison_context") or {}
+        comparison_context["current_business_profile"] = _business_model_sentence(fallback_context.get("company") or {})
+        comparison_context["other_business_profile"] = _business_model_sentence(other_context.get("company") or {})
+        ai_text = _generate_specialist_ai_response(
+            specialist_name="comparison_agent",
+            user_message=user_message,
+            context_payload={
+                "as_of_date": date.today().isoformat(),
+                "question": user_message,
+                "requested_target": target_ticker,
+                "comparison": comparison_payload,
+            },
+            system_instruction=(
+                "Tu es le comparison_agent. Reponds en francais et adapte la comparaison a la question exacte de l'utilisateur. "
+                "Explique ce que fait chaque entreprise, si la comparaison est intra- ou intersectorielle, et ce que cela change. "
+                "Ne donne pas un gagnant universel dans une comparaison intersectorielle sans conditions. "
+                "Separe clairement les axes croissance, valorisation, bilan/resilience, et conclusion selon l'objectif actif. "
+                "Evite toute formulation repetitive ou generique. Termine par une section `Sources` si des liens sont disponibles."
+            ),
+        )
+        if ai_text:
+            return ai_text, trace
         text = _comparison_tool_response_to_text(payload)
         if not text:
             return None, None
-        trace = _build_agent_trace(["comparison_agent", SUPERVISOR_AGENT_NAME], SUPERVISOR_AGENT_NAME)
         return text, trace
     except Exception as exc:
         return f"Je n'ai pas pu construire la comparaison locale avec {target_ticker}: {exc}", _build_agent_trace(["comparison_agent"], "comparison_agent")
