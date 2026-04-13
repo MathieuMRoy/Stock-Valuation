@@ -148,7 +148,134 @@ def _format_pct(value: Any) -> str:
 
 def _format_ratio(value: Any) -> str:
     number = _to_float(value)
-    return f"{number:.2f}x" if number is not None else "N/A"
+    if number is None or number <= 0:
+        return "N/A"
+    return f"{number:.2f}x"
+
+
+def _clean_business_model_hint(hint: str | None, sector_name: str | None = None, benchmark_name: str | None = None) -> str | None:
+    raw_hint = (hint or "").strip()
+    invalid_tokens = {"default", "broader market", "n/a", "unknown"}
+    combined = " ".join([raw_hint.lower(), str(sector_name or "").lower(), str(benchmark_name or "").lower()])
+    if not raw_hint:
+        return None
+    if any(token in combined for token in invalid_tokens):
+        return None
+    return raw_hint
+
+
+def _business_model_sentence(company: dict[str, Any]) -> str:
+    hint = _clean_business_model_hint(
+        company.get("business_model_hint"),
+        company.get("sector_name"),
+        company.get("benchmark_name"),
+    )
+    name = company.get("company_name") or company.get("ticker") or "Cette entreprise"
+    if hint:
+        return f"{name} est plutot {hint}."
+    sector_name = company.get("sector_name")
+    if sector_name and str(sector_name).lower() != "default":
+        return f"{name} opere surtout dans le secteur {sector_name}."
+    return f"{name} a un profil d'activite different qu'il faut interpreter avec prudence dans une comparaison intersectorielle."
+
+
+def _format_balance_sheet_profile(company: dict[str, Any]) -> str:
+    if company.get("is_financial"):
+        return f"profil financier/reglemente, Piotroski {company.get('piotroski_score', 'N/A')}"
+
+    net_cash = _to_float(company.get("net_cash"))
+    if net_cash is None:
+        balance_label = "bilan non disponible"
+    elif net_cash > 0:
+        balance_label = f"net cash { _format_compact_number(net_cash, '$') }"
+    elif net_cash < 0:
+        balance_label = f"net debt { _format_compact_number(abs(net_cash), '$') }"
+    else:
+        balance_label = "position de cash nette neutre"
+
+    piotroski = company.get("piotroski_score", "N/A")
+    return f"{balance_label}, Piotroski {piotroski}"
+
+
+def _pick_category_winner(
+    current_company: dict[str, Any],
+    other_company: dict[str, Any],
+    current_value: Any,
+    other_value: Any,
+    label: str,
+) -> str:
+    current_number = _to_float(current_value)
+    other_number = _to_float(other_value)
+    current_name = current_company.get("ticker") or current_company.get("company_name") or "L'action actuelle"
+    other_name = other_company.get("ticker") or other_company.get("company_name") or "L'autre action"
+
+    if current_number is None and other_number is None:
+        return f"{label}: donnees insuffisantes."
+    if current_number is None:
+        return f"{label}: avantage a {other_name}."
+    if other_number is None:
+        return f"{label}: avantage a {current_name}."
+
+    gap = current_number - other_number
+    if abs(gap) < 0.35:
+        return f"{label}: plutot equilibre entre les deux."
+    winner = current_name if gap > 0 else other_name
+    return f"{label}: avantage a {winner}."
+
+
+def _objective_conclusion(
+    objective_label: str,
+    current_company: dict[str, Any],
+    other_company: dict[str, Any],
+    current_technical: dict[str, Any],
+    other_technical: dict[str, Any],
+) -> str:
+    objective_key = (objective_label or "Equilibre").lower()
+    current_name = current_company.get("ticker") or current_company.get("company_name") or "L'action actuelle"
+    other_name = other_company.get("ticker") or other_company.get("company_name") or "L'autre action"
+
+    if "croissance" in objective_key:
+        current_value = current_company.get("growth_score")
+        other_value = other_company.get("growth_score")
+        leader = current_name if (current_value or 0) >= (other_value or 0) else other_name
+        return f"Sous un angle croissance, {leader} ressort mieux."
+    if "value" in objective_key:
+        current_value = current_company.get("valuation_score")
+        other_value = other_company.get("valuation_score")
+        leader = current_name if (current_value or 0) >= (other_value or 0) else other_name
+        return f"Sous un angle value, {leader} semble offrir le meilleur point d'entree relatif."
+    if "defens" in objective_key:
+        current_value = current_company.get("health_score")
+        other_value = other_company.get("health_score")
+        leader = current_name if (current_value or 0) >= (other_value or 0) else other_name
+        return f"Sous un angle defensif, {leader} parait le plus robuste."
+    if "revenu" in objective_key:
+        current_income = (current_company.get("dividend_yield_pct") or 0) + max((current_company.get("fcf_yield_pct") or 0), 0)
+        other_income = (other_company.get("dividend_yield_pct") or 0) + max((other_company.get("fcf_yield_pct") or 0), 0)
+        leader = current_name if current_income >= other_income else other_name
+        return f"Sous un angle revenu, {leader} parait le plus favorable."
+    if "court terme" in objective_key:
+        leader = current_name if (current_technical.get("technical_score_out_of_10") or 0) >= (other_technical.get("technical_score_out_of_10") or 0) else other_name
+        return f"Sous un angle court terme, {leader} parait avoir le meilleur setup."
+
+    current_score = sum(
+        [
+            _to_float(current_company.get("growth_score")) or 0,
+            _to_float(current_company.get("valuation_score")) or 0,
+            _to_float(current_company.get("health_score")) or 0,
+        ]
+    )
+    other_score = sum(
+        [
+            _to_float(other_company.get("growth_score")) or 0,
+            _to_float(other_company.get("valuation_score")) or 0,
+            _to_float(other_company.get("health_score")) or 0,
+        ]
+    )
+    if abs(current_score - other_score) < 1.0:
+        return f"Sous un angle equilibre, le choix depend surtout de ton preference entre croissance et profil defensif."
+    leader = current_name if current_score > other_score else other_name
+    return f"Sous un angle equilibre, {leader} a legerement l'avantage."
 
 
 def _extract_function_responses(event: Any) -> list[Any]:
@@ -191,35 +318,65 @@ def _comparison_tool_response_to_text(payload: dict[str, Any]) -> str | None:
     current_ticker = current.get("ticker") or "N/A"
     other_ticker = other.get("ticker") or payload.get("resolved_ticker") or "N/A"
     objective_label = objective.get("label") or "Equilibre"
+    current_trailing_pe = _format_ratio(current.get("pe_ratio"))
+    other_trailing_pe = _format_ratio(other.get("pe_ratio"))
+    current_forward_pe = _format_ratio(current.get("forward_pe_ratio"))
+    other_forward_pe = _format_ratio(other.get("forward_pe_ratio"))
+    current_ps = _format_ratio(current.get("ps_ratio"))
+    other_ps = _format_ratio(other.get("ps_ratio"))
 
-    lines = [
-        f"Voici une comparaison rapide entre {current_name} ({current_ticker}) et {other_name} ({other_ticker}).",
+    valuation_bits = [f"trailing P/E {current_trailing_pe} vs {other_trailing_pe}"]
+    if current_forward_pe != "N/A" or other_forward_pe != "N/A":
+        valuation_bits.append(f"forward P/E {current_forward_pe} vs {other_forward_pe}")
+    if current_ps != "N/A" or other_ps != "N/A":
+        valuation_bits.append(f"P/S {current_ps} vs {other_ps}")
+
+    sections = [
+        f"Voici une lecture plus propre de {current_name} ({current_ticker}) vs {other_name} ({other_ticker}).",
+        f"Ce que fait chaque entreprise: {_business_model_sentence(current)} {_business_model_sentence(other)}",
     ]
 
     if context.get("is_cross_sector"):
-        lines.append(
-            f"C'est une comparaison intersectorielle: {current_name} est plutot {context.get('current_business_model') or current.get('business_model_hint') or 'dans son secteur'}, "
-            f"alors que {other_name} est plutot {context.get('other_business_model') or other.get('business_model_hint') or 'dans un autre secteur'}."
+        sections.append(
+            "Attention: c'est une comparaison intersectorielle, donc il faut separer la these de croissance de la these plus defensive / bilan."
         )
 
-    lines.append(
-        f"Croissance: {current_ticker} affiche { _format_pct(current.get('sales_growth_pct')) } de croissance des ventes et { _format_pct(current.get('eps_growth_pct')) } de croissance EPS, "
-        f"contre { _format_pct(other.get('sales_growth_pct')) } et { _format_pct(other.get('eps_growth_pct')) } pour {other_ticker}."
+    sections.append(
+        f"Croissance / upside: {current_ticker} affiche { _format_pct(current.get('sales_growth_pct')) } de croissance des ventes et { _format_pct(current.get('eps_growth_pct')) } de croissance EPS, "
+        f"contre { _format_pct(other.get('sales_growth_pct')) } et { _format_pct(other.get('eps_growth_pct')) } pour {other_ticker}. "
+        f"{_pick_category_winner(current, other, current.get('growth_score'), other.get('growth_score'), 'Lecture croissance')}"
     )
-    lines.append(
-        f"Valorisation: trailing P/E { _format_ratio(current.get('pe_ratio')) } vs { _format_ratio(other.get('pe_ratio')) }, "
-        f"forward P/E { _format_ratio(current.get('forward_pe_ratio')) } vs { _format_ratio(other.get('forward_pe_ratio')) }, "
-        f"et P/S { _format_ratio(current.get('ps_ratio')) } vs { _format_ratio(other.get('ps_ratio')) }."
+    sections.append(
+        f"Valorisation: {', '.join(valuation_bits)}. "
+        f"{_pick_category_winner(current, other, current.get('valuation_score'), other.get('valuation_score'), 'Lecture valorisation')}"
     )
-    lines.append(
-        f"Qualite / bilan: net cash { _format_compact_number(current.get('net_cash'), '$') } vs { _format_compact_number(other.get('net_cash'), '$') }, "
-        f"Piotroski {current.get('piotroski_score', 'N/A')} vs {other.get('piotroski_score', 'N/A')}."
+    sections.append(
+        f"Solidite / bilan: {current_ticker} = {_format_balance_sheet_profile(current)} ; "
+        f"{other_ticker} = {_format_balance_sheet_profile(other)}. "
+        f"{_pick_category_winner(current, other, current.get('health_score'), other.get('health_score'), 'Lecture robustesse')}"
     )
-    lines.append(
-        f"Sous l'angle {objective_label.lower()}, il faut surtout arbitrer entre croissance / rerating et profil defensif / cash generation selon le secteur."
+    sections.append(
+        _objective_conclusion(
+            objective_label,
+            current,
+            other,
+            comparison.get("current_technical") or {},
+            comparison.get("other_technical") or {},
+        )
     )
 
-    return "\n\n".join(lines)
+    source_refs = comparison.get("source_refs") or payload.get("source_refs") or {}
+    source_lines = []
+    current_quote_page = source_refs.get("current_quote_page") or {}
+    other_quote_page = source_refs.get("other_quote_page") or {}
+    if current_quote_page.get("url"):
+        source_lines.append(f"- [{current_ticker} quote page]({current_quote_page['url']})")
+    if other_quote_page.get("url"):
+        source_lines.append(f"- [{other_ticker} quote page]({other_quote_page['url']})")
+    if source_lines:
+        sections.append("Sources:\n" + "\n".join(source_lines))
+
+    return "\n\n".join(section for section in sections if section)
 
 
 def _news_tool_response_to_text(payload: dict[str, Any]) -> str | None:
@@ -468,7 +625,13 @@ def _business_model_hint(sector_name: str | None, benchmark_name: str | None) ->
         return "software or platform business with valuation sensitivity to growth"
     if "pharma" in text or "biotech" in text:
         return "healthcare business influenced by product pipeline and regulation"
-    return f"company exposed to the {sector_name or benchmark_name or 'broader market'} cycle"
+    clean_sector = str(sector_name or "").strip()
+    clean_benchmark = str(benchmark_name or "").strip()
+    if clean_sector and clean_sector.lower() != "default":
+        return f"listed company exposed to the {clean_sector} cycle"
+    if clean_benchmark and clean_benchmark.lower() != "default":
+        return f"listed company exposed to the {clean_benchmark} cycle"
+    return "diversified listed company with mixed drivers"
 
 
 def _generate_aliases(company_name: str) -> set[str]:
