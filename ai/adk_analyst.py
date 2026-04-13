@@ -35,7 +35,7 @@ from technical import add_indicators, bull_flag_score, fetch_price_history
 MODEL_NAME = "gemini-2.5-flash"
 APP_NAME = "stock_valuation_multi_agent"
 SUPERVISOR_AGENT_NAME = "stock_chat_supervisor"
-CHAT_ENGINE_VERSION = "2026-04-13-specialist-ai-v1"
+CHAT_ENGINE_VERSION = "2026-04-13-specialist-ai-v2"
 
 AGENT_DISPLAY_NAMES = {
     SUPERVISOR_AGENT_NAME: "Superviseur",
@@ -548,6 +548,12 @@ def _looks_like_market_signal_request(user_message: str) -> bool:
     return any(marker in message for marker in markers)
 
 
+def _looks_like_peer_request(user_message: str) -> bool:
+    message = _intent_text(user_message)
+    markers = ["pair", "pairs", "peers", "comparables", "benchmark", "secteur", "sector"]
+    return any(marker in message for marker in markers)
+
+
 def _looks_like_filing_request(user_message: str) -> bool:
     message = _intent_text(user_message)
     markers = ["sec", "filing", "10-k", "10-q", "officiel", "official", "reported", "reporté", "etats financiers"]
@@ -924,10 +930,52 @@ def _build_local_fundamental_response(chat_context: dict[str, Any], user_message
     return "\n\n".join(lines), trace
 
 
+def _build_local_peer_response(chat_context: dict[str, Any], user_message: str) -> tuple[str | None, dict[str, Any] | None]:
+    fallback_context = chat_context.get("fallback_context") or {}
+    company = fallback_context.get("company") or {}
+    peer = fallback_context.get("peer") or {}
+    ticker = company.get("ticker") or fallback_context.get("ticker")
+    if not ticker:
+        return None, None
+
+    trace = _build_agent_trace(["peer_agent", SUPERVISOR_AGENT_NAME], SUPERVISOR_AGENT_NAME)
+    ai_text = _generate_specialist_ai_response(
+        specialist_name="peer_agent",
+        user_message=user_message,
+        context_payload={
+            "ticker": ticker,
+            "question": user_message,
+            "company_snapshot": company,
+            "peer_snapshot": peer,
+            "investor_objective": chat_context.get("investor_objective"),
+            "business_profile": _business_model_sentence(company),
+            "source_refs": fallback_context.get("sources"),
+        },
+        system_instruction=(
+            "Tu es le peer_agent. Reponds en francais en comparant le titre courant a son groupe de pairs et a son benchmark. "
+            "Explique si le titre semble plus cher ou moins cher que ses pairs, s'il croît plus vite ou moins vite, "
+            "et ce que cela implique pour la these d'investissement. "
+            "Adapte la reponse a la question de l'utilisateur, evite les listes generiques et utilise les chiffres du contexte."
+        ),
+    )
+    if ai_text:
+        return ai_text, trace
+
+    lines = [
+        f"Comparaison pairs / benchmark pour {ticker}.",
+        f"Benchmark: {peer.get('benchmark_name', 'N/A')}.",
+        f"Croissance: ventes {_format_pct(company.get('sales_growth_pct'))} vs pairs {_format_pct(peer.get('peer_sales_growth_pct'))}, EPS {_format_pct(company.get('eps_growth_pct'))} vs pairs {_format_pct(peer.get('peer_eps_growth_pct'))}.",
+        f"Valorisation: trailing P/E {_format_ratio(company.get('pe_ratio'))} vs cible pairs {_format_ratio(peer.get('peer_target_pe'))}, P/S {_format_ratio(company.get('ps_ratio'))} vs cible pairs {_format_ratio(peer.get('peer_target_ps'))}.",
+    ]
+    return "\n\n".join(lines), trace
+
+
 def _route_local_agent_response(chat_context: dict[str, Any], user_message: str) -> tuple[str | None, dict[str, Any] | None]:
     """Route common prompts to specialist AI handlers before ADK."""
     if _looks_like_comparison_request(user_message):
         return _build_local_comparison_response(chat_context, user_message)
+    if _looks_like_peer_request(user_message):
+        return _build_local_peer_response(chat_context, user_message)
     if _looks_like_news_request(user_message):
         return _build_local_news_response(chat_context, user_message)
     if _looks_like_market_signal_request(user_message):
@@ -983,6 +1031,8 @@ def _build_local_comparison_response(chat_context: dict[str, Any], user_message:
 
     target_ticker = _extract_comparison_target_from_message(user_message, current_ticker)
     if not target_ticker:
+        if _looks_like_peer_request(user_message):
+            return _build_local_peer_response(chat_context, user_message)
         return None, None
 
     try:
