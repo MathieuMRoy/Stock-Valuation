@@ -279,6 +279,34 @@ def _extract_text_from_event(event: Any) -> str | None:
     return None
 
 
+def _extract_text_from_session_state(state: Any) -> str | None:
+    """Recover a usable answer from session.state when ADK stores structured output there."""
+    if not isinstance(state, dict):
+        return None
+
+    for key in ["last_answer", "answer", "final_answer", "response"]:
+        value = state.get(key)
+        text = _extract_text_from_tool_payload(value)
+        if text:
+            return text
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+
+    return None
+
+
+def _extract_text_from_session_events(session: Any) -> str | None:
+    """Walk backwards through the recorded session events to find the last useful answer."""
+    events = getattr(session, "events", None) or []
+    for event in reversed(events):
+        if getattr(event, "author", None) == "user":
+            continue
+        text = _extract_text_from_event(event)
+        if text:
+            return text
+    return None
+
+
 def _agent_display_name(agent_name: str | None) -> str | None:
     if not agent_name:
         return None
@@ -1376,7 +1404,9 @@ def chat_with_ai_analyst(
             )
             session = _run_coro(session)
             if session and getattr(session, "state", None):
-                final_answer = session.state.get("last_answer")
+                final_answer = _extract_text_from_session_state(session.state)
+            if not final_answer and session:
+                final_answer = _extract_text_from_session_events(session)
 
         trace_payload = _build_agent_trace(authors_seen, final_author)
         if not final_answer:
