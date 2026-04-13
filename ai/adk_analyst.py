@@ -11,7 +11,6 @@ import json
 import os
 import re
 import threading
-import unicodedata
 import uuid
 from typing import Any, Callable
 
@@ -23,6 +22,20 @@ from google.adk.sessions import InMemorySessionService
 from google.adk.tools import agent_tool
 from google.genai import types
 
+from .models import AgentTracePayload, ChatSessionContext, StockContext
+from .router import (
+    SpecialistRouter,
+    looks_like_agent_meta_request as _router_looks_like_agent_meta_request,
+    looks_like_comparison_request as _router_looks_like_comparison_request,
+    looks_like_filing_request as _router_looks_like_filing_request,
+    looks_like_fundamental_request as _router_looks_like_fundamental_request,
+    looks_like_market_signal_request as _router_looks_like_market_signal_request,
+    looks_like_news_request as _router_looks_like_news_request,
+    looks_like_peer_request as _router_looks_like_peer_request,
+    looks_like_risk_request as _router_looks_like_risk_request,
+    looks_like_technical_request as _router_looks_like_technical_request,
+    normalize_intent_text as _router_normalize_intent_text,
+)
 from data import TICKER_DB, get_benchmark_data
 from fetchers import get_debt_safe, get_financial_data_secure, get_item_safe, get_ttm_or_latest
 from fetchers.sec_edgar import get_sec_financials
@@ -513,75 +526,43 @@ def _generate_specialist_ai_response(
 
 
 def _intent_text(value: str) -> str:
-    normalized = unicodedata.normalize("NFKD", value or "")
-    ascii_text = normalized.encode("ascii", "ignore").decode("ascii")
-    return ascii_text.lower()
+    return _router_normalize_intent_text(value)
 
 
 def _looks_like_comparison_request(user_message: str) -> bool:
-    message = _intent_text(user_message)
-    markers = ["compare", "compar", "versus", "vs", "avec", "contre", "entre "]
-    return any(marker in message for marker in markers)
+    return _router_looks_like_comparison_request(user_message)
 
 
 def _looks_like_news_request(user_message: str) -> bool:
-    message = _intent_text(user_message)
-    markers = [
-        "actualite",
-        "actualité",
-        "news",
-        "nouvelles",
-        "headline",
-        "catalyst",
-        "catalyseur",
-        "earnings",
-        "publication",
-        "resultat",
-        "résultat",
-    ]
-    return any(marker in message for marker in markers)
+    return _router_looks_like_news_request(user_message)
 
 
 def _looks_like_market_signal_request(user_message: str) -> bool:
-    message = _intent_text(user_message)
-    markers = ["analyst", "analyste", "target", "price target", "insider", "short interest", "sentiment", "rating"]
-    return any(marker in message for marker in markers)
+    return _router_looks_like_market_signal_request(user_message)
 
 
 def _looks_like_agent_meta_request(user_message: str) -> bool:
-    message = _intent_text(user_message)
-    markers = ["agent", "agents", "disponible", "disponibles", "capable", "capables", "peux tu faire", "que fais tu", "comment tu fonctionnes"]
-    return any(marker in message for marker in markers)
+    return _router_looks_like_agent_meta_request(user_message)
 
 
 def _looks_like_peer_request(user_message: str) -> bool:
-    message = _intent_text(user_message)
-    markers = ["pair", "pairs", "peers", "comparables", "benchmark", "secteur", "sector"]
-    return any(marker in message for marker in markers)
+    return _router_looks_like_peer_request(user_message)
 
 
 def _looks_like_filing_request(user_message: str) -> bool:
-    message = _intent_text(user_message)
-    markers = ["sec", "filing", "10-k", "10-q", "officiel", "official", "reported", "reporté", "etats financiers"]
-    return any(marker in message for marker in markers)
+    return _router_looks_like_filing_request(user_message)
 
 
 def _looks_like_technical_request(user_message: str) -> bool:
-    message = _intent_text(user_message)
-    markers = ["technique", "technical", "chart", "momentum", "rsi", "bull flag", "setup", "trend", "tendance"]
-    return any(marker in message for marker in markers)
+    return _router_looks_like_technical_request(user_message)
 
 
 def _looks_like_risk_request(user_message: str) -> bool:
-    message = _intent_text(user_message)
-    markers = ["risque", "risk", "safe", "defensif", "profil", "downside", "reward", "robuste", "resilient"]
-    return any(marker in message for marker in markers)
+    return _router_looks_like_risk_request(user_message)
 
 
 def _looks_like_fundamental_request(user_message: str) -> bool:
-    message = _intent_text(user_message)
-    markers = ["valorisation", "valuation", "cheap", "chere", "cher", "pe", "p/e", "ps", "p/s", "fcf", "growth", "croissance"]
-    return any(marker in message for marker in markers)
+    return _router_looks_like_fundamental_request(user_message)
 
 
 def _extract_comparison_target_from_message(user_message: str, current_ticker: str) -> str | None:
@@ -1028,25 +1009,23 @@ def _build_local_meta_response(chat_context: dict[str, Any], user_message: str) 
 
 def _route_local_agent_response(chat_context: dict[str, Any], user_message: str) -> tuple[str | None, dict[str, Any] | None]:
     """Route common prompts to specialist AI handlers before ADK."""
-    if _looks_like_agent_meta_request(user_message):
-        return _build_local_meta_response(chat_context, user_message)
-    if _looks_like_comparison_request(user_message):
-        return _build_local_comparison_response(chat_context, user_message)
-    if _looks_like_peer_request(user_message):
-        return _build_local_peer_response(chat_context, user_message)
-    if _looks_like_news_request(user_message):
-        return _build_local_news_response(chat_context, user_message)
-    if _looks_like_market_signal_request(user_message):
-        return _build_local_market_signal_response(chat_context, user_message)
-    if _looks_like_filing_request(user_message):
-        return _build_local_filings_response(chat_context, user_message)
-    if _looks_like_technical_request(user_message):
-        return _build_local_technical_response(chat_context, user_message)
-    if _looks_like_risk_request(user_message):
-        return _build_local_risk_response(chat_context, user_message)
-    if _looks_like_fundamental_request(user_message):
-        return _build_local_fundamental_response(chat_context, user_message)
-    return None, None
+    router = SpecialistRouter(
+        {
+            "meta": lambda prompt: _build_local_meta_response(chat_context, prompt),
+            "comparison": lambda prompt: _build_local_comparison_response(chat_context, prompt),
+            "peer": lambda prompt: _build_local_peer_response(chat_context, prompt),
+            "news": lambda prompt: _build_local_news_response(chat_context, prompt),
+            "market_signal": lambda prompt: _build_local_market_signal_response(chat_context, prompt),
+            "filings": lambda prompt: _build_local_filings_response(chat_context, prompt),
+            "technical": lambda prompt: _build_local_technical_response(chat_context, prompt),
+            "risk": lambda prompt: _build_local_risk_response(chat_context, prompt),
+            "fundamental": lambda prompt: _build_local_fundamental_response(chat_context, prompt),
+        }
+    )
+    response = router.route(user_message)
+    if not response:
+        return None, None
+    return response.as_specialist_tuple()
 
 
 def _build_local_generic_response(chat_context: dict[str, Any], user_message: str) -> tuple[str | None, dict[str, Any] | None]:
@@ -1188,17 +1167,17 @@ def _build_agent_trace(authors_seen: list[str], final_author: str | None = None)
     lead_agent = specialist_agents[-1] if specialist_agents else ordered_authors[-1]
     final_visible_author = final_author if final_author and final_author != "user" else None
 
-    return {
-        "authors": ordered_authors,
-        "labels": [_agent_display_name(author) or author for author in ordered_authors],
-        "specialist_agents": specialist_agents,
-        "specialist_labels": [_agent_display_name(author) or author for author in specialist_agents],
-        "lead_agent": lead_agent,
-        "lead_agent_label": _agent_display_name(lead_agent) or lead_agent,
-        "final_author": final_visible_author,
-        "final_author_label": _agent_display_name(final_visible_author) if final_visible_author else None,
-        "used_supervisor": SUPERVISOR_AGENT_NAME in ordered_authors,
-    }
+    return AgentTracePayload(
+        authors=ordered_authors,
+        labels=[_agent_display_name(author) or author for author in ordered_authors],
+        specialist_agents=specialist_agents,
+        specialist_labels=[_agent_display_name(author) or author for author in specialist_agents],
+        lead_agent=lead_agent,
+        lead_agent_label=_agent_display_name(lead_agent) or lead_agent,
+        final_author=final_visible_author,
+        final_author_label=_agent_display_name(final_visible_author) if final_visible_author else None,
+        used_supervisor=SUPERVISOR_AGENT_NAME in ordered_authors,
+    ).to_dict()
 
 
 def _resolve_api_key(api_key: str | None) -> str | None:
@@ -2189,17 +2168,18 @@ def create_ai_chat_session(
         user_id = "streamlit-user"
         session_id = str(uuid.uuid4())
         _run_coro(session_service.create_session(app_name=APP_NAME, user_id=user_id, session_id=session_id))
-        fallback_context = _build_local_fallback_context(metrics, bench, scores, tech)
+        stock_context = StockContext.from_fallback_context(_build_local_fallback_context(metrics, bench, scores, tech))
+        session_context = ChatSessionContext(
+            runner=Runner(agent=agent, app_name=APP_NAME, session_service=session_service),
+            session_service=session_service,
+            user_id=user_id,
+            session_id=session_id,
+            current_ticker=stock_context.ticker,
+            investor_objective=objective_snapshot or {"label": "Equilibre", "description": "mix upside, qualite financiere et valorisation"},
+            stock_context=stock_context,
+        )
 
-        return {
-            "runner": Runner(agent=agent, app_name=APP_NAME, session_service=session_service),
-            "session_service": session_service,
-            "user_id": user_id,
-            "session_id": session_id,
-            "current_ticker": fallback_context.get("ticker"),
-            "investor_objective": objective_snapshot or {"label": "Equilibre", "description": "mix upside, qualite financiere et valorisation"},
-            "fallback_context": fallback_context,
-        }, None
+        return session_context.to_mapping(), None
     except Exception as exc:
         return None, f"Echec de l'initialisation du chat multi-agents: {exc}"
 
@@ -2214,11 +2194,12 @@ def chat_with_ai_analyst(
     """
 
     try:
+        session_context = ChatSessionContext.from_mapping(chat_context)
         local_fallback_answer, local_trace = _route_local_agent_response(chat_context, user_message)
         if local_fallback_answer:
             return local_fallback_answer, None, local_trace
 
-        objective = chat_context.get("investor_objective") or {}
+        objective = session_context.investor_objective or {}
         objective_note = ""
         if objective:
             objective_note = (
@@ -2251,9 +2232,9 @@ def chat_with_ai_analyst(
                 return
             last_trace_signature = signature
 
-        events = chat_context["runner"].run(
-            user_id=chat_context["user_id"],
-            session_id=chat_context["session_id"],
+        events = session_context.runner.run(
+            user_id=session_context.user_id,
+            session_id=session_context.session_id,
             new_message=content,
         )
 
@@ -2271,10 +2252,10 @@ def chat_with_ai_analyst(
                     _emit_trace(_build_agent_trace(authors_seen, final_author))
 
         if not final_answer:
-            session = chat_context["session_service"].get_session(
+            session = session_context.session_service.get_session(
                 app_name=APP_NAME,
-                user_id=chat_context["user_id"],
-                session_id=chat_context["session_id"],
+                user_id=session_context.user_id,
+                session_id=session_context.session_id,
             )
             session = _run_coro(session)
             if session and getattr(session, "state", None):
