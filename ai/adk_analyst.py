@@ -471,6 +471,24 @@ def _looks_like_comparison_request(user_message: str) -> bool:
     return any(marker in message for marker in markers)
 
 
+def _looks_like_news_request(user_message: str) -> bool:
+    message = (user_message or "").lower()
+    markers = [
+        "actualite",
+        "actualité",
+        "news",
+        "nouvelles",
+        "headline",
+        "catalyst",
+        "catalyseur",
+        "earnings",
+        "publication",
+        "resultat",
+        "résultat",
+    ]
+    return any(marker in message for marker in markers)
+
+
 def _extract_comparison_target_from_message(user_message: str, current_ticker: str) -> str | None:
     """Infer the non-current ticker/company mentioned in a comparison prompt."""
     current_upper = (current_ticker or "").upper()
@@ -512,6 +530,90 @@ def _build_local_fallback_context(metrics: dict, bench: dict, scores: dict, tech
         "technical": _build_technical_snapshot(tech),
         "sources": _build_source_refs(current_ticker, current_data),
     }
+
+
+def _build_local_news_response(chat_context: dict[str, Any]) -> tuple[str | None, dict[str, Any] | None]:
+    """Generate a deterministic news answer for the current ticker."""
+    fallback_context = chat_context.get("fallback_context") or {}
+    current_ticker = fallback_context.get("ticker") or chat_context.get("current_ticker")
+    if not current_ticker:
+        return None, None
+
+    try:
+        current_data = get_financial_data_secure(current_ticker, cache_version=FINANCIAL_DATA_CACHE_VERSION)
+        news_snapshot = _build_recent_news_snapshot(current_data)
+        company_name = news_snapshot.get("company_name") or fallback_context.get("company_name") or current_ticker
+
+        lines = [f"Voici l'actualite recente disponible pour {company_name} ({current_ticker})."]
+        market_news = news_snapshot.get("recent_market_news") or []
+        press_releases = news_snapshot.get("recent_press_releases") or []
+        earnings_context = news_snapshot.get("earnings_context") or {}
+
+        if market_news:
+            lines.append("Points de marche / presse les plus recents:")
+            for item in market_news[:3]:
+                title = item.get("title")
+                if not title:
+                    continue
+                published_at = item.get("published_at") or "date non disponible"
+                source = item.get("source")
+                suffix = f" ({source})" if source else ""
+                lines.append(f"- {published_at}: {title}{suffix}")
+
+        if press_releases:
+            lines.append("Communiques / publications recents:")
+            for item in press_releases[:2]:
+                title = item.get("title")
+                if not title:
+                    continue
+                published_at = item.get("published_at") or "date non disponible"
+                source = item.get("source")
+                suffix = f" ({source})" if source else ""
+                lines.append(f"- {published_at}: {title}{suffix}")
+
+        next_earnings_date = earnings_context.get("next_earnings_date")
+        last_known_earnings_date = earnings_context.get("last_known_earnings_date")
+        if next_earnings_date:
+            lines.append(f"Prochaine publication reperee: {next_earnings_date}.")
+        elif last_known_earnings_date:
+            lines.append(f"Derniere date de publication reperee: {last_known_earnings_date}.")
+
+        source_lines = []
+        for item in news_snapshot.get("source_links") or []:
+            if item.get("title") and item.get("link"):
+                source_lines.append(f"- [{item['title']}]({item['link']})")
+        if source_lines:
+            lines.append("Sources:\n" + "\n".join(source_lines[:4]))
+
+        trace = _build_agent_trace(["news_agent", SUPERVISOR_AGENT_NAME], SUPERVISOR_AGENT_NAME)
+        return "\n\n".join(lines), trace
+    except Exception as exc:
+        trace = _build_agent_trace(["news_agent"], "news_agent")
+        return f"Je n'ai pas pu construire le resume d'actualite localement pour {current_ticker}: {exc}", trace
+
+
+def _build_local_generic_response(chat_context: dict[str, Any]) -> tuple[str | None, dict[str, Any] | None]:
+    """Return a minimal useful answer instead of a red error when ADK fails completely."""
+    fallback_context = chat_context.get("fallback_context") or {}
+    company = fallback_context.get("company") or {}
+    peer = fallback_context.get("peer") or {}
+    technical = fallback_context.get("technical") or {}
+    objective = chat_context.get("investor_objective") or {"label": "Equilibre"}
+
+    ticker = company.get("ticker") or fallback_context.get("ticker")
+    if not ticker:
+        return None, None
+
+    lines = [
+        f"Je n'ai pas pu recuperer la synthese multi-agents complete, mais voici un resume local pour {ticker}.",
+        f"Valorisation: trailing P/E {_format_ratio(company.get('pe_ratio'))}, P/S {_format_ratio(company.get('ps_ratio'))}, score value {company.get('valuation_score', 'N/A')}/10.",
+        f"Croissance: ventes {_format_pct(company.get('sales_growth_pct'))}, EPS {_format_pct(company.get('eps_growth_pct'))}, score croissance {company.get('growth_score', 'N/A')}/10.",
+        f"Solidite: {_format_balance_sheet_profile(company)}, score sante {company.get('health_score', 'N/A')}/10.",
+        f"Technique: score {technical.get('technical_score_out_of_10', 'N/A')}/10.",
+        f"Angle actif: {objective.get('label', 'Equilibre')}. Benchmark actuel: {peer.get('benchmark_name', 'N/A')}.",
+    ]
+    trace = _build_agent_trace([SUPERVISOR_AGENT_NAME], SUPERVISOR_AGENT_NAME)
+    return "\n\n".join(lines), trace
 
 
 def _build_local_comparison_response(chat_context: dict[str, Any], user_message: str) -> tuple[str | None, dict[str, Any] | None]:
@@ -1611,6 +1713,10 @@ def chat_with_ai_analyst(
         local_fallback_answer, local_trace = _build_local_comparison_response(chat_context, user_message)
         if local_fallback_answer:
             return local_fallback_answer, None, local_trace
+        if _looks_like_news_request(user_message):
+            local_news_answer, local_news_trace = _build_local_news_response(chat_context)
+            if local_news_answer:
+                return local_news_answer, None, local_news_trace
 
         objective = chat_context.get("investor_objective") or {}
         objective_note = ""
@@ -1681,6 +1787,13 @@ def chat_with_ai_analyst(
             local_fallback_answer, local_trace = _build_local_comparison_response(chat_context, user_message)
             if local_fallback_answer:
                 return local_fallback_answer, None, local_trace or trace_payload
+            if _looks_like_news_request(user_message):
+                local_news_answer, local_news_trace = _build_local_news_response(chat_context)
+                if local_news_answer:
+                    return local_news_answer, None, local_news_trace or trace_payload
+            local_generic_answer, local_generic_trace = _build_local_generic_response(chat_context)
+            if local_generic_answer:
+                return local_generic_answer, None, local_generic_trace or trace_payload
             return None, "Le chat multi-agents n'a pas retourne de reponse finale.", trace_payload
         return final_answer, None, trace_payload
     except Exception as exc:
