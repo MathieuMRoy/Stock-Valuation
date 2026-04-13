@@ -35,7 +35,7 @@ from technical import add_indicators, bull_flag_score, fetch_price_history
 MODEL_NAME = "gemini-2.5-flash"
 APP_NAME = "stock_valuation_multi_agent"
 SUPERVISOR_AGENT_NAME = "stock_chat_supervisor"
-CHAT_ENGINE_VERSION = "2026-04-13-specialist-ai-v2"
+CHAT_ENGINE_VERSION = "2026-04-13-specialist-ai-v3"
 
 AGENT_DISPLAY_NAMES = {
     SUPERVISOR_AGENT_NAME: "Superviseur",
@@ -548,6 +548,12 @@ def _looks_like_market_signal_request(user_message: str) -> bool:
     return any(marker in message for marker in markers)
 
 
+def _looks_like_agent_meta_request(user_message: str) -> bool:
+    message = _intent_text(user_message)
+    markers = ["agent", "agents", "disponible", "disponibles", "capable", "capables", "peux tu faire", "que fais tu", "comment tu fonctionnes"]
+    return any(marker in message for marker in markers)
+
+
 def _looks_like_peer_request(user_message: str) -> bool:
     message = _intent_text(user_message)
     markers = ["pair", "pairs", "peers", "comparables", "benchmark", "secteur", "sector"]
@@ -970,8 +976,60 @@ def _build_local_peer_response(chat_context: dict[str, Any], user_message: str) 
     return "\n\n".join(lines), trace
 
 
+def _build_local_meta_response(chat_context: dict[str, Any], user_message: str) -> tuple[str | None, dict[str, Any] | None]:
+    fallback_context = chat_context.get("fallback_context") or {}
+    company = fallback_context.get("company") or {}
+    ticker = company.get("ticker") or fallback_context.get("ticker")
+    if not ticker:
+        return None, None
+
+    trace = _build_agent_trace([SUPERVISOR_AGENT_NAME], SUPERVISOR_AGENT_NAME)
+    ai_text = _generate_specialist_ai_response(
+        specialist_name="supervisor_agent",
+        user_message=user_message,
+        context_payload={
+            "ticker": ticker,
+            "question": user_message,
+            "company_snapshot": company,
+            "investor_objective": chat_context.get("investor_objective"),
+            "available_agents": [
+                {"name": "fundamental_agent", "role": "evaluation, valorisation, croissance et qualite financiere"},
+                {"name": "technical_agent", "role": "momentum, tendance et lecture technique"},
+                {"name": "peer_agent", "role": "comparaison avec les pairs et le benchmark"},
+                {"name": "comparison_agent", "role": "comparaison directe entre deux actions"},
+                {"name": "news_agent", "role": "actualite recente, catalyseurs et publications"},
+                {"name": "market_signal_agent", "role": "analystes, insiders et short interest"},
+                {"name": "filings_agent", "role": "chiffres SEC officiels et qualite comptable"},
+                {"name": "risk_agent", "role": "profil de risque, resilience et adequation investisseur"},
+            ],
+        },
+        system_instruction=(
+            "Tu es le superviseur d'un chat multi-agents finance. Reponds en francais a la question meta de l'utilisateur. "
+            "Explique clairement quels agents existent, ce qu'ils font, et comment ils peuvent aider sur le titre courant. "
+            "Reste conversationnel et adapte ta reponse a la question, sans renvoyer un resume financier du titre si ce n'est pas demande."
+        ),
+    )
+    if ai_text:
+        return ai_text, trace
+
+    lines = [
+        f"Voici les agents specialises disponibles pour analyser {ticker}.",
+        "- `fundamental_agent` : valorisation, croissance, cash-flow et qualite financiere.",
+        "- `technical_agent` : tendance, momentum et setup de marche.",
+        "- `peer_agent` : comparaison avec les pairs et le benchmark du secteur.",
+        "- `comparison_agent` : comparaison directe avec une autre action.",
+        "- `news_agent` : actualites recentes, catalyseurs et earnings.",
+        "- `market_signal_agent` : analystes, insiders et short interest.",
+        "- `filings_agent` : chiffres officiels SEC et lecture comptable.",
+        "- `risk_agent` : risques, resilience et profil d'investisseur.",
+    ]
+    return "\n\n".join(lines), trace
+
+
 def _route_local_agent_response(chat_context: dict[str, Any], user_message: str) -> tuple[str | None, dict[str, Any] | None]:
     """Route common prompts to specialist AI handlers before ADK."""
+    if _looks_like_agent_meta_request(user_message):
+        return _build_local_meta_response(chat_context, user_message)
     if _looks_like_comparison_request(user_message):
         return _build_local_comparison_response(chat_context, user_message)
     if _looks_like_peer_request(user_message):
@@ -991,8 +1049,8 @@ def _route_local_agent_response(chat_context: dict[str, Any], user_message: str)
     return None, None
 
 
-def _build_local_generic_response(chat_context: dict[str, Any]) -> tuple[str | None, dict[str, Any] | None]:
-    """Return a minimal useful answer instead of a red error when ADK fails completely."""
+def _build_local_generic_response(chat_context: dict[str, Any], user_message: str) -> tuple[str | None, dict[str, Any] | None]:
+    """Return a useful generic answer instead of a red error when ADK fails completely."""
     fallback_context = chat_context.get("fallback_context") or {}
     company = fallback_context.get("company") or {}
     peer = fallback_context.get("peer") or {}
@@ -1003,6 +1061,29 @@ def _build_local_generic_response(chat_context: dict[str, Any]) -> tuple[str | N
     if not ticker:
         return None, None
 
+    trace = _build_agent_trace([SUPERVISOR_AGENT_NAME], SUPERVISOR_AGENT_NAME)
+    ai_text = _generate_specialist_ai_response(
+        specialist_name="supervisor_agent",
+        user_message=user_message,
+        context_payload={
+            "ticker": ticker,
+            "question": user_message,
+            "company_snapshot": company,
+            "peer_snapshot": peer,
+            "technical_snapshot": technical,
+            "investor_objective": objective,
+            "source_refs": fallback_context.get("sources"),
+            "business_profile": _business_model_sentence(company),
+        },
+        system_instruction=(
+            "Tu es le superviseur d'un assistant multi-agents finance. Le run principal a echoue, mais tu dois quand meme repondre proprement a la question de l'utilisateur en francais. "
+            "Adapte la reponse a la question exacte, utilise le contexte du titre courant, et evite de reciter toujours le meme resume. "
+            "Si la question est large, fais une reponse courte et utile. Si des donnees manquent, dis-le."
+        ),
+    )
+    if ai_text:
+        return ai_text, trace
+
     lines = [
         f"Je n'ai pas pu recuperer la synthese multi-agents complete, mais voici un resume local pour {ticker}.",
         f"Valorisation: trailing P/E {_format_ratio(company.get('pe_ratio'))}, P/S {_format_ratio(company.get('ps_ratio'))}, score value {company.get('valuation_score', 'N/A')}/10.",
@@ -1011,7 +1092,6 @@ def _build_local_generic_response(chat_context: dict[str, Any]) -> tuple[str | N
         f"Technique: score {technical.get('technical_score_out_of_10', 'N/A')}/10.",
         f"Angle actif: {objective.get('label', 'Equilibre')}. Benchmark actuel: {peer.get('benchmark_name', 'N/A')}.",
     ]
-    trace = _build_agent_trace([SUPERVISOR_AGENT_NAME], SUPERVISOR_AGENT_NAME)
     return "\n\n".join(lines), trace
 
 
@@ -2207,7 +2287,7 @@ def chat_with_ai_analyst(
             local_fallback_answer, local_trace = _route_local_agent_response(chat_context, user_message)
             if local_fallback_answer:
                 return local_fallback_answer, None, local_trace or trace_payload
-            local_generic_answer, local_generic_trace = _build_local_generic_response(chat_context)
+            local_generic_answer, local_generic_trace = _build_local_generic_response(chat_context, user_message)
             if local_generic_answer:
                 return local_generic_answer, None, local_generic_trace or trace_payload
             return None, "Le chat multi-agents n'a pas retourne de reponse finale.", trace_payload
