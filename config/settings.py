@@ -320,6 +320,59 @@ def inject_global_styles():
             line-height: 1.55;
         }
 
+        .vmp-agent-trace {
+            margin: 0.1rem 0 0.9rem 0;
+            padding: 0.85rem 0.95rem;
+            border-radius: 18px;
+            border: 1px solid rgba(82, 198, 186, 0.18);
+            background: linear-gradient(180deg, rgba(12, 24, 38, 0.9), rgba(9, 18, 29, 0.86));
+            box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.03);
+        }
+
+        .vmp-agent-trace.is-live {
+            border-color: rgba(242, 162, 77, 0.28);
+            background: linear-gradient(180deg, rgba(27, 31, 22, 0.88), rgba(17, 22, 17, 0.84));
+        }
+
+        .vmp-agent-trace-label {
+            color: #f2a24d;
+            font-size: 0.78rem;
+            font-weight: 700;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+        }
+
+        .vmp-agent-trace-title {
+            margin-top: 0.2rem;
+            color: var(--vmp-text);
+            font-size: 1rem;
+            font-weight: 700;
+        }
+
+        .vmp-agent-trace-copy {
+            margin-top: 0.28rem;
+            color: var(--vmp-muted);
+            font-size: 0.88rem;
+            line-height: 1.5;
+        }
+
+        .vmp-agent-chip-row {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.5rem;
+            margin-top: 0.75rem;
+        }
+
+        .vmp-agent-chip {
+            padding: 0.4rem 0.72rem;
+            border-radius: 999px;
+            border: 1px solid rgba(255, 255, 255, 0.09);
+            background: rgba(255, 255, 255, 0.05);
+            color: var(--vmp-text);
+            font-size: 0.82rem;
+            font-weight: 600;
+        }
+
         [data-testid="stMetric"] {
             padding: 0.9rem 1rem;
             border-radius: 18px;
