@@ -33,6 +33,7 @@ from technical import add_indicators, bull_flag_score, fetch_price_history
 MODEL_NAME = "gemini-2.5-flash"
 APP_NAME = "stock_valuation_multi_agent"
 SUPERVISOR_AGENT_NAME = "stock_chat_supervisor"
+CHAT_ENGINE_VERSION = "2026-04-13-local-compare-v1"
 
 AGENT_DISPLAY_NAMES = {
     SUPERVISOR_AGENT_NAME: "Superviseur",
@@ -307,6 +308,97 @@ def _extract_text_from_session_events(session: Any) -> str | None:
     return None
 
 
+def _looks_like_comparison_request(user_message: str) -> bool:
+    message = (user_message or "").lower()
+    markers = ["compare", "compar", "versus", "vs", "avec", "contre", "entre "]
+    return any(marker in message for marker in markers)
+
+
+def _extract_comparison_target_from_message(user_message: str, current_ticker: str) -> str | None:
+    """Infer the non-current ticker/company mentioned in a comparison prompt."""
+    current_upper = (current_ticker or "").upper()
+    tokens = re.findall(r"[A-Za-z][A-Za-z\.\-]{0,12}", user_message or "")
+
+    for token in tokens:
+        normalized = _normalize_lookup(token)
+        mapped = TICKER_ALIAS_MAP.get(normalized)
+        if mapped and mapped != current_upper:
+            return mapped
+        token_upper = token.upper().rstrip(".,;:!?")
+        if 1 < len(token_upper) <= 6 and token_upper != current_upper and token_upper.isascii():
+            if token_upper in KNOWN_TICKERS:
+                return token_upper
+
+    normalized_message = _normalize_lookup(user_message or "")
+    candidates = [
+        (alias, ticker)
+        for alias, ticker in TICKER_ALIAS_MAP.items()
+        if len(alias) >= 4 and alias in normalized_message and ticker != current_upper
+    ]
+    if candidates:
+        best_alias, best_ticker = max(candidates, key=lambda item: len(item[0]))
+        if best_alias:
+            return best_ticker
+
+    return None
+
+
+def _build_local_fallback_context(metrics: dict, bench: dict, scores: dict, tech: dict) -> dict[str, Any]:
+    """Store a deterministic local stock context for non-LLM fallbacks."""
+    current_ticker = str(metrics.get("ticker", "")).upper()
+    current_data = get_financial_data_secure(current_ticker, cache_version=FINANCIAL_DATA_CACHE_VERSION)
+    return {
+        "ticker": current_ticker,
+        "company_name": metrics.get("company_name") or current_data.get("long_name") or current_ticker,
+        "company": _build_company_snapshot(metrics, scores),
+        "peer": _build_peer_snapshot(bench),
+        "technical": _build_technical_snapshot(tech),
+        "sources": _build_source_refs(current_ticker, current_data),
+    }
+
+
+def _build_local_comparison_response(chat_context: dict[str, Any], user_message: str) -> tuple[str | None, dict[str, Any] | None]:
+    """Generate a deterministic comparison answer when ADK fails to synthesize one."""
+    fallback_context = chat_context.get("fallback_context") or {}
+    current_ticker = fallback_context.get("ticker") or chat_context.get("current_ticker")
+    if not current_ticker or not _looks_like_comparison_request(user_message):
+        return None, None
+
+    if not fallback_context:
+        try:
+            fallback_context = _compute_stock_context(current_ticker)
+            chat_context["fallback_context"] = fallback_context
+        except Exception:
+            return None, None
+
+    target_ticker = _extract_comparison_target_from_message(user_message, current_ticker)
+    if not target_ticker:
+        return None, None
+
+    try:
+        other_context = _compute_stock_context(target_ticker)
+        payload = {
+            "requested_target": target_ticker,
+            "resolved_ticker": target_ticker,
+            "resolved_company_name": other_context.get("company_name"),
+            "comparison": _build_comparison_payload(
+                fallback_context.get("company") or {},
+                fallback_context.get("peer") or {},
+                fallback_context.get("technical") or {},
+                fallback_context.get("sources") or {},
+                chat_context.get("investor_objective") or {"label": "Equilibre"},
+                other_context,
+            ),
+        }
+        text = _comparison_tool_response_to_text(payload)
+        if not text:
+            return None, None
+        trace = _build_agent_trace(["comparison_agent", SUPERVISOR_AGENT_NAME], SUPERVISOR_AGENT_NAME)
+        return text, trace
+    except Exception as exc:
+        return f"Je n'ai pas pu construire la comparaison locale avec {target_ticker}: {exc}", _build_agent_trace(["comparison_agent"], "comparison_agent")
+
+
 def _agent_display_name(agent_name: str | None) -> str | None:
     if not agent_name:
         return None
@@ -416,6 +508,11 @@ def _build_alias_map() -> dict[str, str]:
 
 
 TICKER_ALIAS_MAP = _build_alias_map()
+KNOWN_TICKERS = {
+    entry.split(" - ", 1)[0].strip().upper()
+    for entry in TICKER_DB
+    if " - " in entry and not entry.startswith("---")
+}
 
 
 def _build_company_snapshot(metrics: dict, scores: dict) -> dict[str, Any]:
@@ -980,6 +1077,7 @@ def build_ai_chat_signature(metrics: dict, bench: dict, scores: dict, tech: dict
     """
 
     payload = {
+        "chat_engine_version": CHAT_ENGINE_VERSION,
         "cache_version": FINANCIAL_DATA_CACHE_VERSION,
         "refresh_date": date.today().isoformat(),
         "investor_objective": objective_snapshot or {"key": "balanced"},
@@ -1322,13 +1420,16 @@ def create_ai_chat_session(
         user_id = "streamlit-user"
         session_id = str(uuid.uuid4())
         _run_coro(session_service.create_session(app_name=APP_NAME, user_id=user_id, session_id=session_id))
+        fallback_context = _build_local_fallback_context(metrics, bench, scores, tech)
 
         return {
             "runner": Runner(agent=agent, app_name=APP_NAME, session_service=session_service),
             "session_service": session_service,
             "user_id": user_id,
             "session_id": session_id,
+            "current_ticker": fallback_context.get("ticker"),
             "investor_objective": objective_snapshot or {"label": "Equilibre", "description": "mix upside, qualite financiere et valorisation"},
+            "fallback_context": fallback_context,
         }, None
     except Exception as exc:
         return None, f"Echec de l'initialisation du chat multi-agents: {exc}"
@@ -1344,6 +1445,10 @@ def chat_with_ai_analyst(
     """
 
     try:
+        local_fallback_answer, local_trace = _build_local_comparison_response(chat_context, user_message)
+        if local_fallback_answer:
+            return local_fallback_answer, None, local_trace
+
         objective = chat_context.get("investor_objective") or {}
         objective_note = ""
         if objective:
@@ -1410,6 +1515,9 @@ def chat_with_ai_analyst(
 
         trace_payload = _build_agent_trace(authors_seen, final_author)
         if not final_answer:
+            local_fallback_answer, local_trace = _build_local_comparison_response(chat_context, user_message)
+            if local_fallback_answer:
+                return local_fallback_answer, None, local_trace or trace_payload
             return None, "Le chat multi-agents n'a pas retourne de reponse finale.", trace_payload
         return final_answer, None, trace_payload
     except Exception as exc:
