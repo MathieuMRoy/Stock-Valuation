@@ -12,7 +12,7 @@ import os
 import re
 import threading
 import uuid
-from typing import Any
+from typing import Any, Callable
 
 import pandas as pd
 from google.adk.agents import LlmAgent
@@ -32,6 +32,19 @@ from technical import add_indicators, bull_flag_score, fetch_price_history
 
 MODEL_NAME = "gemini-2.5-flash"
 APP_NAME = "stock_valuation_multi_agent"
+SUPERVISOR_AGENT_NAME = "stock_chat_supervisor"
+
+AGENT_DISPLAY_NAMES = {
+    SUPERVISOR_AGENT_NAME: "Superviseur",
+    "fundamental_agent": "Fondamentaux",
+    "technical_agent": "Technique",
+    "peer_agent": "Pairs / secteur",
+    "comparison_agent": "Comparaison",
+    "news_agent": "Actualites",
+    "market_signal_agent": "Signaux de marche",
+    "filings_agent": "Filings SEC",
+    "risk_agent": "Risque",
+}
 
 
 def _run_coro(coro):
@@ -113,6 +126,45 @@ def _text_from_parts(parts: list[Any]) -> str:
         if text:
             chunks.append(text)
     return "".join(chunks).strip()
+
+
+def _agent_display_name(agent_name: str | None) -> str | None:
+    if not agent_name:
+        return None
+    return AGENT_DISPLAY_NAMES.get(agent_name, agent_name.replace("_", " ").strip().title())
+
+
+def _build_agent_trace(authors_seen: list[str], final_author: str | None = None) -> dict[str, Any] | None:
+    """Build a compact agent-activity payload for the Streamlit chat UI."""
+    ordered_authors: list[str] = []
+    for author in authors_seen:
+        clean_author = str(author or "").strip()
+        if not clean_author or clean_author == "user":
+            continue
+        if clean_author not in ordered_authors:
+            ordered_authors.append(clean_author)
+
+    if final_author and final_author != "user" and final_author not in ordered_authors:
+        ordered_authors.append(final_author)
+
+    if not ordered_authors:
+        return None
+
+    specialist_agents = [author for author in ordered_authors if author != SUPERVISOR_AGENT_NAME]
+    lead_agent = specialist_agents[-1] if specialist_agents else ordered_authors[-1]
+    final_visible_author = final_author if final_author and final_author != "user" else None
+
+    return {
+        "authors": ordered_authors,
+        "labels": [_agent_display_name(author) or author for author in ordered_authors],
+        "specialist_agents": specialist_agents,
+        "specialist_labels": [_agent_display_name(author) or author for author in specialist_agents],
+        "lead_agent": lead_agent,
+        "lead_agent_label": _agent_display_name(lead_agent) or lead_agent,
+        "final_author": final_visible_author,
+        "final_author_label": _agent_display_name(final_visible_author) if final_visible_author else None,
+        "used_supervisor": SUPERVISOR_AGENT_NAME in ordered_authors,
+    }
 
 
 def _resolve_api_key(api_key: str | None) -> str | None:
@@ -999,7 +1051,7 @@ Explain the main downside risks, resilience factors and suitable investor profil
     )
 
     return LlmAgent(
-        name="stock_chat_supervisor",
+        name=SUPERVISOR_AGENT_NAME,
         model=MODEL_NAME,
         description="Interactive French chat analyst for the currently selected stock.",
         instruction="""
@@ -1103,7 +1155,11 @@ def create_ai_chat_session(
         return None, f"Echec de l'initialisation du chat multi-agents: {exc}"
 
 
-def chat_with_ai_analyst(chat_context: dict[str, Any], user_message: str) -> tuple[str | None, str | None]:
+def chat_with_ai_analyst(
+    chat_context: dict[str, Any],
+    user_message: str,
+    on_trace_update: Callable[[dict[str, Any]], None] | None = None,
+) -> tuple[str | None, str | None, dict[str, Any] | None]:
     """
     Send a new user message to the ADK analyst chat session.
     """
@@ -1125,6 +1181,23 @@ def chat_with_ai_analyst(chat_context: dict[str, Any], user_message: str) -> tup
 
         content = types.Content(role="user", parts=[types.Part(text=user_message + objective_note + format_note)])
         final_answer = None
+        final_author = None
+        authors_seen: list[str] = []
+        last_trace_signature = None
+
+        def _emit_trace(trace_payload: dict[str, Any] | None):
+            nonlocal last_trace_signature
+            if not on_trace_update or not trace_payload:
+                return
+            signature = json.dumps(trace_payload, sort_keys=True, ensure_ascii=True)
+            if signature == last_trace_signature:
+                return
+            try:
+                on_trace_update(trace_payload)
+            except Exception:
+                return
+            last_trace_signature = signature
+
         events = chat_context["runner"].run(
             user_id=chat_context["user_id"],
             session_id=chat_context["session_id"],
@@ -1132,10 +1205,17 @@ def chat_with_ai_analyst(chat_context: dict[str, Any], user_message: str) -> tup
         )
 
         for event in events:
+            event_author = getattr(event, "author", None)
+            if event_author and event_author != "user":
+                authors_seen.append(str(event_author))
+                _emit_trace(_build_agent_trace(authors_seen, final_author))
             if event.is_final_response() and event.content:
+                if event_author and event_author != "user":
+                    final_author = str(event_author)
                 text = _text_from_parts(event.content.parts)
                 if text:
                     final_answer = text
+                    _emit_trace(_build_agent_trace(authors_seen, final_author))
 
         if not final_answer:
             session = chat_context["session_service"].get_session(
@@ -1147,11 +1227,12 @@ def chat_with_ai_analyst(chat_context: dict[str, Any], user_message: str) -> tup
             if session and getattr(session, "state", None):
                 final_answer = session.state.get("last_answer")
 
+        trace_payload = _build_agent_trace(authors_seen, final_author)
         if not final_answer:
-            return None, "Le chat multi-agents n'a pas retourne de reponse finale."
-        return final_answer, None
+            return None, "Le chat multi-agents n'a pas retourne de reponse finale.", trace_payload
+        return final_answer, None, trace_payload
     except Exception as exc:
-        return None, f"Echec du chat multi-agents: {exc}"
+        return None, f"Echec du chat multi-agents: {exc}", None
 
 
 def ai_analyst_report(metrics: dict, bench: dict, scores: dict, tech: dict, api_key: str) -> tuple[str | None, str | None]:
@@ -1162,7 +1243,8 @@ def ai_analyst_report(metrics: dict, bench: dict, scores: dict, tech: dict, api_
     chat_context, error = create_ai_chat_session(metrics, bench, scores, tech, api_key)
     if error:
         return None, error
-    return chat_with_ai_analyst(
+    reply, error, _trace = chat_with_ai_analyst(
         chat_context,
         f"Donne-moi une synthese executive de l'action {metrics.get('ticker', 'N/A')} avec forces, risques, verdict et avertissement.",
     )
+    return reply, error

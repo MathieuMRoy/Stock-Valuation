@@ -267,6 +267,42 @@ def _render_provenance_panel(entries: list[dict]):
     st.markdown(f"""<div class="vmp-provenance-grid">{''.join(cards)}</div>""", unsafe_allow_html=True)
 
 
+def _render_agent_trace(trace: dict | None, placeholder=None, live: bool = False):
+    """Render the active AI-agent trace for a single assistant response."""
+    if not trace:
+        if placeholder:
+            placeholder.empty()
+        return
+
+    lead_label = trace.get("lead_agent_label") or trace.get("final_author_label") or "Superviseur"
+    final_label = trace.get("final_author_label")
+    specialist_labels = trace.get("specialist_labels") or []
+    chip_labels = specialist_labels or trace.get("labels") or [lead_label]
+    if trace.get("used_supervisor") and "Superviseur" not in chip_labels:
+        chip_labels = [*chip_labels, "Superviseur"]
+
+    copy_parts = []
+    if live:
+        copy_parts.append(f"En train de mobiliser {lead_label.lower()}.")
+    else:
+        copy_parts.append(f"Reponse pilotee par {lead_label.lower()}.")
+    if final_label and final_label != lead_label:
+        copy_parts.append(f"Synthese finale par {final_label.lower()}.")
+
+    chip_html = "".join(f"""<span class="vmp-agent-chip">{escape(label)}</span>""" for label in chip_labels)
+    html = f"""
+        <div class="vmp-agent-trace{' is-live' if live else ''}">
+            <div class="vmp-agent-trace-label">{'Agents actifs' if live else 'Agents mobilises'}</div>
+            <div class="vmp-agent-trace-title">{escape(lead_label)}</div>
+            <div class="vmp-agent-trace-copy">{escape(' '.join(copy_parts))}</div>
+            <div class="vmp-agent-chip-row">{chip_html}</div>
+        </div>
+    """
+
+    target = placeholder if placeholder is not None else st
+    target.markdown(html, unsafe_allow_html=True)
+
+
 def _render_overview_card(
     ticker: str,
     long_name: str,
@@ -1312,6 +1348,7 @@ def render_stock_analyzer(api_key: str, sidebar_state: dict | None = None):
     elif section == "🤖 AI Agent":
         st.subheader("🤖 AI Analyst Chat (Multi-Agent ADK)")
         st.caption("Tu peux maintenant discuter avec l'agent. Il utilise plusieurs sous-agents specialises: fondamentaux, technique, comparaison, actualites, signaux de marche, filings SEC et risque.")
+        st.caption("Chaque reponse affiche aussi quels sous-agents ont ete mobilises pendant l'analyse.")
 
         objective_labels = [preset["label"] for preset in INVESTOR_OBJECTIVES.values()]
         selected_objective_label = st.radio(
@@ -1367,6 +1404,8 @@ def render_stock_analyzer(api_key: str, sidebar_state: dict | None = None):
 
         for message in st.session_state.get("ai_agent_messages", []):
             with st.chat_message(message["role"]):
+                if message["role"] == "assistant":
+                    _render_agent_trace(message.get("agent_trace"))
                 st.markdown(message["content"])
 
         user_prompt = st.chat_input(
@@ -1387,11 +1426,18 @@ def render_stock_analyzer(api_key: str, sidebar_state: dict | None = None):
                 st.session_state["ai_agent_context"] = chat_context
 
             with st.chat_message("assistant"):
+                trace_placeholder = st.empty()
                 with st.spinner("Analyse en cours..."):
-                    reply, err = chat_with_ai_analyst(st.session_state["ai_agent_context"], user_prompt)
+                    reply, err, agent_trace = chat_with_ai_analyst(
+                        st.session_state["ai_agent_context"],
+                        user_prompt,
+                        on_trace_update=lambda trace: _render_agent_trace(trace, placeholder=trace_placeholder, live=True),
+                    )
                     if reply:
+                        _render_agent_trace(agent_trace, placeholder=trace_placeholder)
                         st.markdown(reply)
-                        st.session_state["ai_agent_messages"].append({"role": "assistant", "content": reply})
+                        st.session_state["ai_agent_messages"].append({"role": "assistant", "content": reply, "agent_trace": agent_trace})
                     else:
+                        trace_placeholder.empty()
                         st.error(err)
                         st.session_state["ai_agent_messages"].append({"role": "assistant", "content": err})
