@@ -128,6 +128,157 @@ def _text_from_parts(parts: list[Any]) -> str:
     return "".join(chunks).strip()
 
 
+def _format_compact_number(value: Any, suffix: str = "") -> str:
+    number = _to_float(value)
+    if number is None:
+        return "N/A"
+    abs_value = abs(number)
+    if abs_value >= 1_000_000_000:
+        return f"{number / 1_000_000_000:.2f} B{suffix}"
+    if abs_value >= 1_000_000:
+        return f"{number / 1_000_000:.2f} M{suffix}"
+    return f"{number:.2f}{suffix}"
+
+
+def _format_pct(value: Any) -> str:
+    number = _to_percent(value)
+    return f"{number:.1f}%" if number is not None else "N/A"
+
+
+def _format_ratio(value: Any) -> str:
+    number = _to_float(value)
+    return f"{number:.2f}x" if number is not None else "N/A"
+
+
+def _extract_function_responses(event: Any) -> list[Any]:
+    """Extract ADK function responses from an event when no final text is available."""
+    if hasattr(event, "get_function_responses"):
+        try:
+            responses = event.get_function_responses()
+            if responses:
+                return list(responses)
+        except Exception:
+            pass
+
+    content = getattr(event, "content", None)
+    parts = getattr(content, "parts", None) or []
+    responses = []
+    for part in parts:
+        function_response = getattr(part, "function_response", None)
+        if function_response is not None:
+            responses.append(function_response)
+    return responses
+
+
+def _comparison_tool_response_to_text(payload: dict[str, Any]) -> str | None:
+    if not isinstance(payload, dict):
+        return None
+    if payload.get("error"):
+        return str(payload.get("error"))
+
+    comparison = payload.get("comparison")
+    if not isinstance(comparison, dict):
+        return None
+
+    current = comparison.get("current_stock") or {}
+    other = comparison.get("other_stock") or {}
+    context = comparison.get("comparison_context") or {}
+    objective = comparison.get("investor_objective") or {}
+
+    current_name = current.get("company_name") or current.get("ticker") or "L'action actuelle"
+    other_name = other.get("company_name") or other.get("ticker") or payload.get("resolved_company_name") or "l'autre action"
+    current_ticker = current.get("ticker") or "N/A"
+    other_ticker = other.get("ticker") or payload.get("resolved_ticker") or "N/A"
+    objective_label = objective.get("label") or "Equilibre"
+
+    lines = [
+        f"Voici une comparaison rapide entre {current_name} ({current_ticker}) et {other_name} ({other_ticker}).",
+    ]
+
+    if context.get("is_cross_sector"):
+        lines.append(
+            f"C'est une comparaison intersectorielle: {current_name} est plutot {context.get('current_business_model') or current.get('business_model_hint') or 'dans son secteur'}, "
+            f"alors que {other_name} est plutot {context.get('other_business_model') or other.get('business_model_hint') or 'dans un autre secteur'}."
+        )
+
+    lines.append(
+        f"Croissance: {current_ticker} affiche { _format_pct(current.get('sales_growth_pct')) } de croissance des ventes et { _format_pct(current.get('eps_growth_pct')) } de croissance EPS, "
+        f"contre { _format_pct(other.get('sales_growth_pct')) } et { _format_pct(other.get('eps_growth_pct')) } pour {other_ticker}."
+    )
+    lines.append(
+        f"Valorisation: trailing P/E { _format_ratio(current.get('pe_ratio')) } vs { _format_ratio(other.get('pe_ratio')) }, "
+        f"forward P/E { _format_ratio(current.get('forward_pe_ratio')) } vs { _format_ratio(other.get('forward_pe_ratio')) }, "
+        f"et P/S { _format_ratio(current.get('ps_ratio')) } vs { _format_ratio(other.get('ps_ratio')) }."
+    )
+    lines.append(
+        f"Qualite / bilan: net cash { _format_compact_number(current.get('net_cash'), '$') } vs { _format_compact_number(other.get('net_cash'), '$') }, "
+        f"Piotroski {current.get('piotroski_score', 'N/A')} vs {other.get('piotroski_score', 'N/A')}."
+    )
+    lines.append(
+        f"Sous l'angle {objective_label.lower()}, il faut surtout arbitrer entre croissance / rerating et profil defensif / cash generation selon le secteur."
+    )
+
+    return "\n\n".join(lines)
+
+
+def _news_tool_response_to_text(payload: dict[str, Any]) -> str | None:
+    if not isinstance(payload, dict):
+        return None
+    market_news = payload.get("recent_market_news") or []
+    press_releases = payload.get("recent_press_releases") or []
+    company_name = payload.get("company_name") or "la societe"
+    snippets = []
+    for item in (market_news + press_releases)[:3]:
+        title = item.get("title")
+        published_at = item.get("published_at")
+        source = item.get("source")
+        if title:
+            prefix = f"{published_at} - " if published_at else ""
+            suffix = f" ({source})" if source else ""
+            snippets.append(f"- {prefix}{title}{suffix}")
+    if not snippets:
+        return None
+    return f"Voici les elements recents disponibles pour {company_name} :\n\n" + "\n".join(snippets)
+
+
+def _extract_text_from_tool_payload(payload: Any, tool_name: str | None = None) -> str | None:
+    if isinstance(payload, str):
+        return payload.strip() or None
+    if not isinstance(payload, dict):
+        return None
+    if payload.get("error"):
+        return str(payload.get("error"))
+
+    for key in ["summary", "analysis", "answer", "message", "text", "result"]:
+        value = payload.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+
+    if tool_name == "compare_against_other_stock" or "comparison" in payload:
+        return _comparison_tool_response_to_text(payload)
+    if tool_name == "get_recent_news_snapshot" or "recent_market_news" in payload or "recent_press_releases" in payload:
+        return _news_tool_response_to_text(payload)
+
+    return None
+
+
+def _extract_text_from_event(event: Any) -> str | None:
+    content = getattr(event, "content", None)
+    if content and getattr(content, "parts", None):
+        text = _text_from_parts(content.parts)
+        if text:
+            return text
+
+    for function_response in _extract_function_responses(event):
+        tool_name = getattr(function_response, "name", None)
+        payload = getattr(function_response, "response", None)
+        fallback_text = _extract_text_from_tool_payload(payload, tool_name=tool_name)
+        if fallback_text:
+            return fallback_text
+
+    return None
+
+
 def _agent_display_name(agent_name: str | None) -> str | None:
     if not agent_name:
         return None
@@ -1209,10 +1360,10 @@ def chat_with_ai_analyst(
             if event_author and event_author != "user":
                 authors_seen.append(str(event_author))
                 _emit_trace(_build_agent_trace(authors_seen, final_author))
-            if event.is_final_response() and event.content:
+            if event.is_final_response():
                 if event_author and event_author != "user":
                     final_author = str(event_author)
-                text = _text_from_parts(event.content.parts)
+                text = _extract_text_from_event(event)
                 if text:
                     final_answer = text
                     _emit_trace(_build_agent_trace(authors_seen, final_author))
