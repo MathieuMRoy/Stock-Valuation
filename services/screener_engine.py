@@ -9,6 +9,10 @@ import pandas as pd
 
 ProgressCallback = Callable[[int, int, str, str], None]
 FINANCIAL_DATA_CACHE_VERSION = "2026-04-06-ai-news-v4"
+MAX_REASONABLE_UPSIDE_PCT = 300.0
+NON_OPERATING_QUOTE_TYPES = {"etf", "fund", "mutualfund", "closedendfund", "trust", "index", "commodity"}
+UNSUITABLE_SECTOR_KEYWORDS = {"financial", "financial services", "banks", "insurance"}
+CYCLICAL_SECTOR_KEYWORDS = {"energy", "basic materials", "materials"}
 
 
 @dataclass(slots=True)
@@ -112,6 +116,79 @@ def market_cap_ok(data: dict, minimum_market_cap: float) -> bool:
         return False
 
 
+def _normalized_text(value: object) -> str:
+    return str(value or "").strip().lower()
+
+
+def _is_cyclical_sector(sector_name: str | None) -> bool:
+    sector = _normalized_text(sector_name)
+    return any(keyword in sector for keyword in CYCLICAL_SECTOR_KEYWORDS)
+
+
+def _is_unsuitable_for_fast_dcf(data: dict) -> bool:
+    sector = _normalized_text(data.get("sector"))
+    industry = _normalized_text(data.get("industry"))
+    quote_type = _normalized_text(data.get("quote_type"))
+    long_name = _normalized_text(data.get("long_name"))
+
+    if any(keyword in sector for keyword in UNSUITABLE_SECTOR_KEYWORDS):
+        return True
+    if any(keyword in industry for keyword in UNSUITABLE_SECTOR_KEYWORDS):
+        return True
+    if quote_type in NON_OPERATING_QUOTE_TYPES:
+        return True
+    if any(keyword in long_name for keyword in ("fund", "trust", "etf")):
+        return True
+    return False
+
+
+def _conservative_growth_rate(data: dict, fallback_fcf_growth_pct: float) -> float:
+    sector = _normalized_text(data.get("sector"))
+    observed_growth = float(data.get("rev_growth", 0) or 0)
+    fallback_growth = max(float(fallback_fcf_growth_pct or 0) / 100.0, 0.02)
+
+    if _is_cyclical_sector(sector):
+        lower_bound, upper_bound = 0.00, 0.05
+    else:
+        lower_bound, upper_bound = 0.01, 0.10
+
+    base_growth = observed_growth if observed_growth > 0 else fallback_growth
+    return max(lower_bound, min(base_growth, upper_bound))
+
+
+def _sector_adjusted_wacc(data: dict, wacc_pct: float) -> float:
+    sector = _normalized_text(data.get("sector"))
+    base_wacc = max(float(wacc_pct or 0) / 100.0, 0.08)
+
+    if _is_cyclical_sector(sector):
+        base_wacc += 0.02
+    elif "technology" in sector or "consumer cyclical" in sector:
+        base_wacc += 0.01
+
+    return min(base_wacc, 0.18)
+
+
+def _normalized_fcf(data: dict, revenue: float, fcf: float, market_cap: float) -> float:
+    if revenue <= 0 or fcf <= 0 or market_cap <= 0:
+        return 0.0
+
+    fcf_margin = fcf / revenue
+    fcf_yield = fcf / market_cap
+
+    if fcf_margin <= 0 or fcf_yield <= 0:
+        return 0.0
+
+    if _is_cyclical_sector(data.get("sector")):
+        max_margin = 0.12
+    else:
+        max_margin = 0.18
+
+    if fcf_yield > 0.25:
+        return 0.0
+
+    return revenue * min(fcf_margin, max_margin)
+
+
 def quick_intrinsic_dcf(
     ticker: str,
     minimum_market_cap: float,
@@ -137,6 +214,14 @@ def quick_intrinsic_dcf(
         return None
     if not market_cap_ok(data, minimum_market_cap):
         return None
+    if _is_unsuitable_for_fast_dcf(data):
+        return None
+
+    market_cap = float(data.get("market_cap", 0) or 0)
+    if market_cap <= 0:
+        market_cap = shares * price
+    if market_cap <= 0:
+        return None
 
     revenue = _ttm_or_latest(data["inc"], ["Revenue"])
     operating_cash_flow = _ttm_or_latest(data["cf"], ["OperatingCashFlow"])
@@ -144,20 +229,22 @@ def quick_intrinsic_dcf(
     fcf = operating_cash_flow - capex
     cash = _item_safe(data["bs"], ["Cash"])
     debt = _debt_safe(data["bs"])
+    normalized_fcf = _normalized_fcf(data, revenue, fcf, market_cap)
+    if normalized_fcf <= 0:
+        return None
 
-    growth = float(data.get("rev_growth", 0) or 0)
-    if growth <= 0:
-        growth = fallback_fcf_growth_pct / 100.0
+    growth = _conservative_growth_rate(data, fallback_fcf_growth_pct)
+    adjusted_wacc = _sector_adjusted_wacc(data, wacc_pct)
 
     dcf_value, _, _ = valuation_calculator(
         0,
         growth,
         0,
-        wacc_pct / 100.0,
+        adjusted_wacc,
         0,
         0,
         revenue,
-        fcf,
+        normalized_fcf,
         0,
         cash,
         debt,
@@ -166,11 +253,15 @@ def quick_intrinsic_dcf(
     if dcf_value <= 0:
         return None
 
+    upside_pct = (dcf_value / price - 1) * 100
+    if upside_pct <= 0 or upside_pct > MAX_REASONABLE_UPSIDE_PCT:
+        return None
+
     return ScreenerCandidate(
         ticker=ticker,
         price=price,
         intrinsic=dcf_value,
-        upside=(dcf_value / price - 1) * 100,
+        upside=upside_pct,
         bucket=str(data.get("sector") or "Unknown"),
     )
 
