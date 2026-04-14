@@ -439,6 +439,16 @@ def inject_global_styles():
             box-shadow: 0 16px 28px rgba(29, 111, 165, 0.30);
         }
 
+        div.stDownloadButton > button {
+            border-radius: 15px;
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            background: linear-gradient(135deg, rgba(19, 89, 118, 0.95) 0%, rgba(14, 134, 127, 0.95) 100%);
+            color: white;
+            font-weight: 700;
+            padding: 0.62rem 1rem;
+            box-shadow: 0 12px 24px rgba(20, 134, 127, 0.2);
+        }
+
         [data-testid="stChatMessage"] {
             border-radius: 20px;
             border: 1px solid var(--vmp-border);
@@ -537,20 +547,20 @@ def display_title():
     st.markdown(
         """
         <div class="vmp-hero">
-            <div class="vmp-kicker">Finance analytics studio</div>
+            <div class="vmp-kicker">Plateforme d'analyse boursiere</div>
             <div class="vmp-title">
                 Valuation <span class="vmp-title-accent">Master Pro</span>
             </div>
             <div class="vmp-subtitle">
-                A cleaner, presentation-ready workspace for valuation, catalysts, technical signals,
-                market sentiment and AI-assisted stock research.
+                Un espace de travail plus propre et plus presentable pour la valorisation, les catalyseurs,
+                les signaux techniques, le sentiment de marche et la recherche action assistee par IA.
             </div>
             <div class="vmp-badges">
                 <span class="vmp-badge">DCF + Multiples</span>
-                <span class="vmp-badge">Technical Signals</span>
-                <span class="vmp-badge">Insiders + Short Interest</span>
-                <span class="vmp-badge">AI Multi-Agent Chat</span>
-                <span class="vmp-badge">Screening + Earnings</span>
+                <span class="vmp-badge">Signaux techniques</span>
+                <span class="vmp-badge">Insiders + Short interest</span>
+                <span class="vmp-badge">Chat IA multi-agents</span>
+                <span class="vmp-badge">Screener + earnings</span>
             </div>
         </div>
         """,
@@ -562,16 +572,16 @@ def display_mode_banner(mode: str):
     """Display a small presentation card for the currently selected mode."""
     mode_content = {
         "Stock Analyzer": (
-            "Core Workspace",
-            "Analyze one stock with valuation, quality, technicals, catalysts and AI commentary in one place.",
+            "Analyse principale",
+            "Analyse un titre avec valorisation, qualite, technique, catalyseurs et commentaire IA dans un seul espace.",
         ),
         "Earnings Calendar": (
-            "Event Watch",
-            "Track upcoming earnings dates for a curated watchlist and navigate catalysts more quickly.",
+            "Calendrier des catalyseurs",
+            "Repere rapidement les prochaines publications sur une watchlist suivie et bascule vers l'analyse detaillee en un clic.",
         ),
         "AI Screener (Top Upside)": (
-            "Discovery Engine",
-            "Scan sectors for upside candidates using a fast DCF-style pass and prioritize what deserves deeper work.",
+            "Moteur de decouverte",
+            "Scanne les secteurs pour sortir une shortlist de candidats a fort upside avant un travail plus approfondi.",
         ),
     }
     label, copy = mode_content.get(mode, ("Workspace", "Explore the application."))
