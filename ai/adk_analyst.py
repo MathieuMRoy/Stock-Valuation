@@ -213,7 +213,29 @@ def _looks_truncated_text(text: str | None) -> bool:
     if any(lowered.endswith(ending) for ending in dangling_endings):
         return True
 
-    return len(stripped) >= 180
+    if len(stripped) >= 60:
+        return True
+
+    return False
+
+
+def _is_specialist_answer_usable(text: str | None, specialist_name: str) -> bool:
+    """Reject clipped or suspiciously incomplete specialist answers."""
+    if not text or not text.strip():
+        return False
+
+    stripped = text.strip()
+    if _looks_truncated_text(stripped):
+        return False
+
+    lowered_name = (specialist_name or "").lower()
+    if lowered_name in {"comparison_agent", "peer_agent", "news_agent", "market_signal_agent", "filings_agent"}:
+        if len(stripped) < 90:
+            return False
+        if not any(punct in stripped for punct in [".", "!", "?", "\n", ":"]):
+            return False
+
+    return True
 
 
 def _extract_model_text_and_finish_reason(response: Any) -> tuple[str | None, str]:
@@ -593,7 +615,8 @@ def _generate_specialist_ai_response(
             "Reponds en francais, de facon personnalisee au titre et a la question. "
             "Utilise les chiffres utiles du contexte, evite les phrases generiques, "
             "dis quand une donnee est absente, et n'invente rien. "
-            "Fais une reponse complete mais concise, et termine proprement."
+            "Fais une reponse complete mais concise. "
+            "Ne t'arrete jamais au milieu d'une phrase et termine toujours par une phrase complete."
         )
         accumulated_text = ""
 
@@ -622,10 +645,10 @@ def _generate_specialist_ai_response(
                 break
 
             accumulated_text = _merge_continuation_text(accumulated_text, chunk_text)
-            if finish_reason not in {"MAX_TOKENS", "FINISH_REASON_MAX_TOKENS"} and not _looks_truncated_text(accumulated_text):
+            if finish_reason not in {"MAX_TOKENS", "FINISH_REASON_MAX_TOKENS"} and _is_specialist_answer_usable(accumulated_text, specialist_name):
                 return accumulated_text.strip()
 
-        return accumulated_text.strip() if accumulated_text.strip() else None
+        return accumulated_text.strip() if _is_specialist_answer_usable(accumulated_text, specialist_name) else None
     except Exception:
         return None
 
