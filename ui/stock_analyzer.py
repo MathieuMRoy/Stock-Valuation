@@ -7,14 +7,21 @@ from html import escape
 import pandas as pd
 import streamlit as st
 
-from data import TICKER_DB, get_benchmark_data
-from fetchers import get_debt_safe, get_financial_data_secure, get_item_safe, get_ttm_or_latest
+from data import TICKER_DB
 from fetchers.yahoo_finance import FINANCIAL_DATA_CACHE_VERSION
 from fetchers.stock_analysis import get_extended_history
 from valuation import calculate_valuation, solve_reverse_dcf, display_relative_analysis, compute_asset_based_value
 from technical import fetch_price_history, add_indicators, bull_flag_score, plot_technical_chart, plot_fundamental_overlay
-from scoring import calculate_piotroski_score, calculate_altman_z, score_out_of_10, plot_radar
+from scoring import plot_radar
 from ai import build_ai_chat_signature, chat_with_ai_analyst, create_ai_chat_session
+from services import (
+    INVESTOR_OBJECTIVES,
+    build_investor_objective_snapshot,
+    prepare_analyzer_snapshot,
+    profile_label,
+    risk_label,
+    valuation_label,
+)
 
 
 SECTION_OPTIONS = [
@@ -29,40 +36,6 @@ SECTION_OPTIONS = [
     "Scorecard",
     "AI Chat",
 ]
-
-
-INVESTOR_OBJECTIVES = {
-    "balanced": {
-        "label": "Equilibre",
-        "description": "mix upside, qualite financiere et valorisation",
-        "decision_frame": "balanced mix of upside, quality and valuation",
-    },
-    "growth": {
-        "label": "Croissance",
-        "description": "priorite a la croissance, au rerating et aux catalyseurs",
-        "decision_frame": "prioritize revenue growth, EPS acceleration and upside optionality",
-    },
-    "value": {
-        "label": "Value",
-        "description": "priorite a la valorisation et au potentiel de rerating",
-        "decision_frame": "prioritize valuation support, cheaper multiples and mean reversion",
-    },
-    "defensive": {
-        "label": "Defensif",
-        "description": "priorite au bilan, a la resilience et a la stabilite",
-        "decision_frame": "prioritize balance-sheet resilience, profitability quality and lower cyclicality",
-    },
-    "income": {
-        "label": "Revenu",
-        "description": "priorite au rendement, aux retours cash et a la stabilite",
-        "decision_frame": "prioritize income, cash returns and dividend support when available",
-    },
-    "short_term": {
-        "label": "Court terme",
-        "description": "priorite au momentum, aux catalyseurs et au setup de marche",
-        "decision_frame": "prioritize momentum, near-term catalysts and trading setup",
-    },
-}
 
 
 def _format_currency(value: float | None) -> str:
@@ -98,143 +71,6 @@ def _blend_intrinsic(values: list[float]) -> float:
     if not positives:
         return 0.0
     return sum(positives) / len(positives)
-
-
-def _extract_next_earnings(calendar_data) -> str:
-    """Extract the next earnings date from a Yahoo calendar payload."""
-    if calendar_data is None:
-        return "N/A"
-
-    candidates: list[pd.Timestamp] = []
-
-    def _collect(value):
-        if value is None:
-            return
-        if isinstance(value, (list, tuple, set)):
-            for item in value:
-                _collect(item)
-            return
-        parsed = pd.to_datetime(value, errors="coerce")
-        if pd.notna(parsed):
-            candidates.append(pd.Timestamp(parsed))
-
-    if isinstance(calendar_data, pd.DataFrame):
-        for col in calendar_data.columns:
-            if "earnings" in str(col).lower():
-                _collect(calendar_data[col].tolist())
-        for idx in calendar_data.index:
-            if "earnings" in str(idx).lower():
-                row = calendar_data.loc[idx]
-                if isinstance(row, pd.Series):
-                    _collect(row.tolist())
-                else:
-                    _collect(row)
-    elif isinstance(calendar_data, pd.Series):
-        for label, value in calendar_data.items():
-            if "earnings" in str(label).lower():
-                _collect(value)
-    elif isinstance(calendar_data, dict):
-        for label, value in calendar_data.items():
-            if "earnings" in str(label).lower():
-                _collect(value)
-
-    if not candidates:
-        return "N/A"
-
-    today = pd.Timestamp(date.today())
-    future_candidates = sorted(ts for ts in candidates if ts.normalize() >= today)
-    target = future_candidates[0] if future_candidates else sorted(candidates)[0]
-    day_gap = (target.normalize() - today).days
-
-    if day_gap == 0:
-        return f"{target:%Y-%m-%d} (today)"
-    if day_gap > 0:
-        return f"{target:%Y-%m-%d} ({day_gap}d)"
-    return f"{target:%Y-%m-%d}"
-
-
-def _is_financial_company(sector_name: str | None, benchmark_name: str | None) -> bool:
-    """Detect financial institutions that need bank-specific presentation logic."""
-    text = " ".join([str(sector_name or ""), str(benchmark_name or "")]).lower()
-    keywords = ["financial", "bank", "banks", "insurance", "capital markets", "asset management"]
-    return any(keyword in text for keyword in keywords)
-
-
-def _risk_label(altman_z: float, piotroski: int | None, is_financial: bool = False) -> str:
-    """Describe risk with a simple quality heuristic."""
-    if is_financial:
-        if (piotroski or 0) >= 7:
-            return "Stable bank profile"
-        if (piotroski or 0) <= 3:
-            return "Watch bank fundamentals"
-        return "Bank-specific risk view"
-    if altman_z >= 3 and (piotroski or 0) >= 7:
-        return "Lower risk"
-    if altman_z < 1.8 or (piotroski or 0) <= 3:
-        return "Higher risk"
-    return "Balanced risk"
-
-
-def _valuation_label(gap_pct: float) -> str:
-    """Convert valuation gap into a readable verdict."""
-    if gap_pct >= 18:
-        return "Undervalued setup"
-    if gap_pct <= -18:
-        return "Rich valuation"
-    return "Fairly priced"
-
-
-def _profile_label(
-    sales_growth: float,
-    eps_growth: float,
-    ps_ratio: float,
-    peer_ps: float,
-    is_financial: bool = False,
-) -> str:
-    """Suggest the dominant investor profile for the stock."""
-    if is_financial:
-        return "Regulated bank model"
-    if sales_growth >= 0.18 and ps_ratio >= peer_ps:
-        return "Growth-oriented profile"
-    if eps_growth > 0.12 and ps_ratio <= peer_ps:
-        return "Quality / value blend"
-    return "Balanced core compounder"
-
-
-def _business_model_hint(sector_name: str | None, benchmark_name: str | None) -> str:
-    """Provide a compact business-model label for the AI comparison context."""
-    text = " ".join([str(sector_name or ""), str(benchmark_name or "")]).lower()
-    if "energy" in text or "oil" in text or "gas" in text:
-        return "energy producer with commodity-price exposure"
-    if "bank" in text or "financial" in text:
-        return "financial institution driven by capital strength and credit quality"
-    if "consumer app" in text or "platform" in text or "streaming" in text:
-        return "consumer platform with growth-sensitive multiples"
-    if "saas" in text or "cloud" in text or "software" in text or "technology" in text:
-        return "software or platform business with valuation sensitivity to growth"
-    if "pharma" in text or "biotech" in text:
-        return "healthcare business influenced by product pipeline and regulation"
-    return f"company exposed to the {sector_name or benchmark_name or 'broader market'} cycle"
-
-
-def _build_investor_objective_snapshot(objective_key: str) -> dict:
-    """Build the comparison objective context passed into the AI chat."""
-    preset = INVESTOR_OBJECTIVES.get(objective_key, INVESTOR_OBJECTIVES["balanced"])
-    return {
-        "key": objective_key if objective_key in INVESTOR_OBJECTIVES else "balanced",
-        "label": preset["label"],
-        "description": preset["description"],
-        "decision_frame": preset["decision_frame"],
-    }
-
-
-def _statement_basis_label(df_quarterly, df_annual, fallback_label: str) -> str:
-    """Describe which financial statement basis is currently driving a metric."""
-    if hasattr(df_quarterly, "empty") and not df_quarterly.empty:
-        return "Quarterly TTM"
-    if hasattr(df_annual, "empty") and not df_annual.empty:
-        return "Latest annual statement"
-    return fallback_label
 
 
 def _render_context_banner(title: str, copy: str):
@@ -368,102 +204,57 @@ def render_stock_analyzer(api_key: str, sidebar_state: dict | None = None):
         ticker_final = choice.split("-")[0].strip()
 
     st.caption(f"Analyzing: **{ticker_final}**")
-    data = get_financial_data_secure(ticker_final, cache_version=FINANCIAL_DATA_CACHE_VERSION)
+    manual_shares = float(sidebar_state.get("manual_shares", 0.0) or 0.0)
+    snapshot = prepare_analyzer_snapshot(
+        ticker_final,
+        manual_shares_millions=manual_shares,
+        cache_version=FINANCIAL_DATA_CACHE_VERSION,
+    )
+    data = snapshot.data
     
     if data.get("error"):
         st.warning(f"Data fetch warning: {data['error']}")
     
-    current_price = float(data.get("price", 0) or 0)
+    current_price = snapshot.current_price
 
     if current_price <= 0:
         st.error("Prix introuvable. Vérifiez le ticker.")
         st.stop()
 
-    bs = data.get("bs", pd.DataFrame())
-    inc = data.get("inc", pd.DataFrame())
-    cf = data.get("cf", pd.DataFrame())
-    piotroski = calculate_piotroski_score(bs, inc, cf)
+    bs = snapshot.bs
+    inc = snapshot.inc
+    cf = snapshot.cf
+    piotroski = snapshot.piotroski
     
     # Shares override
-    shares = float(data.get("shares_info", 0) or 0)
+    shares = snapshot.shares
     st.sidebar.markdown("### 🔧 Data Override")
-    manual_shares = float(sidebar_state.get("manual_shares", 0.0) or 0.0)
-    if manual_shares > 0:
-        shares = manual_shares * 1_000_000
+    if snapshot.manual_shares_applied:
         st.sidebar.success(f"Using manual shares: {shares:,.0f}")
-    if shares <= 1:
-        shares = 1.0
-        st.warning("⚠️ Share count unavailable. Enter manually in Sidebar.")
+    if snapshot.share_count_unavailable:
+        st.warning("Share count unavailable. Enter it manually in the sidebar if needed.")
 
-    market_cap = shares * current_price
-    altman_z = calculate_altman_z(bs, inc, market_cap)
+    market_cap = snapshot.market_cap
+    altman_z = snapshot.altman_z
 
-    # Revenue
-    revenue_ttm = data.get("revenue_ttm", 0)
-    if revenue_ttm == 0:
-        revenue_ttm = get_ttm_or_latest(inc, ["TotalRevenue", "Revenue"])
-
-    cfo_ttm = get_ttm_or_latest(cf, ["OperatingCashFlow", "Operating Cash Flow"])
-    capex_ttm = abs(get_item_safe(cf, ["CapitalExpenditure", "PurchaseOfPPE"]))
-    fcf_ttm = cfo_ttm - capex_ttm
-    cash = get_item_safe(bs, ["CashAndCashEquivalents", "Cash"])
-    debt = get_debt_safe(bs)
-    
-    # EPS and P/E
-    eps_ttm = data.get("trailing_eps", 0)
-    if eps_ttm == 0:
-        inc_q = data.get("inc_q")
-        inc_a = data.get("inc_a")
-        net_inc_ttm = (
-            get_ttm_or_latest(inc_q, ["NetIncome", "Net Income Common Stockholders"])
-            if hasattr(inc_q, "empty") and not inc_q.empty
-            else 0
-        )
-        if net_inc_ttm == 0:
-            net_inc_ttm = get_item_safe(inc_a, ["NetIncome", "Net Income Common Stockholders"])
-        if net_inc_ttm == 0:
-            net_inc_ttm = get_ttm_or_latest(inc, ["NetIncome", "Net Income Common Stockholders"])
-        if shares > 0:
-            eps_ttm = net_inc_ttm / shares
-
-    pe = data.get("pe_ratio", 0)
-    if pe == 0 and eps_ttm > 0:
-        pe = current_price / eps_ttm
-    forward_pe = float(data.get("forward_pe", 0) or 0)
-    quote_currency = str(data.get("quote_currency") or "N/A")
-    financial_currency = str(data.get("financial_currency") or quote_currency or "N/A")
-        
-    ps = market_cap / revenue_ttm if revenue_ttm > 0 else 0
-    
-    cur_sales_gr = data.get("rev_growth", 0)
-    cur_eps_gr = data.get("eps_growth", 0)
-    bench_data = get_benchmark_data(ticker_final, data.get("sector", "Default"))
-    is_financial = _is_financial_company(data.get("sector", "Default"), bench_data.get("name"))
-    
-    metrics = {
-        "company_name": data.get("long_name", ticker_final),
-        "ticker": ticker_final,
-        "sector_name": data.get("sector", "Default"),
-        "benchmark_name": bench_data.get("name"),
-        "business_model_hint": _business_model_hint(data.get("sector", "Default"), bench_data.get("name")),
-        "price": current_price,
-        "pe": pe,
-        "forward_pe": forward_pe,
-        "ps": ps,
-        "sales_gr": cur_sales_gr,
-        "eps_gr": cur_eps_gr,
-        "dividend_yield": float(data.get("dividend_yield", 0) or 0),
-        "trailing_eps": eps_ttm,
-        "quote_currency": quote_currency,
-        "financial_currency": financial_currency,
-        "net_cash": 0.0 if is_financial else cash - debt,
-        "fcf_yield": 0.0 if is_financial else (fcf_ttm / market_cap if market_cap else 0),
-        "rule_40": 0.0 if is_financial else cur_sales_gr + ((fcf_ttm / revenue_ttm) if revenue_ttm else 0),
-        "piotroski": piotroski,
-        "altman_z": None if is_financial else altman_z,
-        "is_financial": is_financial,
-    }
-    scores = score_out_of_10(metrics, bench_data)
+    revenue_ttm = snapshot.revenue_ttm
+    cfo_ttm = snapshot.cfo_ttm
+    capex_ttm = snapshot.capex_ttm
+    fcf_ttm = snapshot.fcf_ttm
+    cash = snapshot.cash
+    debt = snapshot.debt
+    eps_ttm = snapshot.eps_ttm
+    pe = snapshot.pe
+    forward_pe = snapshot.forward_pe
+    quote_currency = snapshot.quote_currency
+    financial_currency = snapshot.financial_currency
+    ps = snapshot.ps
+    cur_sales_gr = snapshot.sales_growth
+    cur_eps_gr = snapshot.eps_growth
+    bench_data = snapshot.bench_data
+    is_financial = snapshot.is_financial
+    metrics = snapshot.metrics
+    scores = snapshot.scores
 
     tech_bundle: dict | None = None
 
@@ -522,19 +313,19 @@ def render_stock_analyzer(api_key: str, sidebar_state: dict | None = None):
     valuation_gap = ((blended_intrinsic / current_price) - 1) * 100 if blended_intrinsic and current_price else 0.0
     analyst_target = float(data.get("target_price") or 0)
     analyst_gap = ((analyst_target / current_price) - 1) * 100 if analyst_target and current_price else 0.0
-    next_earnings = _extract_next_earnings(data.get("calendar"))
-    valuation_label = _valuation_label(valuation_gap)
-    risk_label = _risk_label(altman_z, piotroski, is_financial=is_financial)
-    profile_label = _profile_label(cur_sales_gr, cur_eps_gr, ps, float(bench_data.get("ps", 0) or 0), is_financial=is_financial)
+    next_earnings = snapshot.next_earnings
+    valuation_verdict = valuation_label(valuation_gap)
+    risk_verdict = risk_label(altman_z, piotroski, is_financial=is_financial)
+    profile_verdict = profile_label(cur_sales_gr, cur_eps_gr, ps, float(bench_data.get("ps", 0) or 0), is_financial=is_financial)
 
     _render_overview_card(
         ticker=ticker_final,
         long_name=str(data.get("long_name") or ticker_final),
         sector_name=str(data.get("sector") or "Default"),
         benchmark_name=bench_data["name"],
-        valuation_label=valuation_label,
-        risk_label=risk_label,
-        profile_label=profile_label,
+        valuation_label=valuation_verdict,
+        risk_label=risk_verdict,
+        profile_label=profile_verdict,
     )
 
     top_metrics = st.columns(5)
@@ -551,12 +342,12 @@ def render_stock_analyzer(api_key: str, sidebar_state: dict | None = None):
         top_metrics[3].metric("Net Cash / Debt", _format_market_cap(cash - debt))
     top_metrics[4].metric("Next Earnings", next_earnings)
 
-    revenue_basis = _statement_basis_label(data.get("inc_q"), data.get("inc_a"), "Yahoo info fallback")
-    eps_basis = "Yahoo trailing EPS" if float(data.get("trailing_eps", 0) or 0) else _statement_basis_label(data.get("inc_q"), data.get("inc_a"), "Net income fallback")
+    revenue_basis = snapshot.revenue_basis
+    eps_basis = snapshot.eps_basis
     pe_basis = "Yahoo trailing P/E" if float(data.get("pe_ratio", 0) or 0) else "Computed from price / EPS TTM"
     as_of_date = date.today().isoformat()
-    recent_news_count = len(data.get("news") or [])
-    press_release_count = len(data.get("ir_news") or [])
+    recent_news_count = snapshot.recent_news_count
+    press_release_count = snapshot.press_release_count
 
     _render_context_banner(
         "Data provenance",
@@ -1361,7 +1152,7 @@ def render_stock_analyzer(api_key: str, sidebar_state: dict | None = None):
             (key for key, preset in INVESTOR_OBJECTIVES.items() if preset["label"] == selected_objective_label),
             "balanced",
         )
-        objective_snapshot = _build_investor_objective_snapshot(objective_key)
+        objective_snapshot = build_investor_objective_snapshot(objective_key)
 
         _render_context_banner(
             "Comparison lens",
