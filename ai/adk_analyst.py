@@ -48,7 +48,7 @@ from technical import add_indicators, bull_flag_score, fetch_price_history
 MODEL_NAME = "gemini-3.1-pro-preview"
 APP_NAME = "stock_valuation_multi_agent"
 SUPERVISOR_AGENT_NAME = "stock_chat_supervisor"
-CHAT_ENGINE_VERSION = "2026-04-14-specialist-ai-v6"
+CHAT_ENGINE_VERSION = "2026-04-14-specialist-ai-v7"
 SPECIALIST_MAX_OUTPUT_TOKENS = 1400
 
 AGENT_DISPLAY_NAMES = {
@@ -288,6 +288,29 @@ def _is_specialist_answer_usable(text: str | None, specialist_name: str) -> bool
             return False
         if not any(punct in stripped for punct in [".", "!", "?", "\n", ":"]):
             return False
+
+    return True
+
+
+def _is_chat_answer_usable(text: str | None) -> bool:
+    """Reject visibly clipped chat answers before they reach the UI."""
+    if not text or not text.strip():
+        return False
+
+    stripped = text.strip()
+    last_line = next((line.strip() for line in reversed(stripped.splitlines()) if line.strip()), "")
+
+    if re.search(r"(?i)\b[ld]'$", last_line):
+        return False
+
+    if last_line.startswith(("- ", "* ", "• ")) or re.match(r"^\d+\.\s", last_line):
+        return True
+
+    if _looks_truncated_text(stripped):
+        return False
+
+    if len(stripped) >= 80 and not _has_terminal_sentence_ending(stripped):
+        return False
 
     return True
 
@@ -2773,7 +2796,7 @@ def chat_with_ai_analyst(
     try:
         session_context = ChatSessionContext.from_mapping(chat_context)
         local_fallback_answer, local_trace = _route_local_agent_response(chat_context, user_message)
-        if local_fallback_answer:
+        if local_fallback_answer and _is_chat_answer_usable(local_fallback_answer):
             return local_fallback_answer, None, local_trace
 
         objective = session_context.investor_objective or {}
@@ -2841,12 +2864,15 @@ def chat_with_ai_analyst(
                 final_answer = _extract_text_from_session_events(session)
 
         trace_payload = _build_agent_trace(authors_seen, final_author)
+        if final_answer and not _is_chat_answer_usable(final_answer):
+            final_answer = None
+
         if not final_answer:
             local_fallback_answer, local_trace = _route_local_agent_response(chat_context, user_message)
-            if local_fallback_answer:
+            if local_fallback_answer and _is_chat_answer_usable(local_fallback_answer):
                 return local_fallback_answer, None, local_trace or trace_payload
             local_generic_answer, local_generic_trace = _build_local_generic_response(chat_context, user_message)
-            if local_generic_answer:
+            if local_generic_answer and _is_chat_answer_usable(local_generic_answer):
                 return local_generic_answer, None, local_generic_trace or trace_payload
             return None, "Le chat multi-agents n'a pas retourne de reponse finale.", trace_payload
         return final_answer, None, trace_payload

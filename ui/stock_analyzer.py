@@ -87,7 +87,7 @@ def _render_context_banner(title: str, copy: str):
 
 
 def _render_provenance_panel(entries: list[dict]):
-    """Render provenance cards with native Streamlit columns to avoid raw HTML bleed-through."""
+    """Render provenance cards with fully native Streamlit blocks."""
     if not entries:
         return
 
@@ -95,15 +95,21 @@ def _render_provenance_panel(entries: list[dict]):
         row_entries = entries[start : start + 2]
         cols = st.columns(len(row_entries))
         for col, entry in zip(cols, row_entries):
-            card_html = f"""
-            <div class="vmp-provenance-card">
-                <div class="vmp-provenance-label">{escape(str(entry.get("label", "")))}</div>
-                <div class="vmp-provenance-source">{escape(str(entry.get("source", "")))}</div>
-                <div class="vmp-provenance-meta">{escape(str(entry.get("meta", "")))}</div>
-                <div class="vmp-provenance-copy">{escape(str(entry.get("copy", "")))}</div>
-            </div>
-            """
-            col.markdown(card_html, unsafe_allow_html=True)
+            with col:
+                with st.container(border=True):
+                    label = str(entry.get("label", "")).strip()
+                    source = str(entry.get("source", "")).strip()
+                    meta = str(entry.get("meta", "")).strip()
+                    copy = str(entry.get("copy", "")).strip()
+
+                    if label:
+                        st.caption(label.upper())
+                    if source:
+                        st.markdown(f"**{source}**")
+                    if meta:
+                        st.caption(meta)
+                    if copy:
+                        st.write(copy)
 
 
 def _render_agent_trace(trace: dict | None, placeholder=None, live: bool = False):
