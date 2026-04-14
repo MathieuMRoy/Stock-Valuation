@@ -48,7 +48,8 @@ from technical import add_indicators, bull_flag_score, fetch_price_history
 MODEL_NAME = "gemini-3.1-pro-preview"
 APP_NAME = "stock_valuation_multi_agent"
 SUPERVISOR_AGENT_NAME = "stock_chat_supervisor"
-CHAT_ENGINE_VERSION = "2026-04-13-specialist-ai-v3"
+CHAT_ENGINE_VERSION = "2026-04-13-specialist-ai-v4"
+SPECIALIST_MAX_OUTPUT_TOKENS = 1400
 
 AGENT_DISPLAY_NAMES = {
     SUPERVISOR_AGENT_NAME: "Superviseur",
@@ -142,6 +143,96 @@ def _text_from_parts(parts: list[Any]) -> str:
         if text:
             chunks.append(text)
     return "".join(chunks).strip()
+
+
+def _normalize_finish_reason(value: Any) -> str:
+    if value is None:
+        return ""
+    name = getattr(value, "name", None)
+    if name:
+        return str(name).upper()
+    return str(value).upper()
+
+
+def _merge_continuation_text(base_text: str, continuation_text: str) -> str:
+    if not base_text:
+        return continuation_text.strip()
+    if not continuation_text:
+        return base_text.strip()
+
+    base = base_text.rstrip()
+    continuation = continuation_text.strip()
+    if not continuation:
+        return base
+
+    max_overlap = min(len(base), len(continuation), 200)
+    for overlap in range(max_overlap, 20, -1):
+        if base[-overlap:] == continuation[:overlap]:
+            return f"{base}{continuation[overlap:]}".strip()
+
+    if continuation.startswith(base[-80:]):
+        return f"{base}{continuation[len(base[-80:]):]}".strip()
+
+    return f"{base} {continuation}".strip()
+
+
+def _looks_truncated_text(text: str | None) -> bool:
+    if not text:
+        return False
+
+    stripped = text.rstrip()
+    if len(stripped) < 80:
+        return False
+
+    if stripped.endswith((".", "!", "?", "…", "\"", "'", "`", ")", "]", "}", "»")):
+        return False
+
+    if stripped.endswith((",", ";", ":", "-", "/", "(", "[", "{")):
+        return True
+
+    lowered = stripped.lower()
+    dangling_endings = (
+        " l'",
+        " d'",
+        " et",
+        " ou",
+        " de",
+        " du",
+        " des",
+        " la",
+        " le",
+        " les",
+        " pour",
+        " avec",
+        " sur",
+        " dans",
+        " par",
+        " versus",
+        " vs",
+    )
+    if any(lowered.endswith(ending) for ending in dangling_endings):
+        return True
+
+    return len(stripped) >= 180
+
+
+def _extract_model_text_and_finish_reason(response: Any) -> tuple[str | None, str]:
+    text = getattr(response, "text", None)
+    if text and str(text).strip():
+        candidates = getattr(response, "candidates", None) or []
+        finish_reason = ""
+        if candidates:
+            finish_reason = _normalize_finish_reason(getattr(candidates[0], "finish_reason", None))
+        return str(text).strip(), finish_reason
+
+    candidates = getattr(response, "candidates", None) or []
+    for candidate in candidates:
+        candidate_text = _text_from_parts(getattr(getattr(candidate, "content", None), "parts", None) or [])
+        if candidate_text:
+            finish_reason = _normalize_finish_reason(getattr(candidate, "finish_reason", None))
+            return candidate_text.strip(), finish_reason
+
+    return None, ""
 
 
 def _format_compact_number(value: Any, suffix: str = "") -> str:
@@ -495,32 +586,46 @@ def _generate_specialist_ai_response(
 
         os.environ["GOOGLE_API_KEY"] = api_key
         client = genai.Client()
-        prompt = (
+        base_prompt = (
             f"Question utilisateur:\n{user_message}\n\n"
             f"Contexte structure pour {specialist_name}:\n"
             f"{json.dumps(_json_safe(context_payload), ensure_ascii=False, indent=2)}\n\n"
             "Reponds en francais, de facon personnalisee au titre et a la question. "
             "Utilise les chiffres utiles du contexte, evite les phrases generiques, "
-            "dis quand une donnee est absente, et n'invente rien."
+            "dis quand une donnee est absente, et n'invente rien. "
+            "Fais une reponse complete mais concise, et termine proprement."
         )
-        response = client.models.generate_content(
-            model=MODEL_NAME,
-            contents=prompt,
-            config=types.GenerateContentConfig(
-                system_instruction=system_instruction,
-                temperature=0.35,
-                max_output_tokens=700,
-            ),
-        )
-        text = getattr(response, "text", None)
-        if text and str(text).strip():
-            return str(text).strip()
-        candidates = getattr(response, "candidates", None) or []
-        for candidate in candidates:
-            candidate_text = _text_from_parts(getattr(getattr(candidate, "content", None), "parts", None) or [])
-            if candidate_text:
-                return candidate_text.strip()
-        return None
+        accumulated_text = ""
+
+        for attempt in range(3):
+            prompt = base_prompt
+            if accumulated_text:
+                prompt = (
+                    f"{base_prompt}\n\n"
+                    "La reponse precedente a ete coupee. Continue exactement la meme reponse sans recommencer depuis le debut.\n"
+                    "Texte deja produit:\n"
+                    f"{accumulated_text}\n\n"
+                    "Ajoute uniquement la suite manquante et termine la reponse completement."
+                )
+
+            response = client.models.generate_content(
+                model=MODEL_NAME,
+                contents=prompt,
+                config=types.GenerateContentConfig(
+                    system_instruction=system_instruction,
+                    temperature=0.35 if attempt == 0 else 0.2,
+                    max_output_tokens=SPECIALIST_MAX_OUTPUT_TOKENS,
+                ),
+            )
+            chunk_text, finish_reason = _extract_model_text_and_finish_reason(response)
+            if not chunk_text:
+                break
+
+            accumulated_text = _merge_continuation_text(accumulated_text, chunk_text)
+            if finish_reason not in {"MAX_TOKENS", "FINISH_REASON_MAX_TOKENS"} and not _looks_truncated_text(accumulated_text):
+                return accumulated_text.strip()
+
+        return accumulated_text.strip() if accumulated_text.strip() else None
     except Exception:
         return None
 
