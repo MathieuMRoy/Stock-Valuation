@@ -75,7 +75,24 @@ def looks_like_technical_request(user_message: str) -> bool:
 
 def looks_like_risk_request(user_message: str) -> bool:
     message = normalize_intent_text(user_message)
-    markers = ["risque", "risk", "safe", "defensif", "profil", "downside", "reward", "robuste", "resilient"]
+    markers = [
+        "risque",
+        "risk",
+        "safe",
+        "defensif",
+        "profil",
+        "downside",
+        "reward",
+        "robuste",
+        "resilient",
+        "investisseur",
+        "investor",
+        "volatilite",
+        "volatility",
+        "horizon",
+        "long terme",
+        "bon investissement niveau risque",
+    ]
     return any(marker in message for marker in markers)
 
 

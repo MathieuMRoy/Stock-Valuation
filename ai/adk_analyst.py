@@ -325,6 +325,178 @@ def _format_balance_sheet_profile(company: dict[str, Any]) -> str:
     return f"{balance_label}, Piotroski {piotroski}"
 
 
+def _contains_any(message: str, markers: tuple[str, ...]) -> bool:
+    return any(marker in message for marker in markers)
+
+
+def _infer_risk_user_profile(user_message: str) -> dict[str, Any]:
+    message = _router_normalize_intent_text(user_message)
+    is_young = _contains_any(
+        message,
+        (
+            "jeune investisseur",
+            "young investor",
+            "debutant",
+            "debutante",
+            "je commence",
+            "long terme",
+            "horizon long",
+        ),
+    )
+    is_defensive = _contains_any(message, ("defensif", "safe", "faible risque", "peu de risque", "stabilite"))
+    is_income = _contains_any(message, ("revenu", "dividende", "income", "yield"))
+    is_short_term = _contains_any(message, ("court terme", "short term", "trading", "setup"))
+    wants_direct_verdict = _contains_any(
+        message,
+        (
+            "est-ce que",
+            "bon investissement",
+            "c'est bon",
+            "ca vaut la peine",
+            "ca vaut le coup",
+            "good investment",
+        ),
+    )
+
+    if is_young:
+        label = "un jeune investisseur avec horizon long"
+    elif is_defensive:
+        label = "un investisseur prudent"
+    elif is_income:
+        label = "un investisseur axe revenu"
+    elif is_short_term:
+        label = "un investisseur court terme"
+    else:
+        label = "ton profil actuel"
+
+    return {
+        "normalized_question": message,
+        "is_young_investor": is_young,
+        "is_defensive": is_defensive,
+        "is_income": is_income,
+        "is_short_term": is_short_term,
+        "wants_direct_verdict": wants_direct_verdict,
+        "label": label,
+    }
+
+
+def _company_cycle_profile(company: dict[str, Any]) -> str:
+    text = " ".join(
+        [
+            str(company.get("sector_name") or ""),
+            str(company.get("benchmark_name") or ""),
+            str(company.get("business_model_hint") or ""),
+        ]
+    ).lower()
+    if any(keyword in text for keyword in ("energy", "oil", "gas", "commodit", "materials", "mining")):
+        return "cyclical"
+    if any(keyword in text for keyword in ("bank", "financial", "insurance", "asset management")):
+        return "regulated"
+    if any(keyword in text for keyword in ("software", "platform", "technology", "cloud", "consumer app")):
+        return "quality_growth"
+    return "general"
+
+
+def _balance_sheet_resilience_sentence(company: dict[str, Any]) -> str:
+    if company.get("is_financial"):
+        return "Le vrai point de solidite se lit surtout via la qualite du capital et des profits, pas via la dette nette."
+
+    net_cash = _to_float(company.get("net_cash"))
+    health_score = _to_float(company.get("health_score")) or 0.0
+    if net_cash is None:
+        return "Le bilan complet n'est pas parfaitement disponible, donc il faut rester un peu prudent sur la lecture de solidite."
+    if net_cash > 0:
+        return f"Le bilan aide plutot la these avec une position de cash nette de { _format_compact_number(net_cash, '$') }."
+    if health_score >= 7:
+        return (
+            f"Il existe une dette nette de { _format_compact_number(abs(net_cash), '$') }, "
+            "mais la qualite operationnelle et la generation de cash rendent ce point plus gerable."
+        )
+    return f"La dette nette de { _format_compact_number(abs(net_cash), '$') } ajoute un vrai element de fragilite."
+
+
+def _primary_risk_driver(company: dict[str, Any], technical: dict[str, Any]) -> str:
+    cycle_profile = _company_cycle_profile(company)
+    valuation_score = _to_float(company.get("valuation_score")) or 0.0
+    technical_score = _to_float(technical.get("technical_score_out_of_10")) or 0.0
+
+    if company.get("is_financial"):
+        return "la qualite du credit, la regulation et la tenue des marges"
+    if cycle_profile == "cyclical":
+        return "la cyclicite du secteur et la sensibilite au prix des matieres premieres"
+    if valuation_score < 4.5:
+        return "une valorisation deja exigeante, donc un risque de derating si la croissance ralentit"
+    if technical_score < 5:
+        return "un momentum plus fragile a court terme"
+    return "l'execution operationnelle et la capacite a maintenir la croissance attendue"
+
+
+def _risk_fit_verdict(company: dict[str, Any], technical: dict[str, Any], profile: dict[str, Any]) -> str:
+    health_score = _to_float(company.get("health_score")) or 0.0
+    valuation_score = _to_float(company.get("valuation_score")) or 0.0
+    technical_score = _to_float(technical.get("technical_score_out_of_10")) or 0.0
+    cycle_profile = _company_cycle_profile(company)
+
+    risk_points = 0
+    if health_score < 5.5:
+        risk_points += 2
+    elif health_score < 7:
+        risk_points += 1
+
+    if valuation_score < 4.5:
+        risk_points += 1
+    if cycle_profile == "cyclical":
+        risk_points += 1
+    if profile.get("is_short_term") and technical_score < 5:
+        risk_points += 1
+
+    if profile.get("is_young_investor"):
+        if risk_points <= 1:
+            return "oui, plutot un bon dossier cote risque pour construire un noyau long terme"
+        if risk_points == 2:
+            return "oui, mais avec des conditions et une attente de volatilite"
+        return "plutot non si ton objectif est un dossier simple et peu stressant"
+
+    if profile.get("is_defensive"):
+        if risk_points <= 1:
+            return "oui, le profil de risque reste plutot acceptable"
+        if risk_points == 2:
+            return "c'est mitigé: defendable, mais pas le plus defensif"
+        return "non, ce n'est pas l'option la plus defensive"
+
+    if profile.get("is_income"):
+        income_support = (_to_float(company.get("dividend_yield_pct")) or 0.0) + max((_to_float(company.get("fcf_yield_pct")) or 0.0), 0.0)
+        if income_support >= 4 and risk_points <= 2:
+            return "oui, surtout si tu cherches une combinaison revenu + stabilite"
+        return "pas vraiment, car le dossier n'est pas d'abord porte par le revenu"
+
+    if profile.get("is_short_term"):
+        if technical_score >= 7:
+            return "oui, mais surtout pour un profil qui accepte le risque de timing"
+        return "pas ideal a court terme, car le setup n'est pas assez propre"
+
+    if risk_points <= 1:
+        return "oui, le niveau de risque me semble plutot raisonnable"
+    if risk_points == 2:
+        return "c'est plutot un risque moyen acceptable"
+    return "le niveau de risque me parait plutot eleve"
+
+
+def _risk_fit_conclusion(company: dict[str, Any], profile: dict[str, Any]) -> str:
+    cycle_profile = _company_cycle_profile(company)
+    if profile.get("is_young_investor"):
+        if cycle_profile == "cyclical":
+            return "Je le verrais plutot comme une position satellite plus volatile qu'un coeur de portefeuille."
+        return "Je le verrais davantage comme un coeur de portefeuille long terme qu'un pari speculatif pur."
+    if profile.get("is_defensive"):
+        return "Ca convient surtout si tu acceptes un peu de volatilite, sinon il existe des dossiers plus defensifs."
+    if profile.get("is_income"):
+        return "Ca convient mieux si tu privilegies la qualite globale du dossier que le seul rendement cash immediat."
+    if profile.get("is_short_term"):
+        return "A traiter surtout comme un setup de marche, pas comme une these complete a lui seul."
+    return "L'interet depend surtout de ton horizon et de ta tolerance a la volatilite."
+
+
 def _pick_category_winner(
     current_company: dict[str, Any],
     other_company: dict[str, Any],
@@ -974,6 +1146,7 @@ def _build_local_risk_response(chat_context: dict[str, Any], user_message: str) 
         return None, None
 
     trace = _build_agent_trace(["risk_agent", SUPERVISOR_AGENT_NAME], SUPERVISOR_AGENT_NAME)
+    risk_profile = _infer_risk_user_profile(user_message)
     ai_text = _generate_specialist_ai_response(
         specialist_name="risk_agent",
         user_message=user_message,
@@ -985,24 +1158,34 @@ def _build_local_risk_response(chat_context: dict[str, Any], user_message: str) 
             "peer_snapshot": peer,
             "investor_objective": chat_context.get("investor_objective"),
             "business_profile": _business_model_sentence(company),
+            "risk_user_profile": risk_profile,
         },
         system_instruction=(
             "Tu es le risk_agent. Reponds en francais de maniere personnalisee au titre et a la question. "
             "Explique les principaux risques, les facteurs de resilience et le type d'investisseur auquel le dossier correspond. "
+            "Si l'utilisateur demande si le titre est adapte a un jeune investisseur, a un profil prudent ou a un angle revenu, "
+            "commence par un verdict direct et clair, puis explique pourquoi. "
             "Si l'entreprise est financiere, bancaire, energetique ou cyclique, adapte clairement le raisonnement."
         ),
     )
     if ai_text:
         return ai_text, trace
 
+    verdict = _risk_fit_verdict(company, technical, risk_profile)
+    risk_driver = _primary_risk_driver(company, technical)
+    risk_subject = risk_profile.get("label") or "ton profil actuel"
     lines = [
-        f"Lecture risque pour {ticker}: {_format_balance_sheet_profile(company)}.",
-        f"Sante financiere: {company.get('health_score', 'N/A')}/10 ; technique: {technical.get('technical_score_out_of_10', 'N/A')}/10.",
+        f"Pour {risk_subject}, {ticker} me semble {verdict}.",
+        (
+            f"Pourquoi: {_business_model_sentence(company)} "
+            f"{_balance_sheet_resilience_sentence(company)} "
+            f"Lecture sante {company.get('health_score', 'N/A')}/10 et technique {technical.get('technical_score_out_of_10', 'N/A')}/10."
+        ),
+        f"Risque principal a surveiller: {risk_driver}.",
+        _risk_fit_conclusion(company, risk_profile),
     ]
     if company.get("is_financial"):
-        lines.append("Comme il s'agit d'un titre financier, il faut surtout surveiller la qualite du capital et du credit plutot que la dette nette.")
-    else:
-        lines.append("Le point cle est de savoir si le bilan et la generation de cash compensent le risque de valorisation ou de cyclicite.")
+        lines.append("Comme il s'agit d'un titre financier, la qualite du capital et du credit compte plus que la dette nette brute.")
     return "\n\n".join(lines), trace
 
 

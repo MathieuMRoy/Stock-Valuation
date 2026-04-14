@@ -28,6 +28,13 @@ class RouterIntentTests(unittest.TestCase):
         router = SpecialistRouter({"market_signal": lambda prompt: ("signals", None)})
         self.assertEqual(router.resolve("Que disent les analystes sur Apple ?"), "market_signal")
 
+    def test_routes_young_investor_risk_questions(self):
+        router = SpecialistRouter({"risk": lambda prompt: ("risk", None)})
+        self.assertEqual(
+            router.resolve("Pour un jeune investisseur, est-ce que c'est un bon investissement niveau risque ?"),
+            "risk",
+        )
+
 
 class RouterHandlerTests(unittest.TestCase):
     def test_route_returns_agent_response_wrapper(self):
