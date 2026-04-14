@@ -48,7 +48,7 @@ from technical import add_indicators, bull_flag_score, fetch_price_history
 MODEL_NAME = "gemini-3.1-pro-preview"
 APP_NAME = "stock_valuation_multi_agent"
 SUPERVISOR_AGENT_NAME = "stock_chat_supervisor"
-CHAT_ENGINE_VERSION = "2026-04-13-specialist-ai-v5"
+CHAT_ENGINE_VERSION = "2026-04-14-specialist-ai-v6"
 SPECIALIST_MAX_OUTPUT_TOKENS = 1400
 
 AGENT_DISPLAY_NAMES = {
@@ -185,6 +185,60 @@ def _looks_truncated_text(text: str | None) -> bool:
         return False
 
     if stripped.endswith((".", "!", "?", "…", "\"", "'", "`", ")", "]", "}", "»")):
+        return False
+
+    if stripped.endswith((",", ";", ":", "-", "/", "(", "[", "{")):
+        return True
+
+    lowered = stripped.lower()
+    dangling_endings = (
+        " l'",
+        " d'",
+        " et",
+        " ou",
+        " de",
+        " du",
+        " des",
+        " la",
+        " le",
+        " les",
+        " pour",
+        " avec",
+        " sur",
+        " dans",
+        " par",
+        " versus",
+        " vs",
+    )
+    if any(lowered.endswith(ending) for ending in dangling_endings):
+        return True
+
+    if len(stripped) >= 60:
+        return True
+
+    return False
+
+def _has_terminal_sentence_ending(text: str) -> bool:
+    candidate = (text or "").rstrip()
+    if not candidate:
+        return False
+
+    closers = ('"', "'", "`", ")", "]", "}", "Â»")
+    while candidate and candidate[-1] in closers:
+        candidate = candidate[:-1].rstrip()
+
+    return candidate.endswith((".", "!", "?", "â€¦"))
+
+
+def _looks_truncated_text(text: str | None) -> bool:
+    if not text:
+        return False
+
+    stripped = text.rstrip()
+    if len(stripped) < 80:
+        return False
+
+    if _has_terminal_sentence_ending(stripped):
         return False
 
     if stripped.endswith((",", ";", ":", "-", "/", "(", "[", "{")):
