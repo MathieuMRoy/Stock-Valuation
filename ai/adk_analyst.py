@@ -48,7 +48,7 @@ from technical import add_indicators, bull_flag_score, fetch_price_history
 MODEL_NAME = "gemini-3.1-pro-preview"
 APP_NAME = "stock_valuation_multi_agent"
 SUPERVISOR_AGENT_NAME = "stock_chat_supervisor"
-CHAT_ENGINE_VERSION = "2026-04-13-specialist-ai-v4"
+CHAT_ENGINE_VERSION = "2026-04-13-specialist-ai-v5"
 SPECIALIST_MAX_OUTPUT_TOKENS = 1400
 
 AGENT_DISPLAY_NAMES = {
@@ -279,6 +279,77 @@ def _format_ratio(value: Any) -> str:
     if number is None or number <= 0:
         return "N/A"
     return f"{number:.2f}x"
+
+
+def _markdown_section(title: str, body: str | None) -> str:
+    clean_body = (body or "").strip()
+    if not clean_body:
+        return ""
+    return f"**{title}**\n{clean_body}"
+
+
+def _source_lines_from_refs(source_refs: dict[str, Any] | None, limit: int = 4) -> list[str]:
+    refs = source_refs or {}
+    lines: list[str] = []
+
+    quote_page = refs.get("quote_page") or refs.get("current_quote_page") or {}
+    if quote_page.get("url") and quote_page.get("label"):
+        lines.append(f"- [{quote_page['label']}]({quote_page['url']})")
+
+    sec_page = refs.get("sec_filings_page") or {}
+    if sec_page.get("url") and sec_page.get("label"):
+        lines.append(f"- [{sec_page['label']}]({sec_page['url']})")
+
+    for item in (refs.get("market_news_links") or []) + (refs.get("press_release_links") or []):
+        if item.get("title") and item.get("url"):
+            lines.append(f"- [{item['title']}]({item['url']})")
+        if len(lines) >= limit:
+            break
+
+    return lines[:limit]
+
+
+def _compose_professional_response(
+    opening: str,
+    sections: list[tuple[str, str | None]],
+    *,
+    source_refs: dict[str, Any] | None = None,
+) -> str:
+    blocks = [opening.strip()]
+    for title, body in sections:
+        section = _markdown_section(title, body)
+        if section:
+            blocks.append(section)
+
+    source_lines = _source_lines_from_refs(source_refs)
+    if source_lines:
+        blocks.append("**Sources**\n" + "\n".join(source_lines))
+
+    return "\n\n".join(block for block in blocks if block.strip())
+
+
+def _bullet_lines(items: list[str]) -> str:
+    clean_items = [item.strip() for item in items if item and item.strip()]
+    return "\n".join(f"- {item}" for item in clean_items)
+
+
+def _specialist_system_instruction(
+    base_instruction: str,
+    *,
+    include_sources: bool = False,
+) -> str:
+    suffix = (
+        "Reponds comme un analyste financier clair et professionnel. "
+        "Commence par repondre directement a la question en une phrase. "
+        "Ensuite, organise la suite en 2 a 4 sections courtes avec des titres markdown simples. "
+        "Utilise seulement les chiffres qui aident vraiment a la decision. "
+        "Explique ce que cela implique concretement pour l'investisseur. "
+        "Evite les listes generiques, les preambules vagues et le jargon inutile. "
+        "Si une donnee cle manque, signale-le clairement en une phrase."
+    )
+    if include_sources:
+        suffix += " Si des URLs sont disponibles, termine par une section `Sources` avec quelques puces markdown."
+    return f"{base_instruction} {suffix}"
 
 
 def _clean_business_model_hint(hint: str | None, sector_name: str | None = None, benchmark_name: str | None = None) -> str | None:
@@ -631,52 +702,63 @@ def _comparison_tool_response_to_text(payload: dict[str, Any]) -> str | None:
     if current_ps != "N/A" or other_ps != "N/A":
         valuation_bits.append(f"P/S {current_ps} vs {other_ps}")
 
-    sections = [
-        f"Voici une lecture plus propre de {current_name} ({current_ticker}) vs {other_name} ({other_ticker}).",
-        f"Ce que fait chaque entreprise: {_business_model_sentence(current)} {_business_model_sentence(other)}",
-    ]
-
+    opening = f"Sur un angle {objective_label.lower()}, voici la lecture la plus utile entre {current_name} ({current_ticker}) et {other_name} ({other_ticker})."
+    matchup_body = f"{_business_model_sentence(current)} {_business_model_sentence(other)}"
     if context.get("is_cross_sector"):
-        sections.append(
-            "Attention: c'est une comparaison intersectorielle, donc il faut separer la these de croissance de la these plus defensive / bilan."
-        )
-
-    sections.append(
-        f"Croissance / upside: {current_ticker} affiche { _format_pct(current.get('sales_growth_pct')) } de croissance des ventes et { _format_pct(current.get('eps_growth_pct')) } de croissance EPS, "
-        f"contre { _format_pct(other.get('sales_growth_pct')) } et { _format_pct(other.get('eps_growth_pct')) } pour {other_ticker}. "
-        f"{_pick_category_winner(current, other, current.get('growth_score'), other.get('growth_score'), 'Lecture croissance')}"
-    )
-    sections.append(
-        f"Valorisation: {', '.join(valuation_bits)}. "
-        f"{_pick_category_winner(current, other, current.get('valuation_score'), other.get('valuation_score'), 'Lecture valorisation')}"
-    )
-    sections.append(
-        f"Solidite / bilan: {current_ticker} = {_format_balance_sheet_profile(current)} ; "
-        f"{other_ticker} = {_format_balance_sheet_profile(other)}. "
-        f"{_pick_category_winner(current, other, current.get('health_score'), other.get('health_score'), 'Lecture robustesse')}"
-    )
-    sections.append(
-        _objective_conclusion(
-            objective_label,
-            current,
-            other,
-            comparison.get("current_technical") or {},
-            comparison.get("other_technical") or {},
-        )
-    )
+        matchup_body += " C'est une comparaison intersectorielle, donc il faut separer la these de croissance de la these defensive."
 
     source_refs = comparison.get("source_refs") or payload.get("source_refs") or {}
-    source_lines = []
     current_quote_page = source_refs.get("current_quote_page") or {}
     other_quote_page = source_refs.get("other_quote_page") or {}
-    if current_quote_page.get("url"):
-        source_lines.append(f"- [{current_ticker} quote page]({current_quote_page['url']})")
+    merged_source_refs = {
+        "quote_page": {
+            "label": f"{current_ticker} quote page",
+            "url": current_quote_page.get("url"),
+        }
+        if current_quote_page.get("url")
+        else None,
+        "market_news_links": [],
+        "press_release_links": [],
+    }
     if other_quote_page.get("url"):
-        source_lines.append(f"- [{other_ticker} quote page]({other_quote_page['url']})")
-    if source_lines:
-        sections.append("Sources:\n" + "\n".join(source_lines))
+        merged_source_refs["market_news_links"].append(
+            {"title": f"{other_ticker} quote page", "url": other_quote_page.get("url")}
+        )
 
-    return "\n\n".join(section for section in sections if section)
+    return _compose_professional_response(
+        opening,
+        [
+            ("Nature du match-up", matchup_body),
+            (
+                "Croissance / upside",
+                f"{current_ticker}: ventes {_format_pct(current.get('sales_growth_pct'))}, EPS {_format_pct(current.get('eps_growth_pct'))}. "
+                f"{other_ticker}: ventes {_format_pct(other.get('sales_growth_pct'))}, EPS {_format_pct(other.get('eps_growth_pct'))}. "
+                f"{_pick_category_winner(current, other, current.get('growth_score'), other.get('growth_score'), 'Lecture croissance')}",
+            ),
+            (
+                "Valorisation",
+                f"{', '.join(valuation_bits)}. "
+                f"{_pick_category_winner(current, other, current.get('valuation_score'), other.get('valuation_score'), 'Lecture valorisation')}",
+            ),
+            (
+                "Solidite / bilan",
+                f"{current_ticker}: {_format_balance_sheet_profile(current)}. "
+                f"{other_ticker}: {_format_balance_sheet_profile(other)}. "
+                f"{_pick_category_winner(current, other, current.get('health_score'), other.get('health_score'), 'Lecture robustesse')}",
+            ),
+            (
+                "Verdict selon l'angle choisi",
+                _objective_conclusion(
+                    objective_label,
+                    current,
+                    other,
+                    comparison.get("current_technical") or {},
+                    comparison.get("other_technical") or {},
+                ),
+            ),
+        ],
+        source_refs=merged_source_refs,
+    )
 
 
 def _news_tool_response_to_text(payload: dict[str, Any]) -> str | None:
@@ -787,7 +869,8 @@ def _generate_specialist_ai_response(
             "Reponds en francais, de facon personnalisee au titre et a la question. "
             "Utilise les chiffres utiles du contexte, evite les phrases generiques, "
             "dis quand une donnee est absente, et n'invente rien. "
-            "Fais une reponse complete mais concise. "
+            "Fais une reponse complete mais concise, avec une reponse directe d'abord puis quelques sections courtes. "
+            "Vise une reponse dense mais courte, pas un long rapport. "
             "Ne t'arrete jamais au milieu d'une phrase et termine toujours par une phrase complete."
         )
         accumulated_text = ""
@@ -932,59 +1015,56 @@ def _build_local_news_response(chat_context: dict[str, Any], user_message: str) 
                 "company_snapshot": fallback_context.get("company"),
                 "source_refs": fallback_context.get("sources") or _build_source_refs(current_ticker, current_data),
             },
-            system_instruction=(
+            system_instruction=_specialist_system_instruction(
                 "Tu es le news_agent d'une application finance. Reponds en francais a la question exacte de l'utilisateur. "
                 "Priorise les informations les plus recentes et datees. Distingue bien les news de marche, les communiques "
                 "et le contexte earnings. Si l'actualite est maigre ou pas tres recente, dis-le franchement. "
-                "Evite les formulations generiques et adapte la reponse a l'entreprise demandee. "
-                "Termine par une section `Sources` en puces markdown si des URLs sont disponibles."
+                "Adapte la reponse a l'entreprise demandee et explique ce que l'actualite change, ou ne change pas, dans la these.",
+                include_sources=True,
             ),
         )
         if ai_text:
             return ai_text, trace
 
-        lines = [f"Voici l'actualite recente disponible pour {company_name} ({current_ticker})."]
+        source_refs = fallback_context.get("sources") or _build_source_refs(current_ticker, current_data)
         market_news = news_snapshot.get("recent_market_news") or []
         press_releases = news_snapshot.get("recent_press_releases") or []
         earnings_context = news_snapshot.get("earnings_context") or {}
-
-        if market_news:
-            lines.append("Points de marche / presse les plus recents:")
-            for item in market_news[:3]:
-                title = item.get("title")
-                if not title:
-                    continue
-                published_at = item.get("published_at") or "date non disponible"
-                source = item.get("source")
-                suffix = f" ({source})" if source else ""
-                lines.append(f"- {published_at}: {title}{suffix}")
-
-        if press_releases:
-            lines.append("Communiques / publications recents:")
-            for item in press_releases[:2]:
-                title = item.get("title")
-                if not title:
-                    continue
-                published_at = item.get("published_at") or "date non disponible"
-                source = item.get("source")
-                suffix = f" ({source})" if source else ""
-                lines.append(f"- {published_at}: {title}{suffix}")
+        opening = (
+            f"L'actualite recente de {company_name} ({current_ticker}) parait active mais assez lisible."
+            if (market_news or press_releases)
+            else f"Je ne vois pas beaucoup d'actualite vraiment recente pour {company_name} ({current_ticker})."
+        )
+        recent_items: list[str] = []
+        for item in market_news[:3] + press_releases[:2]:
+            title = item.get("title")
+            if not title:
+                continue
+            published_at = item.get("published_at") or "date non disponible"
+            source = item.get("source")
+            suffix = f" ({source})" if source else ""
+            recent_items.append(f"{published_at}: {title}{suffix}")
 
         next_earnings_date = earnings_context.get("next_earnings_date")
         last_known_earnings_date = earnings_context.get("last_known_earnings_date")
+        catalyst_sentence = None
         if next_earnings_date:
-            lines.append(f"Prochaine publication reperee: {next_earnings_date}.")
+            catalyst_sentence = f"Le prochain jalon date est la publication reperee pour le {next_earnings_date}."
         elif last_known_earnings_date:
-            lines.append(f"Derniere date de publication reperee: {last_known_earnings_date}.")
+            catalyst_sentence = f"La derniere publication datee reperee est celle du {last_known_earnings_date}."
 
-        source_lines = []
-        for item in news_snapshot.get("source_links") or []:
-            if item.get("title") and item.get("link"):
-                source_lines.append(f"- [{item['title']}]({item['link']})")
-        if source_lines:
-            lines.append("Sources:\n" + "\n".join(source_lines[:4]))
-
-        return "\n\n".join(lines), trace
+        return _compose_professional_response(
+            opening,
+            [
+                ("Faits recents", _bullet_lines(recent_items) or "Le flux d'information disponible est assez maigre pour l'instant."),
+                ("Catalyseur a surveiller", catalyst_sentence or "Pas de date de publication clairement exploitable dans le snapshot actuel."),
+                (
+                    "Lecture rapide",
+                    "Le point important est de distinguer les vraies nouvelles de these des simples rappels de calendrier ou de communication investor relations.",
+                ),
+            ],
+            source_refs=source_refs,
+        ), trace
     except Exception as exc:
         trace = _build_agent_trace(["news_agent"], "news_agent")
         return f"Je n'ai pas pu construire le resume d'actualite localement pour {current_ticker}: {exc}", trace
@@ -1014,35 +1094,66 @@ def _build_local_market_signal_response(chat_context: dict[str, Any], user_messa
                 "short_interest_snapshot": short_snapshot,
                 "source_refs": fallback_context.get("sources") or _build_source_refs(current_ticker, current_data),
             },
-            system_instruction=(
+            system_instruction=_specialist_system_instruction(
                 "Tu es le market_signal_agent. Reponds en francais a la question exacte de l'utilisateur. "
                 "Interprete les signaux analystes, insiders et short interest sans sur-vendre la conclusion. "
-                "Explique ce que les donnees suggerent pour ce titre precis et signale clairement les zones manquantes."
+                "Explique ce que les donnees suggerent pour ce titre precis et signale clairement les zones manquantes.",
+                include_sources=True,
             ),
         )
         if ai_text:
             return ai_text, trace
 
-        lines = [f"Voici les signaux de marche disponibles pour {current_ticker}."]
+        score = 0
         dominant_rating = analyst_snapshot.get("dominant_rating")
         target_price = analyst_snapshot.get("target_price")
         upside = analyst_snapshot.get("target_upside_pct")
+        if dominant_rating in {"Strong Buy", "Buy"}:
+            score += 1
+        if (upside or 0) >= 10:
+            score += 1
+        if insider_snapshot.get("purchase_count", 0) > insider_snapshot.get("sale_count", 0):
+            score += 1
+        if (short_snapshot.get("latest_days_to_cover") or 0) >= 5:
+            score -= 1
+
+        if score >= 2:
+            opening = f"Les signaux de marche sur {current_ticker} paraissent globalement constructifs."
+        elif score <= -1:
+            opening = f"Les signaux de marche sur {current_ticker} sont plutot mitiges a prudents."
+        else:
+            opening = f"Les signaux de marche sur {current_ticker} sont assez partages."
+
+        analyst_body = None
         if dominant_rating or target_price:
-            lines.append(
-                f"Analystes: consensus dominant {dominant_rating or 'N/A'}, objectif moyen { _format_compact_number(target_price, '$') if target_price is not None else 'N/A' }, upside implicite {_format_pct(upside)}."
+            analyst_body = (
+                f"Consensus dominant: {dominant_rating or 'N/A'}. "
+                f"Objectif moyen: {_format_compact_number(target_price, '$') if target_price is not None else 'N/A'}. "
+                f"Upside implicite: {_format_pct(upside)}."
             )
-
+        insider_body = None
         if insider_snapshot.get("available"):
-            lines.append(
-                f"Insiders: {insider_snapshot.get('purchase_count', 0)} achats, {insider_snapshot.get('sale_count', 0)} ventes, pour environ { _format_compact_number(insider_snapshot.get('total_purchase_value'), '$') } d'achats et { _format_compact_number(insider_snapshot.get('total_sale_value'), '$') } de ventes."
+            insider_body = (
+                f"{insider_snapshot.get('purchase_count', 0)} achats contre {insider_snapshot.get('sale_count', 0)} ventes, "
+                f"avec environ {_format_compact_number(insider_snapshot.get('total_purchase_value'), '$')} d'achats et "
+                f"{_format_compact_number(insider_snapshot.get('total_sale_value'), '$')} de ventes."
             )
-
+        short_body = None
         if short_snapshot.get("available"):
-            lines.append(
-                f"Short interest: { _format_compact_number(short_snapshot.get('latest_short_interest')) } actions a la derniere date, days to cover {short_snapshot.get('latest_days_to_cover', 'N/A')}."
+            short_body = (
+                f"Short interest recent: {_format_compact_number(short_snapshot.get('latest_short_interest'))} actions, "
+                f"days to cover {short_snapshot.get('latest_days_to_cover', 'N/A')}."
             )
 
-        return "\n\n".join(lines), trace
+        return _compose_professional_response(
+            opening,
+            [
+                ("Analystes", analyst_body or "Pas de consensus analystes vraiment exploitable dans le snapshot actuel."),
+                ("Insiders", insider_body or "Pas de flux insider suffisamment lisible ici."),
+                ("Short interest", short_body or "Pas de donnees short interest suffisamment propres ici."),
+            ],
+            source_refs=fallback_context.get("sources") or _build_source_refs(current_ticker, current_data),
+        ), trace
     except Exception as exc:
         trace = _build_agent_trace(["market_signal_agent"], "market_signal_agent")
         return f"Je n'ai pas pu construire le resume de signaux de marche pour {current_ticker}: {exc}", trace
@@ -1071,10 +1182,11 @@ def _build_local_filings_response(chat_context: dict[str, Any], user_message: st
                 "sec_snapshot": snapshot,
                 "source_refs": fallback_context.get("sources"),
             },
-            system_instruction=(
+            system_instruction=_specialist_system_instruction(
                 "Tu es le filings_agent. Reponds en francais en t'appuyant d'abord sur les chiffres officiels SEC fournis. "
                 "Adapte la reponse a la question posee: tendance des revenus, qualite des profits, evolution recente, ou credibilite du bilan. "
-                "Mentionne les periodes exactes quand elles existent, et n'invente pas de donnees."
+                "Mentionne les periodes exactes quand elles existent, et n'invente pas de donnees.",
+                include_sources=True,
             ),
         )
         if ai_text:
@@ -1082,17 +1194,28 @@ def _build_local_filings_response(chat_context: dict[str, Any], user_message: st
 
         latest_annual = snapshot.get("latest_annual_metrics") or {}
         latest_quarter = snapshot.get("latest_quarter_metrics") or {}
-        lines = [f"Voici un resume des filings SEC officiels pour {current_ticker}."]
+        opening = f"Les filings officiels donnent une base plutot serieuse pour juger {current_ticker}."
+        annual_body = None
         if latest_annual:
-            lines.append(
-                f"Annuel ({snapshot.get('latest_annual_period', 'N/A')}): revenus { _format_compact_number(latest_annual.get('Total Revenue'), '$') }, net income { _format_compact_number(latest_annual.get('Net Income'), '$') }."
+            annual_body = (
+                f"{snapshot.get('latest_annual_period', 'N/A')}: revenus {_format_compact_number(latest_annual.get('Total Revenue'), '$')}, "
+                f"net income {_format_compact_number(latest_annual.get('Net Income'), '$')}."
             )
+        quarter_body = None
         if latest_quarter:
-            lines.append(
-                f"Trimestriel ({snapshot.get('latest_quarter_period', 'N/A')}): revenus { _format_compact_number(latest_quarter.get('Total Revenue'), '$') }, net income { _format_compact_number(latest_quarter.get('Net Income'), '$') }."
+            quarter_body = (
+                f"{snapshot.get('latest_quarter_period', 'N/A')}: revenus {_format_compact_number(latest_quarter.get('Total Revenue'), '$')}, "
+                f"net income {_format_compact_number(latest_quarter.get('Net Income'), '$')}."
             )
-        lines.append(f"Source principale: {snapshot.get('source', 'SEC EDGAR')}.")
-        return "\n\n".join(lines), trace
+        return _compose_professional_response(
+            opening,
+            [
+                ("Lecture annuelle", annual_body or "Je n'ai pas de bloc annuel propre dans ce snapshot."),
+                ("Lecture trimestrielle", quarter_body or "Je n'ai pas de bloc trimestriel propre dans ce snapshot."),
+                ("Ce que j'en retiens", "Les filings servent surtout a verifier la qualite des revenus, des profits et du bilan au-dela du bruit de marche."),
+            ],
+            source_refs=fallback_context.get("sources"),
+        ), trace
     except Exception as exc:
         trace = _build_agent_trace(["filings_agent"], "filings_agent")
         return f"Je n'ai pas pu construire le resume SEC pour {current_ticker}: {exc}", trace
@@ -1117,7 +1240,7 @@ def _build_local_technical_response(chat_context: dict[str, Any], user_message: 
             "technical_snapshot": technical,
             "investor_objective": chat_context.get("investor_objective"),
         },
-        system_instruction=(
+        system_instruction=_specialist_system_instruction(
             "Tu es le technical_agent. Reponds en francais et adapte la lecture technique a la question precise de l'utilisateur. "
             "Explique le setup, le momentum et le risque de court terme sans transformer cela en conseil ferme. "
             "Utilise les chiffres techniques fournis et dis quand le signal est faible ou incomplet."
@@ -1128,12 +1251,21 @@ def _build_local_technical_response(chat_context: dict[str, Any], user_message: 
 
     score = technical.get("technical_score_out_of_10", "N/A")
     bull_flag = "oui" if technical.get("bull_flag_detected") else "non"
-    text = (
-        f"Lecture technique pour {ticker}: score {score}/10. "
-        f"Bull flag detecte: {bull_flag}. "
-        "A utiliser surtout comme lecture de momentum / setup, pas comme these d'investissement complete."
-    )
-    return text, trace
+    score_value = _to_float(score) or 0.0
+    if score_value >= 7:
+        opening = f"Techniquement, {ticker} garde plutot un setup constructif."
+    elif score_value >= 5:
+        opening = f"Techniquement, {ticker} est plutot neutre a legerement positif."
+    else:
+        opening = f"Techniquement, {ticker} reste fragile ou peu convaincant pour l'instant."
+    return _compose_professional_response(
+        opening,
+        [
+            ("Momentum", f"Score technique {score}/10."),
+            ("Signal", f"Bull flag detecte: {bull_flag}."),
+            ("Lecture investisseur", "A utiliser surtout comme lecture de momentum et de timing, pas comme these d'investissement complete a lui seul."),
+        ],
+    ), trace
 
 
 def _build_local_risk_response(chat_context: dict[str, Any], user_message: str) -> tuple[str | None, dict[str, Any] | None]:
@@ -1160,7 +1292,7 @@ def _build_local_risk_response(chat_context: dict[str, Any], user_message: str) 
             "business_profile": _business_model_sentence(company),
             "risk_user_profile": risk_profile,
         },
-        system_instruction=(
+        system_instruction=_specialist_system_instruction(
             "Tu es le risk_agent. Reponds en francais de maniere personnalisee au titre et a la question. "
             "Explique les principaux risques, les facteurs de resilience et le type d'investisseur auquel le dossier correspond. "
             "Si l'utilisateur demande si le titre est adapte a un jeune investisseur, a un profil prudent ou a un angle revenu, "
@@ -1174,19 +1306,27 @@ def _build_local_risk_response(chat_context: dict[str, Any], user_message: str) 
     verdict = _risk_fit_verdict(company, technical, risk_profile)
     risk_driver = _primary_risk_driver(company, technical)
     risk_subject = risk_profile.get("label") or "ton profil actuel"
-    lines = [
-        f"Pour {risk_subject}, {ticker} me semble {verdict}.",
+    sections = [
         (
-            f"Pourquoi: {_business_model_sentence(company)} "
-            f"{_balance_sheet_resilience_sentence(company)} "
-            f"Lecture sante {company.get('health_score', 'N/A')}/10 et technique {technical.get('technical_score_out_of_10', 'N/A')}/10."
+            "Pourquoi",
+            f"{_business_model_sentence(company)} {_balance_sheet_resilience_sentence(company)} "
+            f"Lecture sante {company.get('health_score', 'N/A')}/10 et technique {technical.get('technical_score_out_of_10', 'N/A')}/10.",
         ),
-        f"Risque principal a surveiller: {risk_driver}.",
-        _risk_fit_conclusion(company, risk_profile),
+        ("Risque principal", risk_driver),
+        ("A qui ca correspond", _risk_fit_conclusion(company, risk_profile)),
     ]
     if company.get("is_financial"):
-        lines.append("Comme il s'agit d'un titre financier, la qualite du capital et du credit compte plus que la dette nette brute.")
-    return "\n\n".join(lines), trace
+        sections.append(
+            (
+                "Point specifique au secteur",
+                "Comme il s'agit d'un titre financier, la qualite du capital et du credit compte plus que la dette nette brute.",
+            )
+        )
+    return _compose_professional_response(
+        f"Pour {risk_subject}, {ticker} me semble {verdict}.",
+        sections,
+        source_refs=fallback_context.get("sources"),
+    ), trace
 
 
 def _build_local_fundamental_response(chat_context: dict[str, Any], user_message: str) -> tuple[str | None, dict[str, Any] | None]:
@@ -1210,22 +1350,43 @@ def _build_local_fundamental_response(chat_context: dict[str, Any], user_message
             "business_profile": _business_model_sentence(company),
             "source_refs": fallback_context.get("sources"),
         },
-        system_instruction=(
+        system_instruction=_specialist_system_instruction(
             "Tu es le fundamental_agent. Reponds en francais en adaptant la reponse a la question exacte de l'utilisateur. "
             "Utilise les multiples, la croissance, le cash-flow, le bilan et le benchmark fournis. "
-            "Ne recopie pas toujours le meme plan: choisis l'angle le plus pertinent pour ce titre et cette question."
+            "Ne recopie pas toujours le meme plan: choisis l'angle le plus pertinent pour ce titre et cette question.",
+            include_sources=True,
         ),
     )
     if ai_text:
         return ai_text, trace
 
-    lines = [
-        f"Lecture fondamentale pour {ticker}: trailing P/E {_format_ratio(company.get('pe_ratio'))}, forward P/E {_format_ratio(company.get('forward_pe_ratio'))}, P/S {_format_ratio(company.get('ps_ratio'))}.",
-        f"Croissance: ventes {_format_pct(company.get('sales_growth_pct'))}, EPS {_format_pct(company.get('eps_growth_pct'))}.",
-        f"Benchmark: {peer.get('benchmark_name', 'N/A')} avec cible P/E {_format_ratio(peer.get('peer_target_pe'))} et cible P/S {_format_ratio(peer.get('peer_target_ps'))}.",
-        f"Score value {company.get('valuation_score', 'N/A')}/10, score croissance {company.get('growth_score', 'N/A')}/10.",
-    ]
-    return "\n\n".join(lines), trace
+    valuation_score = _to_float(company.get("valuation_score")) or 0.0
+    growth_score = _to_float(company.get("growth_score")) or 0.0
+    if valuation_score >= 7:
+        opening = f"Fondamentalement, {ticker} parait plutot interessant sur la valorisation relative."
+    elif growth_score >= 7:
+        opening = f"Fondamentalement, {ticker} est surtout un dossier de croissance ou de qualite plus qu'un dossier bon marche."
+    else:
+        opening = f"Fondamentalement, {ticker} parait assez equilibre sans signal extreme."
+    return _compose_professional_response(
+        opening,
+        [
+            (
+                "Valorisation",
+                f"Trailing P/E {_format_ratio(company.get('pe_ratio'))}, forward P/E {_format_ratio(company.get('forward_pe_ratio'))}, P/S {_format_ratio(company.get('ps_ratio'))}.",
+            ),
+            (
+                "Croissance",
+                f"Ventes {_format_pct(company.get('sales_growth_pct'))}, EPS {_format_pct(company.get('eps_growth_pct'))}.",
+            ),
+            (
+                "Vs benchmark",
+                f"{peer.get('benchmark_name', 'N/A')} avec cible P/E {_format_ratio(peer.get('peer_target_pe'))} et cible P/S {_format_ratio(peer.get('peer_target_ps'))}. "
+                f"Score value {company.get('valuation_score', 'N/A')}/10, score croissance {company.get('growth_score', 'N/A')}/10.",
+            ),
+        ],
+        source_refs=fallback_context.get("sources"),
+    ), trace
 
 
 def _build_local_peer_response(chat_context: dict[str, Any], user_message: str) -> tuple[str | None, dict[str, Any] | None]:
@@ -1249,23 +1410,42 @@ def _build_local_peer_response(chat_context: dict[str, Any], user_message: str) 
             "business_profile": _business_model_sentence(company),
             "source_refs": fallback_context.get("sources"),
         },
-        system_instruction=(
+        system_instruction=_specialist_system_instruction(
             "Tu es le peer_agent. Reponds en francais en comparant le titre courant a son groupe de pairs et a son benchmark. "
             "Explique si le titre semble plus cher ou moins cher que ses pairs, s'il croît plus vite ou moins vite, "
             "et ce que cela implique pour la these d'investissement. "
-            "Adapte la reponse a la question de l'utilisateur, evite les listes generiques et utilise les chiffres du contexte."
+            "Adapte la reponse a la question de l'utilisateur, evite les listes generiques et utilise les chiffres du contexte.",
+            include_sources=True,
         ),
     )
     if ai_text:
         return ai_text, trace
 
-    lines = [
-        f"Comparaison pairs / benchmark pour {ticker}.",
-        f"Benchmark: {peer.get('benchmark_name', 'N/A')}.",
-        f"Croissance: ventes {_format_pct(company.get('sales_growth_pct'))} vs pairs {_format_pct(peer.get('peer_sales_growth_pct'))}, EPS {_format_pct(company.get('eps_growth_pct'))} vs pairs {_format_pct(peer.get('peer_eps_growth_pct'))}.",
-        f"Valorisation: trailing P/E {_format_ratio(company.get('pe_ratio'))} vs cible pairs {_format_ratio(peer.get('peer_target_pe'))}, P/S {_format_ratio(company.get('ps_ratio'))} vs cible pairs {_format_ratio(peer.get('peer_target_ps'))}.",
-    ]
-    return "\n\n".join(lines), trace
+    peer_sales = _to_float(peer.get("peer_sales_growth_pct")) or 0.0
+    company_sales = _to_float(company.get("sales_growth_pct")) or 0.0
+    if company_sales > peer_sales + 2:
+        opening = f"Face a ses pairs, {ticker} parait surtout meilleur sur la croissance."
+    elif company_sales < peer_sales - 2:
+        opening = f"Face a ses pairs, {ticker} parait plus mature ou moins dynamique que le groupe."
+    else:
+        opening = f"Face a ses pairs, {ticker} reste plutot proche du benchmark global."
+    return _compose_professional_response(
+        opening,
+        [
+            ("Benchmark", f"Groupe de reference: {peer.get('benchmark_name', 'N/A')}."),
+            (
+                "Croissance",
+                f"Ventes {_format_pct(company.get('sales_growth_pct'))} vs pairs {_format_pct(peer.get('peer_sales_growth_pct'))}, "
+                f"EPS {_format_pct(company.get('eps_growth_pct'))} vs pairs {_format_pct(peer.get('peer_eps_growth_pct'))}.",
+            ),
+            (
+                "Valorisation relative",
+                f"Trailing P/E {_format_ratio(company.get('pe_ratio'))} vs cible pairs {_format_ratio(peer.get('peer_target_pe'))}, "
+                f"P/S {_format_ratio(company.get('ps_ratio'))} vs cible pairs {_format_ratio(peer.get('peer_target_ps'))}.",
+            ),
+        ],
+        source_refs=fallback_context.get("sources"),
+    ), trace
 
 
 def _build_local_meta_response(chat_context: dict[str, Any], user_message: str) -> tuple[str | None, dict[str, Any] | None]:
@@ -1295,7 +1475,7 @@ def _build_local_meta_response(chat_context: dict[str, Any], user_message: str) 
                 {"name": "risk_agent", "role": "profil de risque, resilience et adequation investisseur"},
             ],
         },
-        system_instruction=(
+        system_instruction=_specialist_system_instruction(
             "Tu es le superviseur d'un chat multi-agents finance. Reponds en francais a la question meta de l'utilisateur. "
             "Explique clairement quels agents existent, ce qu'ils font, et comment ils peuvent aider sur le titre courant. "
             "Reste conversationnel et adapte ta reponse a la question, sans renvoyer un resume financier du titre si ce n'est pas demande."
@@ -1304,18 +1484,40 @@ def _build_local_meta_response(chat_context: dict[str, Any], user_message: str) 
     if ai_text:
         return ai_text, trace
 
-    lines = [
-        f"Voici les agents specialises disponibles pour analyser {ticker}.",
-        "- `fundamental_agent` : valorisation, croissance, cash-flow et qualite financiere.",
-        "- `technical_agent` : tendance, momentum et setup de marche.",
-        "- `peer_agent` : comparaison avec les pairs et le benchmark du secteur.",
-        "- `comparison_agent` : comparaison directe avec une autre action.",
-        "- `news_agent` : actualites recentes, catalyseurs et earnings.",
-        "- `market_signal_agent` : analystes, insiders et short interest.",
-        "- `filings_agent` : chiffres officiels SEC et lecture comptable.",
-        "- `risk_agent` : risques, resilience et profil d'investisseur.",
-    ]
-    return "\n\n".join(lines), trace
+    return _compose_professional_response(
+        f"Voici comment le chat multi-agents peut t'aider sur {ticker}.",
+        [
+            (
+                "Agents d'analyse",
+                _bullet_lines(
+                    [
+                        "`fundamental_agent` : valorisation, croissance, cash-flow et qualite financiere.",
+                        "`technical_agent` : tendance, momentum et setup de marche.",
+                        "`risk_agent` : risques, resilience et adequation au profil investisseur.",
+                    ]
+                ),
+            ),
+            (
+                "Agents de contexte",
+                _bullet_lines(
+                    [
+                        "`peer_agent` : comparaison avec les pairs et le benchmark.",
+                        "`comparison_agent` : comparaison directe avec une autre action.",
+                        "`news_agent` : actualites recentes, catalyseurs et earnings.",
+                    ]
+                ),
+            ),
+            (
+                "Agents de validation",
+                _bullet_lines(
+                    [
+                        "`market_signal_agent` : analystes, insiders et short interest.",
+                        "`filings_agent` : chiffres officiels SEC et lecture comptable.",
+                    ]
+                ),
+            ),
+        ],
+    ), trace
 
 
 def _route_local_agent_response(chat_context: dict[str, Any], user_message: str) -> tuple[str | None, dict[str, Any] | None]:
@@ -1365,24 +1567,33 @@ def _build_local_generic_response(chat_context: dict[str, Any], user_message: st
             "source_refs": fallback_context.get("sources"),
             "business_profile": _business_model_sentence(company),
         },
-        system_instruction=(
+        system_instruction=_specialist_system_instruction(
             "Tu es le superviseur d'un assistant multi-agents finance. Le run principal a echoue, mais tu dois quand meme repondre proprement a la question de l'utilisateur en francais. "
             "Adapte la reponse a la question exacte, utilise le contexte du titre courant, et evite de reciter toujours le meme resume. "
-            "Si la question est large, fais une reponse courte et utile. Si des donnees manquent, dis-le."
+            "Si la question est large, fais une reponse courte et utile. Si des donnees manquent, dis-le.",
+            include_sources=True,
         ),
     )
     if ai_text:
         return ai_text, trace
 
-    lines = [
-        f"Je n'ai pas pu recuperer la synthese multi-agents complete, mais voici un resume local pour {ticker}.",
-        f"Valorisation: trailing P/E {_format_ratio(company.get('pe_ratio'))}, P/S {_format_ratio(company.get('ps_ratio'))}, score value {company.get('valuation_score', 'N/A')}/10.",
-        f"Croissance: ventes {_format_pct(company.get('sales_growth_pct'))}, EPS {_format_pct(company.get('eps_growth_pct'))}, score croissance {company.get('growth_score', 'N/A')}/10.",
-        f"Solidite: {_format_balance_sheet_profile(company)}, score sante {company.get('health_score', 'N/A')}/10.",
-        f"Technique: score {technical.get('technical_score_out_of_10', 'N/A')}/10.",
-        f"Angle actif: {objective.get('label', 'Equilibre')}. Benchmark actuel: {peer.get('benchmark_name', 'N/A')}.",
-    ]
-    return "\n\n".join(lines), trace
+    return _compose_professional_response(
+        f"Je n'ai pas pu recuperer toute la synthese multi-agents, mais voici une lecture fiable et courte pour {ticker}.",
+        [
+            ("Verdict rapide", f"Angle actif {objective.get('label', 'Equilibre')} avec benchmark {peer.get('benchmark_name', 'N/A')}."),
+            (
+                "Fondamentaux",
+                f"Trailing P/E {_format_ratio(company.get('pe_ratio'))}, P/S {_format_ratio(company.get('ps_ratio'))}, "
+                f"score value {company.get('valuation_score', 'N/A')}/10 et score croissance {company.get('growth_score', 'N/A')}/10.",
+            ),
+            (
+                "Solidite et technique",
+                f"{_format_balance_sheet_profile(company)}, score sante {company.get('health_score', 'N/A')}/10, "
+                f"score technique {technical.get('technical_score_out_of_10', 'N/A')}/10.",
+            ),
+        ],
+        source_refs=fallback_context.get("sources"),
+    ), trace
 
 
 def _build_local_comparison_response(chat_context: dict[str, Any], user_message: str) -> tuple[str | None, dict[str, Any] | None]:
@@ -1434,12 +1645,13 @@ def _build_local_comparison_response(chat_context: dict[str, Any], user_message:
                 "requested_target": target_ticker,
                 "comparison": comparison_payload,
             },
-            system_instruction=(
+            system_instruction=_specialist_system_instruction(
                 "Tu es le comparison_agent. Reponds en francais et adapte la comparaison a la question exacte de l'utilisateur. "
                 "Explique ce que fait chaque entreprise, si la comparaison est intra- ou intersectorielle, et ce que cela change. "
                 "Ne donne pas un gagnant universel dans une comparaison intersectorielle sans conditions. "
                 "Separe clairement les axes croissance, valorisation, bilan/resilience, et conclusion selon l'objectif actif. "
-                "Evite toute formulation repetitive ou generique. Termine par une section `Sources` si des liens sont disponibles."
+                "Evite toute formulation repetitive ou generique.",
+                include_sources=True,
             ),
         )
         if ai_text:
