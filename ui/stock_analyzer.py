@@ -87,11 +87,15 @@ def _render_context_banner(title: str, copy: str):
 
 
 def _render_provenance_panel(entries: list[dict]):
-    """Render a compact provenance grid for the key metrics shown on screen."""
-    cards = []
-    for entry in entries:
-        cards.append(
-            f"""
+    """Render provenance cards with native Streamlit columns to avoid raw HTML bleed-through."""
+    if not entries:
+        return
+
+    for start in range(0, len(entries), 2):
+        row_entries = entries[start : start + 2]
+        cols = st.columns(len(row_entries))
+        for col, entry in zip(cols, row_entries):
+            card_html = f"""
             <div class="vmp-provenance-card">
                 <div class="vmp-provenance-label">{escape(str(entry.get("label", "")))}</div>
                 <div class="vmp-provenance-source">{escape(str(entry.get("source", "")))}</div>
@@ -99,8 +103,7 @@ def _render_provenance_panel(entries: list[dict]):
                 <div class="vmp-provenance-copy">{escape(str(entry.get("copy", "")))}</div>
             </div>
             """
-        )
-    st.markdown(f"""<div class="vmp-provenance-grid">{''.join(cards)}</div>""", unsafe_allow_html=True)
+            col.markdown(card_html, unsafe_allow_html=True)
 
 
 def _render_agent_trace(trace: dict | None, placeholder=None, live: bool = False):
