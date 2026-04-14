@@ -45,7 +45,7 @@ from scoring import calculate_altman_z, calculate_piotroski_score, score_out_of_
 from technical import add_indicators, bull_flag_score, fetch_price_history
 
 
-MODEL_NAME = "gemini-2.5-flash"
+MODEL_NAME = "gemini-3.1-pro-preview"
 APP_NAME = "stock_valuation_multi_agent"
 SUPERVISOR_AGENT_NAME = "stock_chat_supervisor"
 CHAT_ENGINE_VERSION = "2026-04-13-specialist-ai-v3"
