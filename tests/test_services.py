@@ -8,6 +8,7 @@ from services import (
     is_financial_company,
     market_cap_ok,
     profile_label,
+    quick_intrinsic_dcf,
     risk_label,
     run_screener,
     valuation_label,
@@ -37,9 +38,74 @@ class AnalyzerServiceTests(unittest.TestCase):
 
 
 class ScreenerEngineTests(unittest.TestCase):
+    @staticmethod
+    def _base_screening_payload(**overrides):
+        columns = ["Q1", "Q2", "Q3", "Q4"]
+        payload = {
+            "price": 10.0,
+            "shares_info": 100.0,
+            "market_cap": 5_000_000_000,
+            "sector": "Technology",
+            "industry": "Software",
+            "quote_type": "equity",
+            "long_name": "Test Corp",
+            "inc": pd.DataFrame([[50.0, 50.0, 50.0, 50.0]], index=["Revenue"], columns=columns),
+            "cf": pd.DataFrame(
+                [[20.0, 20.0, 20.0, 20.0], [-5.0, -5.0, -5.0, -5.0]],
+                index=["OperatingCashFlow", "CapitalExpenditure"],
+                columns=columns,
+            ),
+            "bs": pd.DataFrame([[30.0], [0.0]], index=["Cash", "TotalDebt"], columns=["Latest"]),
+            "rev_growth": 0.12,
+        }
+        payload.update(overrides)
+        return payload
+
     def test_market_cap_ok_handles_missing_values(self):
         self.assertTrue(market_cap_ok({"market_cap": 2_000_000_000}, 1_000_000_000))
         self.assertFalse(market_cap_ok({"market_cap": None}, 1_000_000_000))
+
+    def test_quick_intrinsic_dcf_skips_financials_and_funds(self):
+        def fake_valuation_calculator(*args):
+            return (30.0, 0.0, 0.0)
+
+        financial_candidate = quick_intrinsic_dcf(
+            "BANK",
+            minimum_market_cap=1_000_000_000,
+            fallback_fcf_growth_pct=15.0,
+            wacc_pct=10.0,
+            data_fetcher=lambda ticker, cache_version: self._base_screening_payload(
+                sector="Financial Services",
+                industry="Banks",
+            ),
+            valuation_calculator=fake_valuation_calculator,
+        )
+        fund_candidate = quick_intrinsic_dcf(
+            "FUND",
+            minimum_market_cap=1_000_000_000,
+            fallback_fcf_growth_pct=15.0,
+            wacc_pct=10.0,
+            data_fetcher=lambda ticker, cache_version: self._base_screening_payload(
+                quote_type="etf",
+                long_name="Test Income Fund",
+            ),
+            valuation_calculator=fake_valuation_calculator,
+        )
+
+        self.assertIsNone(financial_candidate)
+        self.assertIsNone(fund_candidate)
+
+    def test_quick_intrinsic_dcf_filters_absurd_upside(self):
+        candidate = quick_intrinsic_dcf(
+            "HYPE",
+            minimum_market_cap=1_000_000_000,
+            fallback_fcf_growth_pct=15.0,
+            wacc_pct=10.0,
+            data_fetcher=lambda ticker, cache_version: self._base_screening_payload(),
+            valuation_calculator=lambda *args: (60.0, 0.0, 0.0),
+        )
+
+        self.assertIsNone(candidate)
 
     def test_run_screener_uses_engine_not_ui_loop(self):
         def fake_ticker_fetcher(sector_code, geography_code, max_tickers):
@@ -48,32 +114,9 @@ class ScreenerEngineTests(unittest.TestCase):
 
         def fake_data_fetcher(ticker, cache_version):
             if ticker == "BBB":
-                return {
-                    "price": 0,
-                    "shares_info": 0,
-                    "market_cap": 0,
-                    "sector": "Technology",
-                    "inc": pd.DataFrame(),
-                    "cf": pd.DataFrame(),
-                    "bs": pd.DataFrame(),
-                    "rev_growth": 0,
-                }
+                return self._base_screening_payload(price=0, shares_info=0, market_cap=0)
 
-            columns = ["Q1", "Q2", "Q3", "Q4"]
-            return {
-                "price": 10.0,
-                "shares_info": 100.0,
-                "market_cap": 5_000_000_000,
-                "sector": "Technology",
-                "inc": pd.DataFrame([[50.0, 50.0, 50.0, 50.0]], index=["Revenue"], columns=columns),
-                "cf": pd.DataFrame(
-                    [[20.0, 20.0, 20.0, 20.0], [-5.0, -5.0, -5.0, -5.0]],
-                    index=["OperatingCashFlow", "CapitalExpenditure"],
-                    columns=columns,
-                ),
-                "bs": pd.DataFrame([[30.0], [0.0]], index=["Cash", "TotalDebt"], columns=["Latest"]),
-                "rev_growth": 0.12,
-            }
+            return self._base_screening_payload()
 
         def fake_valuation_calculator(*args):
             return (25.0, 0.0, 0.0)

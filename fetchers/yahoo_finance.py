@@ -284,7 +284,7 @@ def get_financial_data_secure(ticker: str, cache_version: str = FINANCIAL_DATA_C
         "price": 0.0, "shares_info": 0.0, "sector": "Default",
         "rev_growth": 0.0, "eps_growth": 0.0, "trailing_eps": 0.0, "pe_ratio": 0.0, "forward_pe": 0.0, "dividend_yield": 0.0, "revenue_ttm": 0.0,
         "quote_currency": None, "financial_currency": None,
-        "long_name": ticker, "error": None, "market_cap": None, "insiders": pd.DataFrame()
+        "long_name": ticker, "industry": None, "quote_type": None, "error": None, "market_cap": None, "insiders": pd.DataFrame()
     }
     try:
         stock = yf.Ticker(ticker)
@@ -298,6 +298,8 @@ def get_financial_data_secure(ticker: str, cache_version: str = FINANCIAL_DATA_C
             pass
 
         out["sector"] = full_info.get("sector", "Default") or "Default"
+        out["industry"] = full_info.get("industry")
+        out["quote_type"] = full_info.get("quoteType")
         out["target_price"] = full_info.get("targetMeanPrice", None)
         out["long_name"] = full_info.get("longName", ticker) or ticker
         out["rev_growth"] = float(full_info.get("revenueGrowth", 0) or 0)
