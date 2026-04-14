@@ -25,16 +25,16 @@ from services import (
 
 
 SECTION_OPTIONS = [
-    "Fundamentals",
-    "DCF",
-    "Sales",
-    "Earnings",
-    "Assets",
-    "Analysts",
-    "Insiders",
-    "Tech",
-    "Scorecard",
-    "AI Chat",
+    ("Fondamentaux", "Historique financier, marges, liquidite et qualite operationnelle."),
+    ("DCF", "Valorisation basee sur les flux de tresorerie avec scenarios et sensibilites."),
+    ("Ventes", "Lecture du multiple de ventes face aux pairs et au benchmark."),
+    ("Benefices", "Lecture du P/E et du positionnement relatif au marche."),
+    ("Actifs", "Valeur plancher basee sur le bilan."),
+    ("Analystes", "Consensus, objectifs de prix et changements de recommandations."),
+    ("Insiders", "Transactions d'initiés recuperees depuis Yahoo Finance."),
+    ("Technique", "Tendance, momentum, overlays et short interest."),
+    ("Scorecard", "Synthese sante, croissance et valorisation en un coup d'oeil."),
+    ("Chat IA", "Conversation multi-agents sur la valorisation, les news et les comparaisons."),
 ]
 
 
@@ -164,8 +164,8 @@ def _render_overview_card(
             <div class="vmp-overview-kicker">{ticker} | {sector_name}</div>
             <div class="vmp-overview-title">{long_name}</div>
             <div class="vmp-overview-copy">
-                Quick read: {valuation_label.lower()}, {risk_label.lower()} and a {profile_label.lower()}
-                relative to the {benchmark_name} benchmark.
+                Lecture rapide: {valuation_label.lower()}, {risk_label.lower()} et un profil {profile_label.lower()}
+                face au benchmark {benchmark_name}.
             </div>
             <div class="vmp-chip-row">
                 <span class="vmp-chip">{valuation_label}</span>
@@ -192,6 +192,58 @@ def _render_insight_card(label: str, value: str, copy: str):
     )
 
 
+def _build_picker_options() -> list[tuple[str, str]]:
+    """Transform the ticker database into cleaner grouped labels for the selector."""
+    options: list[tuple[str, str]] = []
+    current_group = "Selection rapide"
+    for item in TICKER_DB:
+        if item.startswith("---"):
+            current_group = item.strip("- ").strip()
+            continue
+        if item.lower().startswith("autre"):
+            options.append(("Autre • Saisie manuelle", item))
+        else:
+            options.append((f"{current_group} • {item}", item))
+    return options
+
+
+def _picker_label_for_ticker(ticker: str, picker_options: list[tuple[str, str]]) -> str | None:
+    """Find the current picker label matching a target ticker."""
+    target = (ticker or "").upper().strip()
+    if not target:
+        return None
+    for display, raw in picker_options:
+        if raw.upper().startswith(f"{target} "):
+            return display
+    return None
+
+
+def _build_picker_options() -> list[tuple[str, str]]:
+    """Override the picker labels with clean ASCII group labels."""
+    options: list[tuple[str, str]] = []
+    current_group = "Selection rapide"
+    for item in TICKER_DB:
+        if item.startswith("---"):
+            current_group = item.strip("- ").strip()
+            continue
+        if item.lower().startswith("autre"):
+            options.append(("Autre | Saisie manuelle", item))
+        else:
+            options.append((f"{current_group} | {item}", item))
+    return options
+
+
+def _picker_label_for_ticker(ticker: str, picker_options: list[tuple[str, str]]) -> str | None:
+    """Override ticker label resolution with the cleaned picker labels."""
+    target = (ticker or "").upper().strip()
+    if not target:
+        return None
+    for display, raw in picker_options:
+        if raw.upper().startswith(f"{target} "):
+            return display
+    return None
+
+
 def render_stock_analyzer(api_key: str, sidebar_state: dict | None = None):
     """
     Render the Stock Analyzer mode UI.
@@ -201,18 +253,28 @@ def render_stock_analyzer(api_key: str, sidebar_state: dict | None = None):
     """
     sidebar_state = sidebar_state or {}
 
-    st.subheader("Search for a Company")
-    choice = st.selectbox("Choose a popular stock:", TICKER_DB, index=2)
-    
+    st.subheader("Rechercher une entreprise")
+    picker_options = _build_picker_options()
+    picker_labels = [label for label, _raw in picker_options]
+    selected_override = st.session_state.get("selected_ticker_override") or "MSFT"
+    default_picker = _picker_label_for_ticker(str(selected_override), picker_options) or picker_labels[min(2, len(picker_labels) - 1)]
+    if st.session_state.get("stock_picker_force_sync") or st.session_state.get("stock_picker_display") not in picker_labels:
+        st.session_state["stock_picker_display"] = default_picker
+        st.session_state["stock_picker_force_sync"] = False
+
+    choice_display = st.selectbox("Choisis une action suivie", picker_labels, key="stock_picker_display")
+    choice = dict(picker_options)[choice_display]
+
     ticker_final = "MSFT"
-    if "Other" in choice:
+    if choice.lower().startswith("autre"):
         ticker_input = st.text_input("Ticker", "").upper()
         if ticker_input:
             ticker_final = ticker_input
     elif "-" in choice:
         ticker_final = choice.split("-")[0].strip()
 
-    st.caption(f"Analyzing: **{ticker_final}**")
+    st.session_state["selected_ticker_override"] = ticker_final
+    st.caption(f"Analyse en cours: **{ticker_final}**")
     manual_shares = float(sidebar_state.get("manual_shares", 0.0) or 0.0)
     snapshot = prepare_analyzer_snapshot(
         ticker_final,
@@ -338,18 +400,18 @@ def render_stock_analyzer(api_key: str, sidebar_state: dict | None = None):
     )
 
     top_metrics = st.columns(5)
-    top_metrics[0].metric("Current Price", f"{current_price:.2f} $")
-    top_metrics[1].metric("Blended Fair Value", _format_currency(blended_intrinsic), delta=f"{valuation_gap:+.1f}%")
+    top_metrics[0].metric("Prix actuel", f"{current_price:.2f} $")
+    top_metrics[1].metric("Juste valeur mixte", _format_currency(blended_intrinsic), delta=f"{valuation_gap:+.1f}%")
     top_metrics[2].metric(
-        "Analyst Mean Target",
+        "Objectif analystes",
         _format_currency(analyst_target if analyst_target > 0 else None),
         delta=f"{analyst_gap:+.1f}%" if analyst_target > 0 else None,
     )
     if is_financial:
-        top_metrics[3].metric("Balance Sheet", "Bank model")
+        top_metrics[3].metric("Bilan", "Modele bancaire")
     else:
-        top_metrics[3].metric("Net Cash / Debt", _format_market_cap(cash - debt))
-    top_metrics[4].metric("Next Earnings", next_earnings)
+        top_metrics[3].metric("Cash net / dette", _format_market_cap(cash - debt))
+    top_metrics[4].metric("Prochaine publication", next_earnings)
 
     revenue_basis = snapshot.revenue_basis
     eps_basis = snapshot.eps_basis
@@ -359,38 +421,38 @@ def render_stock_analyzer(api_key: str, sidebar_state: dict | None = None):
     press_release_count = snapshot.press_release_count
 
     _render_context_banner(
-        "Data provenance",
-        f"As of {as_of_date}. Cache {FINANCIAL_DATA_CACHE_VERSION}. This panel shows where the key metrics and AI context come from.",
+        "Etat des donnees",
+        f"Mis a jour au {as_of_date}. Cache {FINANCIAL_DATA_CACHE_VERSION}. Les prix viennent du flux live, les etats sont caches, et le chat consomme ce meme contexte date.",
     )
     _render_provenance_panel(
         [
             {
-                "label": "Market data",
+                "label": "Marche",
                 "source": "Yahoo Finance quote + recommendations",
-                "meta": f"As of {as_of_date} | Quote ccy {quote_currency}",
-                "copy": f"Current price and analyst target come from the live quote payload for {ticker_final}.",
+                "meta": f"Au {as_of_date} | Devise de cotation {quote_currency}",
+                "copy": f"Le prix actuel et l'objectif analystes viennent du flux live de {ticker_final}.",
             },
             {
-                "label": "P/E context",
+                "label": "Contexte P/E",
                 "source": f"{pe_basis} + Yahoo forward P/E",
-                "meta": f"As of {as_of_date} | Financial ccy {financial_currency}",
-                "copy": f"Trailing P/E {pe:.1f}x, forward P/E {forward_pe:.1f}x and EPS TTM {eps_ttm:.2f}. EPS basis: {eps_basis}.",
+                "meta": f"Au {as_of_date} | Devise financiere {financial_currency}",
+                "copy": f"Trailing P/E {pe:.1f}x, forward P/E {forward_pe:.1f}x et EPS TTM {eps_ttm:.2f}. Base EPS: {eps_basis}.",
             },
             {
-                "label": "Revenue and balance sheet",
+                "label": "Ventes et bilan",
                 "source": "Yahoo quarterly / annual statements",
-                "meta": f"As of {as_of_date} | Revenue basis: {revenue_basis}",
+                "meta": f"Au {as_of_date} | Base revenu: {revenue_basis}",
                 "copy": (
-                    f"Revenue TTM {_format_market_cap(revenue_ttm)}, cash {_format_market_cap(cash)} and debt {_format_market_cap(debt)} feed the valuation model."
+                    f"Revenu TTM {_format_market_cap(revenue_ttm)}, cash {_format_market_cap(cash)} et dette {_format_market_cap(debt)} alimentent le modele de valorisation."
                     if not is_financial
-                    else f"Revenue TTM {_format_market_cap(revenue_ttm)} and latest statement rows are used, but banks/financials avoid net-debt shortcuts."
+                    else f"Revenu TTM {_format_market_cap(revenue_ttm)} et dernieres lignes d'etats utilisees, sans raccourci de dette nette pour les banques."
                 ),
             },
             {
-                "label": "AI news context",
+                "label": "Contexte IA news",
                 "source": "yfinance news + Google News RSS + Yahoo calendar",
-                "meta": f"As of {as_of_date} | {recent_news_count} market items, {press_release_count} press-release items",
-                "copy": f"The chat uses dated headlines plus the earnings calendar, with links when they are available.",
+                "meta": f"Au {as_of_date} | {recent_news_count} news de marche, {press_release_count} communiques",
+                "copy": f"Le chat utilise des titres dates et le calendrier des resultats, avec liens lorsque disponibles.",
             },
         ]
     )
@@ -398,38 +460,38 @@ def render_stock_analyzer(api_key: str, sidebar_state: dict | None = None):
     insight_cols = st.columns(3)
     with insight_cols[0]:
         _render_insight_card(
-            "Market context",
+            "Contexte marche",
             bench_data["name"],
-            f"Peers: {bench_data.get('peers', 'N/A')}. Peer P/S {bench_data['ps']}x and peer P/E {bench_data.get('pe', 20)}x.",
+            f"Pairs: {bench_data.get('peers', 'N/A')}. P/S cible {bench_data['ps']}x et P/E cible {bench_data.get('pe', 20)}x.",
         )
     with insight_cols[1]:
         if is_financial:
             _render_insight_card(
-                "Banking profile",
+                "Profil bancaire",
                 f"EPS {cur_eps_gr * 100:.1f}% | P/E {pe:.1f}x",
-                "For banks, deposits, funding mix and capital ratios matter more than FCF yield or Rule of 40.",
+                "Pour les banques, les depots, le mix de financement et les ratios de capital comptent plus que le FCF yield ou la Rule of 40.",
             )
         else:
             _render_insight_card(
-                "Operating profile",
+                "Profil operationnel",
                 f"Sales {cur_sales_gr * 100:.1f}% | EPS {cur_eps_gr * 100:.1f}%",
                 f"FCF yield {(fcf_ttm / market_cap) * 100:.1f}% and Rule of 40 {metrics['rule_40'] * 100:.1f}%.",
             )
     with insight_cols[2]:
         if is_financial:
             _render_insight_card(
-                "Quality snapshot",
+                "Qualite du dossier",
                 f"Piotroski {piotroski if piotroski else 'N/A'} | Altman N/A",
-                f"Market cap {_format_market_cap(market_cap)} with {shares / 1_000_000:.1f}M shares. Altman Z and net debt are not reliable shortcuts for banks.",
+                f"Capitalisation {_format_market_cap(market_cap)} avec {shares / 1_000_000:.1f}M d'actions. Altman Z et la dette nette ne sont pas des raccourcis fiables pour les banques.",
             )
         else:
             _render_insight_card(
-                "Quality snapshot",
+                "Qualite du dossier",
                 f"Piotroski {piotroski if piotroski else 'N/A'} | Altman {altman_z:.2f}",
-                f"Market cap {_format_market_cap(market_cap)} with {shares / 1_000_000:.1f}M shares in the model.",
+                f"Capitalisation {_format_market_cap(market_cap)} avec {shares / 1_000_000:.1f}M d'actions dans le modele.",
             )
     
-    st.markdown("### Deep Dive")
+    st.markdown("### Analyse detaillee")
 
     # Define Section Menu
     section = st.radio(
@@ -473,16 +535,16 @@ def render_stock_analyzer(api_key: str, sidebar_state: dict | None = None):
 
     st.caption(
         {
-            "Fundamentals": "Historical statements, margins, liquidity and operating quality.",
-            "DCF": "Cash-flow-based valuation with scenarios and sensitivity matrix.",
-            "Sales": "Revenue multiple view against the peer group benchmark.",
-            "Earnings": "Earnings multiple view and market relative positioning.",
-            "Assets": "Balance-sheet-driven value floor.",
-            "Analysts": "Consensus, price targets and recent rating changes.",
-            "Insiders": "Recent insider transactions from Yahoo Finance.",
-            "Tech": "Trend structure, overlays, oscillators and short interest.",
-            "Scorecard": "Health, growth and valuation summary in one place.",
-            "AI Chat": "Multi-agent conversation for valuation, news, catalysts and comparisons.",
+            "Fundamentals": "Etats historiques, marges, liquidite et qualite operationnelle.",
+            "DCF": "Valorisation par les flux avec scenarios et matrice de sensibilite.",
+            "Sales": "Lecture du multiple de ventes face au groupe de pairs.",
+            "Earnings": "Lecture du multiple de benefices et du positionnement relatif.",
+            "Assets": "Valeur plancher portee par le bilan.",
+            "Analysts": "Consensus, objectifs de prix et mouvements de recommandations.",
+            "Insiders": "Transactions recentes des dirigeants depuis Yahoo Finance.",
+            "Tech": "Tendance, overlays, oscillateurs et short interest.",
+            "Scorecard": "Sante, croissance et valorisation en une seule synthese.",
+            "AI Chat": "Conversation multi-agents sur la valo, les news, les catalyseurs et les comparaisons.",
         }[section_key]
     )
 
