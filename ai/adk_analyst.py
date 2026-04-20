@@ -699,6 +699,31 @@ def _comparison_focus_from_message(user_message: str | None) -> str | None:
     return None
 
 
+def _comparison_needs_technical(user_message: str | None, objective_label: str | None) -> bool:
+    objective_key = _router_normalize_intent_text(objective_label or "")
+    if "court terme" in objective_key or "short term" in objective_key:
+        return True
+    return _comparison_focus_from_message(user_message) == "technique"
+
+
+def _extract_function_responses(event: Any) -> list[Any]:
+    """Extract ADK function responses from an event when no final text is available."""
+    if hasattr(event, "get_function_responses"):
+        try:
+            responses = event.get_function_responses()
+            if responses:
+                return list(responses)
+        except Exception:
+            pass
+
+    content = getattr(event, "content", None)
+    parts = getattr(content, "parts", None) or []
+    responses = []
+    for part in parts:
+        function_response = getattr(part, "function_response", None)
+        if function_response is not None:
+            responses.append(function_response)
+    return responses
 def _extract_function_responses(event: Any) -> list[Any]:
     """Extract ADK function responses from an event when no final text is available."""
     if hasattr(event, "get_function_responses"):
@@ -1668,7 +1693,9 @@ def _build_local_comparison_response(chat_context: dict[str, Any], user_message:
         return None, None
 
     try:
-        other_context = _compute_stock_context(target_ticker)
+        objective_label = (chat_context.get("investor_objective") or {}).get("label")
+        needs_technical = _comparison_needs_technical(user_message, objective_label)
+        other_context = _compute_stock_context(target_ticker, include_technical=needs_technical)
         payload = {
             "requested_target": target_ticker,
             "resolved_ticker": target_ticker,
@@ -1702,6 +1729,10 @@ def _build_local_comparison_response(chat_context: dict[str, Any], user_message:
         use_llm_refinement = os.getenv("ENABLE_LLM_COMPARISON_REFINEMENT", "").strip().lower() in {"1", "true", "yes"}
         if not use_llm_refinement:
             return text, trace
+
+        ai_text = _generate_specialist_ai_response(
+            specialist_name="comparison_agent",
+            user_message=user_message,
 
         ai_text = _generate_specialist_ai_response(
             specialist_name="comparison_agent",
@@ -2200,7 +2231,11 @@ def _build_sec_snapshot(ticker: str) -> dict[str, Any]:
 
 
 @lru_cache(maxsize=64)
-def _compute_stock_context(ticker: str) -> dict[str, Any]:
+@lru_cache(maxsize=64)
+def _compute_stock_context(ticker: str, include_technical: bool = True) -> dict[str, Any]:
+    ticker = (ticker or "").upper().strip()
+    data = get_financial_data_secure(ticker, cache_version=FINANCIAL_DATA_CACHE_VERSION)
+    current_price = float(data.get("price", 0) or 0)
     ticker = (ticker or "").upper().strip()
     data = get_financial_data_secure(ticker, cache_version=FINANCIAL_DATA_CACHE_VERSION)
     current_price = float(data.get("price", 0) or 0)
@@ -2276,9 +2311,12 @@ def _compute_stock_context(ticker: str) -> dict[str, Any]:
 
     scores = score_out_of_10(metrics, benchmark)
 
-    price_df = fetch_price_history(ticker, "1y")
-    tech_df = add_indicators(price_df)
-    technical = bull_flag_score(tech_df)
+    if include_technical:
+        price_df = fetch_price_history(ticker, "1y")
+        tech_df = add_indicators(price_df)
+        technical = bull_flag_score(tech_df)
+    else:
+        technical = {}
 
     return {
         "ticker": ticker.upper(),
