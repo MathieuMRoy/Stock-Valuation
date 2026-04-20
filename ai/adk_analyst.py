@@ -1695,6 +1695,13 @@ def _build_local_comparison_response(chat_context: dict[str, Any], user_message:
         use_llm_refinement = os.getenv("ENABLE_LLM_COMPARISON_REFINEMENT", "").strip().lower() in {"1", "true", "yes"}
         if not use_llm_refinement:
             return text, trace
+        if not text:
+            return None, None
+        # Deterministic synthesis is preferred for direct comparisons: faster and less formatting drift.
+        # Keep the optional specialist pass only when explicitly enabled.
+        use_llm_refinement = os.getenv("ENABLE_LLM_COMPARISON_REFINEMENT", "").strip().lower() in {"1", "true", "yes"}
+        if not use_llm_refinement:
+            return text, trace
 
         ai_text = _generate_specialist_ai_response(
             specialist_name="comparison_agent",
