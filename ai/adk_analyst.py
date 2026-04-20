@@ -48,8 +48,8 @@ from technical import add_indicators, bull_flag_score, fetch_price_history
 MODEL_NAME = "gemini-3.1-pro-preview"
 APP_NAME = "stock_valuation_multi_agent"
 SUPERVISOR_AGENT_NAME = "stock_chat_supervisor"
-CHAT_ENGINE_VERSION = "2026-04-14-specialist-ai-v7"
-SPECIALIST_MAX_OUTPUT_TOKENS = 1400
+CHAT_ENGINE_VERSION = "2026-04-20-specialist-ai-v8"
+SPECIALIST_MAX_OUTPUT_TOKENS = 900
 
 AGENT_DISPLAY_NAMES = {
     SUPERVISOR_AGENT_NAME: "Superviseur",
@@ -176,58 +176,16 @@ def _merge_continuation_text(base_text: str, continuation_text: str) -> str:
     return f"{base} {continuation}".strip()
 
 
-def _looks_truncated_text(text: str | None) -> bool:
-    if not text:
-        return False
-
-    stripped = text.rstrip()
-    if len(stripped) < 80:
-        return False
-
-    if stripped.endswith((".", "!", "?", "…", "\"", "'", "`", ")", "]", "}", "»")):
-        return False
-
-    if stripped.endswith((",", ";", ":", "-", "/", "(", "[", "{")):
-        return True
-
-    lowered = stripped.lower()
-    dangling_endings = (
-        " l'",
-        " d'",
-        " et",
-        " ou",
-        " de",
-        " du",
-        " des",
-        " la",
-        " le",
-        " les",
-        " pour",
-        " avec",
-        " sur",
-        " dans",
-        " par",
-        " versus",
-        " vs",
-    )
-    if any(lowered.endswith(ending) for ending in dangling_endings):
-        return True
-
-    if len(stripped) >= 60:
-        return True
-
-    return False
-
 def _has_terminal_sentence_ending(text: str) -> bool:
     candidate = (text or "").rstrip()
     if not candidate:
         return False
 
-    closers = ('"', "'", "`", ")", "]", "}", "Â»")
+    closers = ('"', "'", "`", ")", "]", "}", "»")
     while candidate and candidate[-1] in closers:
         candidate = candidate[:-1].rstrip()
 
-    return candidate.endswith((".", "!", "?", "â€¦"))
+    return candidate.endswith((".", "!", "?", "…"))
 
 
 def _looks_truncated_text(text: str | None) -> bool:
@@ -1713,6 +1671,15 @@ def _build_local_comparison_response(chat_context: dict[str, Any], user_message:
         comparison_context = comparison_payload.get("comparison_context") or {}
         comparison_context["current_business_profile"] = _business_model_sentence(fallback_context.get("company") or {})
         comparison_context["other_business_profile"] = _business_model_sentence(other_context.get("company") or {})
+        text = _comparison_tool_response_to_text(payload)
+        if not text:
+            return None, None
+        # Deterministic synthesis is preferred for direct comparisons: faster and less formatting drift.
+        # Keep the optional specialist pass only when explicitly enabled.
+        use_llm_refinement = os.getenv("ENABLE_LLM_COMPARISON_REFINEMENT", "").strip().lower() in {"1", "true", "yes"}
+        if not use_llm_refinement:
+            return text, trace
+
         ai_text = _generate_specialist_ai_response(
             specialist_name="comparison_agent",
             user_message=user_message,
@@ -1721,6 +1688,7 @@ def _build_local_comparison_response(chat_context: dict[str, Any], user_message:
                 "question": user_message,
                 "requested_target": target_ticker,
                 "comparison": comparison_payload,
+                "deterministic_answer": text,
             },
             system_instruction=_specialist_system_instruction(
                 "Tu es le comparison_agent. Reponds en francais et adapte la comparaison a la question exacte de l'utilisateur. "
@@ -1731,12 +1699,7 @@ def _build_local_comparison_response(chat_context: dict[str, Any], user_message:
                 include_sources=True,
             ),
         )
-        if ai_text:
-            return ai_text, trace
-        text = _comparison_tool_response_to_text(payload)
-        if not text:
-            return None, None
-        return text, trace
+        return (ai_text or text), trace
     except Exception as exc:
         return f"Je n'ai pas pu construire la comparaison locale avec {target_ticker}: {exc}", _build_agent_trace(["comparison_agent"], "comparison_agent")
 
