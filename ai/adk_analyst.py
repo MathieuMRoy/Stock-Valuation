@@ -5,6 +5,7 @@ Google ADK multi-agent chat analyst for the Streamlit stock analyzer.
 from __future__ import annotations
 
 import asyncio
+from functools import lru_cache
 from datetime import date
 import hashlib
 import json
@@ -684,6 +685,20 @@ def _objective_conclusion(
     return f"Sous un angle equilibre, {leader} a legerement l'avantage."
 
 
+def _comparison_focus_from_message(user_message: str | None) -> str | None:
+    message = _router_normalize_intent_text(user_message or "")
+    focus_markers = {
+        "croissance": ("croissance", "growth", "upside", "momentum"),
+        "valorisation": ("valorisation", "valuation", "pe", "p/e", "ps", "p/s", "cher", "cheap"),
+        "solidite": ("risque", "risk", "defensif", "bilan", "solidite", "robuste", "resilience"),
+        "technique": ("technique", "technical", "rsi", "trend", "setup", "chart"),
+    }
+    for focus, markers in focus_markers.items():
+        if any(marker in message for marker in markers):
+            return focus
+    return None
+
+
 def _extract_function_responses(event: Any) -> list[Any]:
     """Extract ADK function responses from an event when no final text is available."""
     if hasattr(event, "get_function_responses"):
@@ -704,7 +719,7 @@ def _extract_function_responses(event: Any) -> list[Any]:
     return responses
 
 
-def _comparison_tool_response_to_text(payload: dict[str, Any]) -> str | None:
+def _comparison_tool_response_to_text(payload: dict[str, Any], user_message: str | None = None) -> str | None:
     if not isinstance(payload, dict):
         return None
     if payload.get("error"):
@@ -760,40 +775,41 @@ def _comparison_tool_response_to_text(payload: dict[str, Any]) -> str | None:
             {"title": f"{other_ticker} quote page", "url": other_quote_page.get("url")}
         )
 
-    return _compose_professional_response(
-        opening,
-        [
-            ("Nature du match-up", matchup_body),
-            (
-                "Croissance / upside",
-                f"{current_ticker}: ventes {_format_pct(current.get('sales_growth_pct'))}, EPS {_format_pct(current.get('eps_growth_pct'))}. "
-                f"{other_ticker}: ventes {_format_pct(other.get('sales_growth_pct'))}, EPS {_format_pct(other.get('eps_growth_pct'))}. "
-                f"{_pick_category_winner(current, other, current.get('growth_score'), other.get('growth_score'), 'Lecture croissance')}",
-            ),
-            (
-                "Valorisation",
-                f"{', '.join(valuation_bits)}. "
-                f"{_pick_category_winner(current, other, current.get('valuation_score'), other.get('valuation_score'), 'Lecture valorisation')}",
-            ),
-            (
-                "Solidite / bilan",
-                f"{current_ticker}: {_format_balance_sheet_profile(current)}. "
-                f"{other_ticker}: {_format_balance_sheet_profile(other)}. "
-                f"{_pick_category_winner(current, other, current.get('health_score'), other.get('health_score'), 'Lecture robustesse')}",
-            ),
-            (
-                "Verdict selon l'angle choisi",
-                _objective_conclusion(
-                    objective_label,
-                    current,
-                    other,
-                    comparison.get("current_technical") or {},
-                    comparison.get("other_technical") or {},
-                ),
-            ),
-        ],
-        source_refs=merged_source_refs,
-    )
+    all_sections = {
+        "Nature du match-up": matchup_body,
+        "Croissance / upside": (
+            f"{current_ticker}: ventes {_format_pct(current.get('sales_growth_pct'))}, EPS {_format_pct(current.get('eps_growth_pct'))}. "
+            f"{other_ticker}: ventes {_format_pct(other.get('sales_growth_pct'))}, EPS {_format_pct(other.get('eps_growth_pct'))}. "
+            f"{_pick_category_winner(current, other, current.get('growth_score'), other.get('growth_score'), 'Lecture croissance')}"
+        ),
+        "Valorisation": (
+            f"{', '.join(valuation_bits)}. "
+            f"{_pick_category_winner(current, other, current.get('valuation_score'), other.get('valuation_score'), 'Lecture valorisation')}"
+        ),
+        "Solidite / bilan": (
+            f"{current_ticker}: {_format_balance_sheet_profile(current)}. "
+            f"{other_ticker}: {_format_balance_sheet_profile(other)}. "
+            f"{_pick_category_winner(current, other, current.get('health_score'), other.get('health_score'), 'Lecture robustesse')}"
+        ),
+        "Verdict selon l'angle choisi": _objective_conclusion(
+            objective_label,
+            current,
+            other,
+            comparison.get("current_technical") or {},
+            comparison.get("other_technical") or {},
+        ),
+    }
+    focus = _comparison_focus_from_message(user_message)
+    if focus == "croissance":
+        selected_titles = ["Nature du match-up", "Croissance / upside", "Verdict selon l'angle choisi"]
+    elif focus == "valorisation":
+        selected_titles = ["Nature du match-up", "Valorisation", "Verdict selon l'angle choisi"]
+    elif focus == "solidite":
+        selected_titles = ["Nature du match-up", "Solidite / bilan", "Verdict selon l'angle choisi"]
+    else:
+        selected_titles = list(all_sections.keys())
+    sections = [(title, all_sections.get(title)) for title in selected_titles]
+    return _compose_professional_response(opening, sections, source_refs=merged_source_refs)
 
 
 def _news_tool_response_to_text(payload: dict[str, Any]) -> str | None:
@@ -1671,7 +1687,14 @@ def _build_local_comparison_response(chat_context: dict[str, Any], user_message:
         comparison_context = comparison_payload.get("comparison_context") or {}
         comparison_context["current_business_profile"] = _business_model_sentence(fallback_context.get("company") or {})
         comparison_context["other_business_profile"] = _business_model_sentence(other_context.get("company") or {})
-        text = _comparison_tool_response_to_text(payload)
+        text = _comparison_tool_response_to_text(payload, user_message=user_message)
+        if not text:
+            return None, None
+        # Deterministic synthesis is preferred for direct comparisons: faster and less formatting drift.
+        # Keep the optional specialist pass only when explicitly enabled.
+        use_llm_refinement = os.getenv("ENABLE_LLM_COMPARISON_REFINEMENT", "").strip().lower() in {"1", "true", "yes"}
+        if not use_llm_refinement:
+            return text, trace
         if not text:
             return None, None
         # Deterministic synthesis is preferred for direct comparisons: faster and less formatting drift.
@@ -2176,7 +2199,9 @@ def _build_sec_snapshot(ticker: str) -> dict[str, Any]:
     return snapshot
 
 
+@lru_cache(maxsize=64)
 def _compute_stock_context(ticker: str) -> dict[str, Any]:
+    ticker = (ticker or "").upper().strip()
     data = get_financial_data_secure(ticker, cache_version=FINANCIAL_DATA_CACHE_VERSION)
     current_price = float(data.get("price", 0) or 0)
     if current_price <= 0:
