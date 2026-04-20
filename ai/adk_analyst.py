@@ -724,6 +724,24 @@ def _extract_function_responses(event: Any) -> list[Any]:
         if function_response is not None:
             responses.append(function_response)
     return responses
+def _extract_function_responses(event: Any) -> list[Any]:
+    """Extract ADK function responses from an event when no final text is available."""
+    if hasattr(event, "get_function_responses"):
+        try:
+            responses = event.get_function_responses()
+            if responses:
+                return list(responses)
+        except Exception:
+            pass
+
+    content = getattr(event, "content", None)
+    parts = getattr(content, "parts", None) or []
+    responses = []
+    for part in parts:
+        function_response = getattr(part, "function_response", None)
+        if function_response is not None:
+            responses.append(function_response)
+    return responses
 
 
 def _comparison_tool_response_to_text(payload: dict[str, Any], user_message: str | None = None) -> str | None:
@@ -1704,6 +1722,17 @@ def _build_local_comparison_response(chat_context: dict[str, Any], user_message:
         use_llm_refinement = os.getenv("ENABLE_LLM_COMPARISON_REFINEMENT", "").strip().lower() in {"1", "true", "yes"}
         if not use_llm_refinement:
             return text, trace
+        if not text:
+            return None, None
+        # Deterministic synthesis is preferred for direct comparisons: faster and less formatting drift.
+        # Keep the optional specialist pass only when explicitly enabled.
+        use_llm_refinement = os.getenv("ENABLE_LLM_COMPARISON_REFINEMENT", "").strip().lower() in {"1", "true", "yes"}
+        if not use_llm_refinement:
+            return text, trace
+
+        ai_text = _generate_specialist_ai_response(
+            specialist_name="comparison_agent",
+            user_message=user_message,
 
         ai_text = _generate_specialist_ai_response(
             specialist_name="comparison_agent",
@@ -2202,7 +2231,11 @@ def _build_sec_snapshot(ticker: str) -> dict[str, Any]:
 
 
 @lru_cache(maxsize=64)
+@lru_cache(maxsize=64)
 def _compute_stock_context(ticker: str, include_technical: bool = True) -> dict[str, Any]:
+    ticker = (ticker or "").upper().strip()
+    data = get_financial_data_secure(ticker, cache_version=FINANCIAL_DATA_CACHE_VERSION)
+    current_price = float(data.get("price", 0) or 0)
     ticker = (ticker or "").upper().strip()
     data = get_financial_data_secure(ticker, cache_version=FINANCIAL_DATA_CACHE_VERSION)
     current_price = float(data.get("price", 0) or 0)
