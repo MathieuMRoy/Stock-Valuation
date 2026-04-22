@@ -5,6 +5,7 @@ Google ADK multi-agent chat analyst for the Streamlit stock analyzer.
 from __future__ import annotations
 
 import asyncio
+from difflib import SequenceMatcher
 from functools import lru_cache
 from datetime import date
 import hashlib
@@ -189,6 +190,100 @@ def _has_terminal_sentence_ending(text: str) -> bool:
     return candidate.endswith((".", "!", "?", "…"))
 
 
+def _sentence_signature(text: str) -> str:
+    normalized = _router_normalize_intent_text(text or "")
+    normalized = re.sub(r"`[^`]+`", " ", normalized)
+    normalized = re.sub(r"\[[^\]]+\]\([^)]+\)", " ", normalized)
+    normalized = re.sub(r"[*_#>\-]", " ", normalized)
+    normalized = re.sub(r"\s+", " ", normalized).strip()
+    return normalized
+
+
+def _sentence_similarity(first: str, second: str) -> float:
+    if not first or not second:
+        return 0.0
+    return SequenceMatcher(None, first, second).ratio()
+
+
+def _dedupe_repetitive_sentences(text: str) -> str:
+    if not text:
+        return ""
+
+    paragraphs = [block.strip() for block in re.split(r"\n{2,}", text) if block.strip()]
+    cleaned_blocks: list[str] = []
+
+    for block in paragraphs:
+        if block.startswith("**Sources**"):
+            cleaned_blocks.append(block)
+            continue
+
+        lines = [line.rstrip() for line in block.splitlines() if line.strip()]
+        if not lines:
+            continue
+
+        heading = ""
+        body_lines = lines
+        if lines[0].startswith("**") and len(lines) > 1:
+            heading = lines[0]
+            body_lines = lines[1:]
+
+        body = " ".join(body_lines).strip()
+        if not body:
+            cleaned_blocks.append(heading or block)
+            continue
+
+        sentences = re.split(r"(?<=[.!?])\s+", body)
+        kept_sentences: list[str] = []
+        seen_signatures: list[str] = []
+        for sentence in sentences:
+            clean_sentence = sentence.strip()
+            if not clean_sentence:
+                continue
+            signature = _sentence_signature(clean_sentence)
+            if signature and any(
+                signature == previous
+                or signature in previous
+                or previous in signature
+                or _sentence_similarity(signature, previous) >= 0.9
+                for previous in seen_signatures[-3:]
+            ):
+                continue
+            kept_sentences.append(clean_sentence)
+            if signature:
+                seen_signatures.append(signature)
+
+        rebuilt_body = " ".join(kept_sentences).strip() or body
+        if heading:
+            cleaned_blocks.append(f"{heading}\n{rebuilt_body}")
+        else:
+            cleaned_blocks.append(rebuilt_body)
+
+    return "\n\n".join(block for block in cleaned_blocks if block.strip())
+
+
+def _looks_repetitive_specialist_answer(text: str, specialist_name: str) -> bool:
+    lowered_name = (specialist_name or "").lower()
+    if lowered_name not in {"comparison_agent", "peer_agent", "supervisor_agent"}:
+        return False
+
+    signatures: list[str] = []
+    for sentence in re.split(r"(?<=[.!?])\s+", text or ""):
+        signature = _sentence_signature(sentence)
+        if len(signature) < 35:
+            continue
+        if any(
+            signature == previous
+            or signature in previous
+            or previous in signature
+            or _sentence_similarity(signature, previous) >= 0.92
+            for previous in signatures
+        ):
+            return True
+        signatures.append(signature)
+
+    return False
+
+
 def _looks_truncated_text(text: str | None) -> bool:
     if not text:
         return False
@@ -239,6 +334,8 @@ def _is_specialist_answer_usable(text: str | None, specialist_name: str) -> bool
 
     stripped = text.strip()
     if _looks_truncated_text(stripped):
+        return False
+    if _looks_repetitive_specialist_answer(stripped, specialist_name):
         return False
 
     lowered_name = (specialist_name or "").lower()
@@ -381,6 +478,7 @@ def _specialist_system_instruction(
         "Utilise seulement les chiffres qui aident vraiment a la decision. "
         "Explique ce que cela implique concretement pour l'investisseur. "
         "Evite les listes generiques, les preambules vagues et le jargon inutile. "
+        "Ne repete jamais deux fois la meme idee sous deux formulations voisines. "
         "Si une donnee cle manque, signale-le clairement en une phrase."
     )
     if include_sources:
@@ -470,8 +568,8 @@ def _describe_matchup(current_company: dict[str, Any], other_company: dict[str, 
 
     if is_cross_sector:
         return (
-            f"{current_name} est plutot {current_archetype}, alors que {other_name} ressemble davantage a {other_archetype}. "
-            "Comme la comparaison est intersectorielle, il faut separer le potentiel de croissance, la lecture de valorisation et le profil defensif."
+            f"{current_name} se lit plutot comme {current_archetype}, alors que {other_name} ressemble davantage a {other_archetype}. "
+            "Comme le match-up est intersectoriel, il faut surtout separer la these de croissance de la these defensive."
         )
 
     return (
@@ -518,13 +616,16 @@ def _describe_growth_tradeoff(current_company: dict[str, Any], other_company: di
     if sales_leader and eps_leader and sales_leader == eps_leader:
         insight = f"Le momentum de croissance penche plutot vers {sales_leader}."
     elif sales_leader and eps_leader and sales_leader != eps_leader:
-        insight = f"Le signal est partage: {sales_leader} gagne sur les ventes, tandis que {eps_leader} fait mieux sur l'EPS."
+        insight = (
+            f"Le signal est partage: {sales_leader} accelere davantage sur les ventes, "
+            f"tandis que {eps_leader} transforme mieux cette croissance en EPS."
+        )
     elif sales_leader:
         insight = f"L'avantage principal vient surtout de la croissance du chiffre d'affaires pour {sales_leader}."
     elif eps_leader:
         insight = f"L'avantage principal vient surtout de la croissance de l'EPS pour {eps_leader}."
     else:
-        insight = "La dynamique de croissance parait assez proche, sans ecart decisif."
+        insight = "La dynamique de croissance reste assez proche, sans qu'un nom prenne vraiment le large."
 
     return f"{metric_line} {insight}"
 
@@ -561,7 +662,7 @@ def _describe_valuation_tradeoff(current_company: dict[str, Any], other_company:
     elif cheaper_on_ps:
         insight = f"L'avantage de valorisation se voit surtout sur le P/S en faveur de {cheaper_on_ps}."
     else:
-        insight = "La valorisation relative reste assez proche a ce stade."
+        insight = "La valorisation relative ne departage pas clairement les deux dossiers pour l'instant."
 
     return f"{'; '.join(metrics_line)}. {insight}"
 
@@ -581,14 +682,14 @@ def _describe_balance_tradeoff(current_company: dict[str, Any], other_company: d
 
     if current_net_cash is not None and other_net_cash is not None:
         if current_net_cash > 0 and other_net_cash < 0:
-            insight = f"{current_name} part avec le meilleur coussin de bilan grace a sa position nette de cash."
+            insight = f"{current_name} dispose du meilleur coussin de bilan grace a sa position nette de cash."
         elif other_net_cash > 0 and current_net_cash < 0:
-            insight = f"{other_name} part avec le meilleur coussin de bilan grace a sa position nette de cash."
+            insight = f"{other_name} dispose du meilleur coussin de bilan grace a sa position nette de cash."
         elif abs(current_health - other_health) >= 1.0:
             leader = current_name if current_health > other_health else other_name
             insight = f"La robustesse operationnelle penche plutot vers {leader}."
         else:
-            insight = "Les deux dossiers paraissent globalement solides, avec des nuances plus que des ecarts majeurs."
+            insight = "Les deux bilans paraissent globalement solides, avec davantage de nuances que de rupture nette."
     else:
         if abs(current_health - other_health) >= 1.0:
             leader = current_name if current_health > other_health else other_name
@@ -852,16 +953,16 @@ def _objective_conclusion(
     )
     if growth_leader and health_leader and growth_leader != health_leader:
         return (
-            f"Sous un angle equilibre, {growth_leader} parait plus offensif pour la croissance, "
-            f"alors que {health_leader} offre le profil le plus defensif."
+            f"Sous un angle equilibre, {growth_leader} garde l'avantage sur le potentiel de croissance, "
+            f"alors que {health_leader} reste le choix le plus defensif."
         )
     if value_leader and health_leader and value_leader != health_leader and not growth_leader:
         return (
-            f"Sous un angle equilibre, {value_leader} semble le plus interessant en valorisation, "
+            f"Sous un angle equilibre, {value_leader} semble offrir la meilleure lecture de valorisation, "
             f"tandis que {health_leader} garde le bilan le plus rassurant."
         )
     if abs(current_score - other_score) < 1.0:
-        return "Sous un angle equilibre, il n'y a pas d'ecart ecrasant; le choix depend surtout de ta preference entre potentiel et stabilite."
+        return "Sous un angle equilibre, il n'y a pas d'ecart ecrasant; le choix depend surtout de ce que tu privilegies entre potentiel, valorisation et stabilite."
     leader = current_name if current_score > other_score else other_name
     return f"Sous un angle equilibre, {leader} a legerement l'avantage."
 
@@ -887,24 +988,6 @@ def _comparison_needs_technical(user_message: str | None, objective_label: str |
     return _comparison_focus_from_message(user_message) == "technique"
 
 
-def _extract_function_responses(event: Any) -> list[Any]:
-    """Extract ADK function responses from an event when no final text is available."""
-    if hasattr(event, "get_function_responses"):
-        try:
-            responses = event.get_function_responses()
-            if responses:
-                return list(responses)
-        except Exception:
-            pass
-
-    content = getattr(event, "content", None)
-    parts = getattr(content, "parts", None) or []
-    responses = []
-    for part in parts:
-        function_response = getattr(part, "function_response", None)
-        if function_response is not None:
-            responses.append(function_response)
-    return responses
 def _extract_function_responses(event: Any) -> list[Any]:
     """Extract ADK function responses from an event when no final text is available."""
     if hasattr(event, "get_function_responses"):
@@ -1132,10 +1215,12 @@ def _generate_specialist_ai_response(
                 break
 
             accumulated_text = _merge_continuation_text(accumulated_text, chunk_text)
-            if finish_reason not in {"MAX_TOKENS", "FINISH_REASON_MAX_TOKENS"} and _is_specialist_answer_usable(accumulated_text, specialist_name):
-                return accumulated_text.strip()
+            cleaned_text = _dedupe_repetitive_sentences(accumulated_text)
+            if finish_reason not in {"MAX_TOKENS", "FINISH_REASON_MAX_TOKENS"} and _is_specialist_answer_usable(cleaned_text, specialist_name):
+                return cleaned_text.strip()
 
-        return accumulated_text.strip() if _is_specialist_answer_usable(accumulated_text, specialist_name) else None
+        cleaned_text = _dedupe_repetitive_sentences(accumulated_text)
+        return cleaned_text.strip() if _is_specialist_answer_usable(cleaned_text, specialist_name) else None
     except Exception:
         return None
 
@@ -1893,7 +1978,7 @@ def _build_local_comparison_response(chat_context: dict[str, Any], user_message:
                 "Explique ce que fait chaque entreprise, si la comparaison est intra- ou intersectorielle, et ce que cela change. "
                 "Ne donne pas un gagnant universel dans une comparaison intersectorielle sans conditions. "
                 "Separe clairement les axes croissance, valorisation, bilan/resilience, et conclusion selon l'objectif actif. "
-                "Evite toute formulation repetitive ou generique.",
+                "Fais des blocs courts, une idee forte par section, et evite toute formulation repetitive ou generique.",
                 include_sources=True,
             ),
         )
