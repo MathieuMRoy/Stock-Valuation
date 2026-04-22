@@ -3,6 +3,7 @@ Stock Analyzer UI - Main stock analysis interface
 """
 from datetime import date
 from html import escape
+from uuid import uuid4
 
 import pandas as pd
 import streamlit as st
@@ -146,6 +147,14 @@ def _render_agent_trace(trace: dict | None, placeholder=None, live: bool = False
 
     target = placeholder if placeholder is not None else st
     target.markdown(html, unsafe_allow_html=True)
+
+
+def _chat_message_exists(messages: list[dict], request_id: str, role: str) -> bool:
+    """Check whether a chat message for a given request was already recorded."""
+    return any(
+        message.get("request_id") == request_id and message.get("role") == role
+        for message in messages
+    )
 
 
 def _render_overview_card(
@@ -548,15 +557,22 @@ def render_stock_analyzer(api_key: str, sidebar_state: dict | None = None):
         }[section_key]
     )
 
-    if section_key in {"Analysts", "Tech", "Scorecard", "AI Chat"}:
+    if section_key in {"Analysts", "Tech", "Scorecard"}:
         technical_data = load_technical_bundle()
         price_df = technical_data["price_df"]
         tech_df = technical_data["tech_df"]
         tech = technical_data["tech"]
+        st.session_state[f"ai_chat_tech_{ticker_final}"] = {
+            "score": tech.get("score", 0),
+            "is_bull_flag": bool(tech.get("is_bull_flag", False)),
+        }
     else:
         price_df = pd.DataFrame()
         tech_df = pd.DataFrame()
-        tech = {"score": 0, "is_bull_flag": False}
+        tech = st.session_state.get(
+            f"ai_chat_tech_{ticker_final}",
+            {"score": 0, "is_bull_flag": False},
+        )
 
     # --- SECTION: FUNDAMENTALS ---
     if section == "📊 Fundamentals":
@@ -1234,6 +1250,8 @@ def render_stock_analyzer(api_key: str, sidebar_state: dict | None = None):
         if st.session_state.get("ai_agent_signature") != chat_signature:
             st.session_state["ai_agent_signature"] = chat_signature
             st.session_state["ai_agent_context"] = None
+            st.session_state["ai_agent_pending_request"] = None
+            st.session_state["ai_agent_processing_request_id"] = None
             st.session_state["ai_agent_messages"] = [
                 {
                     "role": "assistant",
@@ -1252,6 +1270,8 @@ def render_stock_analyzer(api_key: str, sidebar_state: dict | None = None):
         with col_reset:
             if st.button("Reset chat", key=f"reset_ai_chat_{ticker_final}"):
                 st.session_state["ai_agent_context"] = None
+                st.session_state["ai_agent_pending_request"] = None
+                st.session_state["ai_agent_processing_request_id"] = None
                 st.session_state["ai_agent_messages"] = [
                     {
                         "role": "assistant",
@@ -1270,36 +1290,79 @@ def render_stock_analyzer(api_key: str, sidebar_state: dict | None = None):
                     _render_agent_trace(message.get("agent_trace"))
                 st.markdown(message["content"])
 
+        pending_request = st.session_state.get("ai_agent_pending_request")
+        processing_request_id = st.session_state.get("ai_agent_processing_request_id")
+        chat_is_busy = bool(pending_request or processing_request_id)
+
         user_prompt = st.chat_input(
-            f"Pose une question sur {ticker_final}, son actualite, ses analystes ou compare-le a une autre action avec un angle {objective_snapshot['label'].lower()}..."
+            f"Pose une question sur {ticker_final}, son actualite, ses analystes ou compare-le a une autre action avec un angle {objective_snapshot['label'].lower()}...",
+            disabled=chat_is_busy,
         )
         if user_prompt:
-            st.session_state["ai_agent_messages"].append({"role": "user", "content": user_prompt})
-            with st.chat_message("user"):
-                st.markdown(user_prompt)
-
-            if not st.session_state.get("ai_agent_context"):
-                chat_context, init_error = create_ai_chat_session(metrics, bench_data, scores, tech, api_key, objective_snapshot)
-                if init_error:
-                    with st.chat_message("assistant"):
-                        st.error(init_error)
-                    st.session_state["ai_agent_messages"].append({"role": "assistant", "content": init_error})
-                    st.stop()
-                st.session_state["ai_agent_context"] = chat_context
-
-            with st.chat_message("assistant"):
-                trace_placeholder = st.empty()
-                with st.spinner("Analyse en cours..."):
-                    reply, err, agent_trace = chat_with_ai_analyst(
-                        st.session_state["ai_agent_context"],
-                        user_prompt,
-                        on_trace_update=lambda trace: _render_agent_trace(trace, placeholder=trace_placeholder, live=True),
+            request_id = str(uuid4())
+            normalized_prompt = user_prompt.strip()
+            if normalized_prompt:
+                if not _chat_message_exists(st.session_state["ai_agent_messages"], request_id, "user"):
+                    st.session_state["ai_agent_messages"].append(
+                        {"role": "user", "content": normalized_prompt, "request_id": request_id}
                     )
-                    if reply:
-                        _render_agent_trace(agent_trace, placeholder=trace_placeholder)
-                        st.markdown(reply)
-                        st.session_state["ai_agent_messages"].append({"role": "assistant", "content": reply, "agent_trace": agent_trace})
-                    else:
-                        trace_placeholder.empty()
-                        st.error(err)
-                        st.session_state["ai_agent_messages"].append({"role": "assistant", "content": err})
+                st.session_state["ai_agent_pending_request"] = {
+                    "id": request_id,
+                    "prompt": normalized_prompt,
+                }
+                st.rerun()
+
+        pending_request = st.session_state.get("ai_agent_pending_request")
+        if pending_request and not st.session_state.get("ai_agent_processing_request_id"):
+            request_id = str(pending_request.get("id") or uuid4())
+            prompt_text = str(pending_request.get("prompt") or "").strip()
+            if prompt_text:
+                st.session_state["ai_agent_processing_request_id"] = request_id
+
+                if not st.session_state.get("ai_agent_context"):
+                    chat_context, init_error = create_ai_chat_session(metrics, bench_data, scores, tech, api_key, objective_snapshot)
+                    if init_error:
+                        if not _chat_message_exists(st.session_state["ai_agent_messages"], request_id, "assistant"):
+                            st.session_state["ai_agent_messages"].append(
+                                {"role": "assistant", "content": init_error, "request_id": request_id}
+                            )
+                        st.session_state["ai_agent_pending_request"] = None
+                        st.session_state["ai_agent_processing_request_id"] = None
+                        st.rerun()
+                    st.session_state["ai_agent_context"] = chat_context
+
+                with st.chat_message("assistant"):
+                    trace_placeholder = st.empty()
+                    with st.spinner("Analyse en cours..."):
+                        reply, err, agent_trace = chat_with_ai_analyst(
+                            st.session_state["ai_agent_context"],
+                            prompt_text,
+                            on_trace_update=lambda trace: _render_agent_trace(trace, placeholder=trace_placeholder, live=True),
+                        )
+                        if reply:
+                            _render_agent_trace(agent_trace, placeholder=trace_placeholder)
+                            st.markdown(reply)
+                            if not _chat_message_exists(st.session_state["ai_agent_messages"], request_id, "assistant"):
+                                st.session_state["ai_agent_messages"].append(
+                                    {
+                                        "role": "assistant",
+                                        "content": reply,
+                                        "agent_trace": agent_trace,
+                                        "request_id": request_id,
+                                    }
+                                )
+                        else:
+                            trace_placeholder.empty()
+                            st.error(err)
+                            if not _chat_message_exists(st.session_state["ai_agent_messages"], request_id, "assistant"):
+                                st.session_state["ai_agent_messages"].append(
+                                    {
+                                        "role": "assistant",
+                                        "content": err,
+                                        "request_id": request_id,
+                                    }
+                                )
+
+                st.session_state["ai_agent_pending_request"] = None
+                st.session_state["ai_agent_processing_request_id"] = None
+                st.rerun()
