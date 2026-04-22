@@ -432,6 +432,173 @@ def _format_balance_sheet_profile(company: dict[str, Any]) -> str:
     return f"{balance_label}, Piotroski {piotroski}"
 
 
+def _company_display_name(company: dict[str, Any]) -> str:
+    return str(company.get("ticker") or company.get("company_name") or "L'action").strip()
+
+
+def _company_archetype(company: dict[str, Any]) -> str:
+    benchmark_name = str(company.get("benchmark_name") or "").lower()
+    sector_name = str(company.get("sector_name") or "").lower()
+    hint = _clean_business_model_hint(
+        company.get("business_model_hint"),
+        company.get("sector_name"),
+        company.get("benchmark_name"),
+    )
+
+    if hint:
+        return hint
+    if "gafam" in benchmark_name or "big tech" in benchmark_name:
+        return "un grand acteur technologique deja etabli"
+    if "consumer apps" in benchmark_name or "platform" in benchmark_name:
+        return "une plateforme numerique orientee croissance"
+    if "banks" in benchmark_name or "financial" in sector_name:
+        return "un acteur financier regule"
+    if "energy" in sector_name:
+        return "un dossier plus cyclique lie a l'energie"
+    if "technology" in sector_name:
+        return "une valeur technologique"
+    if "consumer" in sector_name:
+        return "une valeur de consommation"
+    return f"une entreprise du secteur {company.get('sector_name') or 'analyse'}"
+
+
+def _describe_matchup(current_company: dict[str, Any], other_company: dict[str, Any], is_cross_sector: bool) -> str:
+    current_name = _company_display_name(current_company)
+    other_name = _company_display_name(other_company)
+    current_archetype = _company_archetype(current_company)
+    other_archetype = _company_archetype(other_company)
+
+    if is_cross_sector:
+        return (
+            f"{current_name} est plutot {current_archetype}, alors que {other_name} ressemble davantage a {other_archetype}. "
+            "Comme la comparaison est intersectorielle, il faut separer le potentiel de croissance, la lecture de valorisation et le profil defensif."
+        )
+
+    return (
+        f"{current_name} et {other_name} evoluent dans un univers comparable, "
+        f"mais avec deux profils differents: {current_name} reste plutot {current_archetype}, "
+        f"tandis que {other_name} se lit davantage comme {other_archetype}."
+    )
+
+
+def _winner_name(current_company: dict[str, Any], other_company: dict[str, Any], current_value: Any, other_value: Any) -> str | None:
+    current_number = _to_float(current_value)
+    other_number = _to_float(other_value)
+    if current_number is None and other_number is None:
+        return None
+    if current_number is None:
+        return _company_display_name(other_company)
+    if other_number is None:
+        return _company_display_name(current_company)
+    if abs(current_number - other_number) < 0.35:
+        return None
+    return _company_display_name(current_company) if current_number > other_number else _company_display_name(other_company)
+
+
+def _describe_growth_tradeoff(current_company: dict[str, Any], other_company: dict[str, Any]) -> str:
+    current_name = _company_display_name(current_company)
+    other_name = _company_display_name(other_company)
+    current_sales = _to_percent(current_company.get("sales_growth_pct"))
+    other_sales = _to_percent(other_company.get("sales_growth_pct"))
+    current_eps = _to_percent(current_company.get("eps_growth_pct"))
+    other_eps = _to_percent(other_company.get("eps_growth_pct"))
+
+    metric_line = (
+        f"{current_name}: ventes {_format_pct(current_company.get('sales_growth_pct'))}, EPS {_format_pct(current_company.get('eps_growth_pct'))}. "
+        f"{other_name}: ventes {_format_pct(other_company.get('sales_growth_pct'))}, EPS {_format_pct(other_company.get('eps_growth_pct'))}."
+    )
+
+    sales_leader = None
+    eps_leader = None
+    if current_sales is not None and other_sales is not None and abs(current_sales - other_sales) >= 5:
+        sales_leader = current_name if current_sales > other_sales else other_name
+    if current_eps is not None and other_eps is not None and abs(current_eps - other_eps) >= 5:
+        eps_leader = current_name if current_eps > other_eps else other_name
+
+    if sales_leader and eps_leader and sales_leader == eps_leader:
+        insight = f"Le momentum de croissance penche plutot vers {sales_leader}."
+    elif sales_leader and eps_leader and sales_leader != eps_leader:
+        insight = f"Le signal est partage: {sales_leader} gagne sur les ventes, tandis que {eps_leader} fait mieux sur l'EPS."
+    elif sales_leader:
+        insight = f"L'avantage principal vient surtout de la croissance du chiffre d'affaires pour {sales_leader}."
+    elif eps_leader:
+        insight = f"L'avantage principal vient surtout de la croissance de l'EPS pour {eps_leader}."
+    else:
+        insight = "La dynamique de croissance parait assez proche, sans ecart decisif."
+
+    return f"{metric_line} {insight}"
+
+
+def _describe_valuation_tradeoff(current_company: dict[str, Any], other_company: dict[str, Any]) -> str:
+    current_name = _company_display_name(current_company)
+    other_name = _company_display_name(other_company)
+    current_trailing_pe = _to_float(current_company.get("pe_ratio"))
+    other_trailing_pe = _to_float(other_company.get("pe_ratio"))
+    current_ps = _to_float(current_company.get("ps_ratio"))
+    other_ps = _to_float(other_company.get("ps_ratio"))
+    current_forward_pe = _to_float(current_company.get("forward_pe_ratio"))
+    other_forward_pe = _to_float(other_company.get("forward_pe_ratio"))
+
+    metrics_line = [f"Trailing P/E {_format_ratio(current_company.get('pe_ratio'))} vs {_format_ratio(other_company.get('pe_ratio'))}"]
+    if current_forward_pe is not None or other_forward_pe is not None:
+        metrics_line.append(f"forward P/E {_format_ratio(current_company.get('forward_pe_ratio'))} vs {_format_ratio(other_company.get('forward_pe_ratio'))}")
+    if current_ps is not None or other_ps is not None:
+        metrics_line.append(f"P/S {_format_ratio(current_company.get('ps_ratio'))} vs {_format_ratio(other_company.get('ps_ratio'))}")
+
+    cheaper_on_pe = None
+    cheaper_on_ps = None
+    if current_trailing_pe is not None and other_trailing_pe is not None and abs(current_trailing_pe - other_trailing_pe) >= 2:
+        cheaper_on_pe = current_name if current_trailing_pe < other_trailing_pe else other_name
+    if current_ps is not None and other_ps is not None and abs(current_ps - other_ps) >= 0.6:
+        cheaper_on_ps = current_name if current_ps < other_ps else other_name
+
+    if cheaper_on_pe and cheaper_on_ps and cheaper_on_pe == cheaper_on_ps:
+        insight = f"Sur les multiples principaux, {cheaper_on_pe} ressort comme l'option la moins chere."
+    elif cheaper_on_pe and cheaper_on_ps and cheaper_on_pe != cheaper_on_ps:
+        insight = f"La lecture est partagee: {cheaper_on_pe} semble moins cher sur le P/E, tandis que {cheaper_on_ps} parait plus raisonnable sur le P/S."
+    elif cheaper_on_pe:
+        insight = f"L'avantage de valorisation se voit surtout sur le P/E en faveur de {cheaper_on_pe}."
+    elif cheaper_on_ps:
+        insight = f"L'avantage de valorisation se voit surtout sur le P/S en faveur de {cheaper_on_ps}."
+    else:
+        insight = "La valorisation relative reste assez proche a ce stade."
+
+    return f"{'; '.join(metrics_line)}. {insight}"
+
+
+def _describe_balance_tradeoff(current_company: dict[str, Any], other_company: dict[str, Any]) -> str:
+    current_name = _company_display_name(current_company)
+    other_name = _company_display_name(other_company)
+    current_health = _to_float(current_company.get("health_score")) or 0.0
+    other_health = _to_float(other_company.get("health_score")) or 0.0
+    current_net_cash = _to_float(current_company.get("net_cash"))
+    other_net_cash = _to_float(other_company.get("net_cash"))
+
+    metrics_line = (
+        f"{current_name}: {_format_balance_sheet_profile(current_company)}. "
+        f"{other_name}: {_format_balance_sheet_profile(other_company)}."
+    )
+
+    if current_net_cash is not None and other_net_cash is not None:
+        if current_net_cash > 0 and other_net_cash < 0:
+            insight = f"{current_name} part avec le meilleur coussin de bilan grace a sa position nette de cash."
+        elif other_net_cash > 0 and current_net_cash < 0:
+            insight = f"{other_name} part avec le meilleur coussin de bilan grace a sa position nette de cash."
+        elif abs(current_health - other_health) >= 1.0:
+            leader = current_name if current_health > other_health else other_name
+            insight = f"La robustesse operationnelle penche plutot vers {leader}."
+        else:
+            insight = "Les deux dossiers paraissent globalement solides, avec des nuances plus que des ecarts majeurs."
+    else:
+        if abs(current_health - other_health) >= 1.0:
+            leader = current_name if current_health > other_health else other_name
+            insight = f"La lecture de bilan reste legerement plus solide pour {leader}."
+        else:
+            insight = "La lecture de bilan ne montre pas d'ecart decisif."
+
+    return f"{metrics_line} {insight}"
+
+
 def _contains_any(message: str, markers: tuple[str, ...]) -> bool:
     return any(marker in message for marker in markers)
 
@@ -665,6 +832,10 @@ def _objective_conclusion(
         leader = current_name if (current_technical.get("technical_score_out_of_10") or 0) >= (other_technical.get("technical_score_out_of_10") or 0) else other_name
         return f"Sous un angle court terme, {leader} parait avoir le meilleur setup."
 
+    growth_leader = _winner_name(current_company, other_company, current_company.get("growth_score"), other_company.get("growth_score"))
+    value_leader = _winner_name(current_company, other_company, current_company.get("valuation_score"), other_company.get("valuation_score"))
+    health_leader = _winner_name(current_company, other_company, current_company.get("health_score"), other_company.get("health_score"))
+
     current_score = sum(
         [
             _to_float(current_company.get("growth_score")) or 0,
@@ -679,8 +850,18 @@ def _objective_conclusion(
             _to_float(other_company.get("health_score")) or 0,
         ]
     )
+    if growth_leader and health_leader and growth_leader != health_leader:
+        return (
+            f"Sous un angle equilibre, {growth_leader} parait plus offensif pour la croissance, "
+            f"alors que {health_leader} offre le profil le plus defensif."
+        )
+    if value_leader and health_leader and value_leader != health_leader and not growth_leader:
+        return (
+            f"Sous un angle equilibre, {value_leader} semble le plus interessant en valorisation, "
+            f"tandis que {health_leader} garde le bilan le plus rassurant."
+        )
     if abs(current_score - other_score) < 1.0:
-        return f"Sous un angle equilibre, le choix depend surtout de ton preference entre croissance et profil defensif."
+        return "Sous un angle equilibre, il n'y a pas d'ecart ecrasant; le choix depend surtout de ta preference entre potentiel et stabilite."
     leader = current_name if current_score > other_score else other_name
     return f"Sous un angle equilibre, {leader} a legerement l'avantage."
 
@@ -764,23 +945,9 @@ def _comparison_tool_response_to_text(payload: dict[str, Any], user_message: str
     current_ticker = current.get("ticker") or "N/A"
     other_ticker = other.get("ticker") or payload.get("resolved_ticker") or "N/A"
     objective_label = objective.get("label") or "Equilibre"
-    current_trailing_pe = _format_ratio(current.get("pe_ratio"))
-    other_trailing_pe = _format_ratio(other.get("pe_ratio"))
-    current_forward_pe = _format_ratio(current.get("forward_pe_ratio"))
-    other_forward_pe = _format_ratio(other.get("forward_pe_ratio"))
-    current_ps = _format_ratio(current.get("ps_ratio"))
-    other_ps = _format_ratio(other.get("ps_ratio"))
-
-    valuation_bits = [f"trailing P/E {current_trailing_pe} vs {other_trailing_pe}"]
-    if current_forward_pe != "N/A" or other_forward_pe != "N/A":
-        valuation_bits.append(f"forward P/E {current_forward_pe} vs {other_forward_pe}")
-    if current_ps != "N/A" or other_ps != "N/A":
-        valuation_bits.append(f"P/S {current_ps} vs {other_ps}")
 
     opening = f"Sur un angle {objective_label.lower()}, voici la lecture la plus utile entre {current_name} ({current_ticker}) et {other_name} ({other_ticker})."
-    matchup_body = f"{_business_model_sentence(current)} {_business_model_sentence(other)}"
-    if context.get("is_cross_sector"):
-        matchup_body += " C'est une comparaison intersectorielle, donc il faut separer la these de croissance de la these defensive."
+    matchup_body = _describe_matchup(current, other, bool(context.get("is_cross_sector")))
 
     source_refs = comparison.get("source_refs") or payload.get("source_refs") or {}
     current_quote_page = source_refs.get("current_quote_page") or {}
@@ -802,20 +969,9 @@ def _comparison_tool_response_to_text(payload: dict[str, Any], user_message: str
 
     all_sections = {
         "Nature du match-up": matchup_body,
-        "Croissance / upside": (
-            f"{current_ticker}: ventes {_format_pct(current.get('sales_growth_pct'))}, EPS {_format_pct(current.get('eps_growth_pct'))}. "
-            f"{other_ticker}: ventes {_format_pct(other.get('sales_growth_pct'))}, EPS {_format_pct(other.get('eps_growth_pct'))}. "
-            f"{_pick_category_winner(current, other, current.get('growth_score'), other.get('growth_score'), 'Lecture croissance')}"
-        ),
-        "Valorisation": (
-            f"{', '.join(valuation_bits)}. "
-            f"{_pick_category_winner(current, other, current.get('valuation_score'), other.get('valuation_score'), 'Lecture valorisation')}"
-        ),
-        "Solidite / bilan": (
-            f"{current_ticker}: {_format_balance_sheet_profile(current)}. "
-            f"{other_ticker}: {_format_balance_sheet_profile(other)}. "
-            f"{_pick_category_winner(current, other, current.get('health_score'), other.get('health_score'), 'Lecture robustesse')}"
-        ),
+        "Croissance / upside": _describe_growth_tradeoff(current, other),
+        "Valorisation": _describe_valuation_tradeoff(current, other),
+        "Solidite / bilan": _describe_balance_tradeoff(current, other),
         "Verdict selon l'angle choisi": _objective_conclusion(
             objective_label,
             current,
