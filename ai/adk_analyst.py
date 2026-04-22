@@ -5,7 +5,6 @@ Google ADK multi-agent chat analyst for the Streamlit stock analyzer.
 from __future__ import annotations
 
 import asyncio
-from difflib import SequenceMatcher
 from functools import lru_cache
 from datetime import date
 import hashlib
@@ -24,7 +23,10 @@ from google.adk.sessions import InMemorySessionService
 from google.adk.tools import agent_tool
 from google.genai import types
 
+from . import comparison_utils as _comparison_helpers
 from .models import AgentTracePayload, ChatSessionContext, StockContext
+from . import primitives as _primitive_helpers
+from . import response_utils as _response_helpers
 from .router import (
     SpecialistRouter,
     looks_like_agent_meta_request as _router_looks_like_agent_meta_request,
@@ -986,6 +988,40 @@ def _comparison_needs_technical(user_message: str | None, objective_label: str |
     if "court terme" in objective_key or "short term" in objective_key:
         return True
     return _comparison_focus_from_message(user_message) == "technique"
+
+
+# Source-of-truth helper bindings extracted into dedicated modules.
+_to_percent = _primitive_helpers.to_percent
+_to_float = _primitive_helpers.to_float
+_to_int = _primitive_helpers.to_int
+_json_safe = _primitive_helpers.json_safe
+_format_compact_number = _primitive_helpers.format_compact_number
+_format_pct = _primitive_helpers.format_pct
+_format_ratio = _primitive_helpers.format_ratio
+
+_text_from_parts = _response_helpers.text_from_parts
+_merge_continuation_text = _response_helpers.merge_continuation_text
+_is_specialist_answer_usable = _response_helpers.is_specialist_answer_usable
+_is_chat_answer_usable = _response_helpers.is_chat_answer_usable
+_extract_model_text_and_finish_reason = _response_helpers.extract_model_text_and_finish_reason
+_compose_professional_response = _response_helpers.compose_professional_response
+_bullet_lines = _response_helpers.bullet_lines
+_specialist_system_instruction = _response_helpers.specialist_system_instruction
+_dedupe_repetitive_sentences = _response_helpers.dedupe_repetitive_sentences
+
+_clean_business_model_hint = _comparison_helpers.clean_business_model_hint
+_business_model_sentence = _comparison_helpers.business_model_sentence
+_format_balance_sheet_profile = _comparison_helpers.format_balance_sheet_profile
+_company_display_name = _comparison_helpers.company_display_name
+_company_archetype = _comparison_helpers.company_archetype
+_winner_name = _comparison_helpers.winner_name
+_describe_matchup = _comparison_helpers.describe_matchup
+_describe_growth_tradeoff = _comparison_helpers.describe_growth_tradeoff
+_describe_valuation_tradeoff = _comparison_helpers.describe_valuation_tradeoff
+_describe_balance_tradeoff = _comparison_helpers.describe_balance_tradeoff
+_objective_conclusion = _comparison_helpers.objective_conclusion
+_comparison_focus_from_message = _comparison_helpers.comparison_focus_from_message
+_comparison_needs_technical = _comparison_helpers.comparison_needs_technical
 
 
 def _extract_function_responses(event: Any) -> list[Any]:
