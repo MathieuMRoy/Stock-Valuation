@@ -200,7 +200,23 @@ def describe_valuation_tradeoff(current_company: dict[str, Any], other_company: 
     if current_ps is not None and other_ps is not None and abs(current_ps - other_ps) >= 0.6:
         cheaper_on_ps = current_name if current_ps < other_ps else other_name
 
-    if cheaper_on_pe and cheaper_on_ps and cheaper_on_pe == cheaper_on_ps:
+    pe_missing_insight = None
+    if current_trailing_pe is None and other_trailing_pe is not None:
+        pe_missing_insight = (
+            f"Le P/E n'est pas vraiment exploitable pour {current_name}, donc {other_name} est le seul dossier qu'on peut lire proprement sur ce multiple."
+        )
+    elif other_trailing_pe is None and current_trailing_pe is not None:
+        pe_missing_insight = (
+            f"Le P/E n'est pas vraiment exploitable pour {other_name}, donc {current_name} est le seul dossier qu'on peut lire proprement sur ce multiple."
+        )
+    elif other_trailing_pe is None and current_trailing_pe is None:
+        pe_missing_insight = "Le P/E n'est pas vraiment exploitable pour aucun des deux dossiers pour l'instant."
+
+    if pe_missing_insight and cheaper_on_ps:
+        insight = f"{pe_missing_insight} Sur le P/S, {cheaper_on_ps} parait le plus raisonnable."
+    elif pe_missing_insight:
+        insight = pe_missing_insight
+    elif cheaper_on_pe and cheaper_on_ps and cheaper_on_pe == cheaper_on_ps:
         insight = f"Avantage valorisation: {cheaper_on_pe} ressort comme l'option la moins chere sur les multiples principaux."
     elif cheaper_on_pe and cheaper_on_ps and cheaper_on_pe != cheaper_on_ps:
         insight = f"Lecture partagee: {cheaper_on_pe} semble moins cher sur le P/E, tandis que {cheaper_on_ps} parait plus raisonnable sur le P/S."
