@@ -25,8 +25,42 @@ def looks_like_comparison_request(user_message: str) -> bool:
 
 def looks_like_agent_meta_request(user_message: str) -> bool:
     message = normalize_intent_text(user_message)
-    markers = ["agent", "agents", "disponible", "disponibles", "capable", "capables", "peux tu faire", "que fais tu", "comment tu fonctionnes"]
-    return any(marker in message for marker in markers)
+    explicit_meta_markers = [
+        "qui sont les agents",
+        "quels agents",
+        "agents disponibles",
+        "agents dispo",
+        "quels sont les agents",
+        "qu'est ce que tu peux faire",
+        "quest ce que tu peux faire",
+        "que peux tu faire",
+        "que fais tu",
+        "comment tu fonctionnes",
+        "comment fonctionnes tu",
+        "comment marche le chat",
+        "comment marche l'agent",
+    ]
+    return any(marker in message for marker in explicit_meta_markers)
+
+
+SPECIALIST_AGENT_MARKERS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("risk", ("agent risque", "risk agent")),
+    ("news", ("agent news", "news agent", "agent actualite", "agent actualites")),
+    ("market_signal", ("agent analyste", "agent analystes", "market signal agent", "agent sentiment")),
+    ("filings", ("agent filing", "agent filings", "filings agent", "agent sec")),
+    ("technical", ("agent technique", "technical agent")),
+    ("fundamental", ("agent fondamental", "fundamental agent")),
+    ("peer", ("agent pairs", "agent pair", "peer agent", "agent benchmark")),
+    ("comparison", ("agent comparaison", "comparison agent")),
+)
+
+
+def named_specialist_route(user_message: str) -> str | None:
+    message = normalize_intent_text(user_message)
+    for route_name, markers in SPECIALIST_AGENT_MARKERS:
+        if any(marker in message for marker in markers):
+            return route_name
+    return None
 
 
 def looks_like_peer_request(user_message: str) -> bool:
@@ -131,6 +165,9 @@ class SpecialistRouter:
         self._rules = tuple(rules or DEFAULT_ROUTE_RULES)
 
     def resolve(self, user_message: str) -> str | None:
+        explicit_specialist = named_specialist_route(user_message)
+        if explicit_specialist:
+            return explicit_specialist
         for rule in self._rules:
             if rule.predicate(user_message):
                 return rule.name
