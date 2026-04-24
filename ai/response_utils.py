@@ -324,7 +324,8 @@ def specialist_system_instruction(
         "Explique ce que cela implique concretement pour l'investisseur. "
         "Evite les listes generiques, les preambules vagues et le jargon inutile. "
         "Ne repete jamais deux fois la meme idee sous deux formulations voisines. "
-        "Si une donnee cle manque, signale-le clairement en une phrase."
+        "Si une donnee cle manque, signale-le clairement en une phrase. "
+        "N'utilise pas de backticks autour des tickers, des chiffres ou des ratios."
     )
     if include_sources:
         suffix += " Si des URLs sont disponibles, termine par une section `Sources` avec quelques puces markdown."
