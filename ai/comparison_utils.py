@@ -12,21 +12,36 @@ def clean_business_model_hint(
     hint: str | None,
     sector_name: str | None = None,
     benchmark_name: str | None = None,
+    company_name: str | None = None,
 ) -> str | None:
     raw_hint = (hint or "").strip()
-    if raw_hint and raw_hint.lower() not in {"none", "n/a"}:
+    generic_hints = {
+        "none",
+        "n/a",
+        "default cycle",
+        "company exposed to the default cycle",
+        "diversified listed company with mixed drivers",
+        "listed company exposed to the default cycle",
+    }
+    if raw_hint and raw_hint.lower() not in generic_hints:
         cleaned = raw_hint.replace("_", " ").strip()
         return cleaned[:1].lower() + cleaned[1:] if cleaned else None
 
-    combined = " ".join([str(sector_name or ""), str(benchmark_name or "")]).lower()
+    combined = " ".join([str(company_name or ""), str(sector_name or ""), str(benchmark_name or "")]).lower()
+    if any(name in combined for name in ("microsoft", "apple", "alphabet", "meta", "amazon", "broadcom", "nvidia", "oracle")):
+        return "une mega-cap technologique rentable et deja bien installee"
+    if any(name in combined for name in ("duolingo", "spotify", "airbnb", "uber", "doordash", "booking", "netflix")):
+        return "une plateforme numerique grand public tiree par la croissance"
     if "energy" in combined or "oil" in combined or "gas" in combined:
         return "un producteur d'energie sensible au cycle des matieres premieres"
     if "bank" in combined or "financial" in combined:
         return "un acteur financier sensible a la qualite du capital et du credit"
     if "consumer app" in combined or "platform" in combined or "streaming" in combined:
         return "une plateforme numerique orientee croissance"
-    if "saas" in combined or "cloud" in combined or "software" in combined or "technology" in combined:
-        return "une entreprise logicielle ou plateforme sensible au rerating de croissance"
+    if "saas" in combined or "cloud" in combined or "software" in combined:
+        return "une entreprise logicielle dont la these repose sur la croissance et la qualite"
+    if "technology" in combined or "big tech" in combined or "gafam" in combined:
+        return "une grande valeur technologique deja rentable"
     if "pharma" in combined or "biotech" in combined:
         return "une societe sante influencee par son pipeline et la regulation"
     return None
@@ -38,9 +53,10 @@ def business_model_sentence(company: dict[str, Any]) -> str:
         company.get("business_model_hint"),
         company.get("sector_name"),
         company.get("benchmark_name"),
+        company.get("company_name"),
     )
     if hint:
-        return f"{ticker} se lit surtout comme {hint}."
+        return f"{ticker} est surtout {hint}."
     sector_name = company.get("sector_name") or "son secteur"
     return f"{ticker} reste principalement expose a la dynamique de {sector_name}."
 
@@ -49,15 +65,15 @@ def format_balance_sheet_profile(company: dict[str, Any]) -> str:
     net_cash = to_float(company.get("net_cash"))
     if net_cash is not None:
         if net_cash > 0:
-            balance_label = f"net cash {format_compact_number(net_cash, ' $')}"
+            balance_label = f"cash net de {format_compact_number(net_cash, ' $')}"
         elif net_cash < 0:
-            balance_label = f"net debt {format_compact_number(abs(net_cash), ' $')}"
+            balance_label = f"dette nette de {format_compact_number(abs(net_cash), ' $')}"
         else:
             balance_label = "bilan neutre"
     else:
         balance_label = "bilan non documente"
     piotroski = company.get("piotroski_score", "N/A")
-    return f"{balance_label}, Piotroski {piotroski}"
+    return f"{balance_label} (Piotroski {piotroski}/9)"
 
 
 def company_display_name(company: dict[str, Any]) -> str:
@@ -71,6 +87,7 @@ def company_archetype(company: dict[str, Any]) -> str:
         company.get("business_model_hint"),
         company.get("sector_name"),
         company.get("benchmark_name"),
+        company.get("company_name"),
     )
 
     if hint:
@@ -98,14 +115,14 @@ def describe_matchup(current_company: dict[str, Any], other_company: dict[str, A
 
     if is_cross_sector:
         return (
-            f"{current_name} se lit plutot comme {current_archetype}, alors que {other_name} ressemble davantage a {other_archetype}. "
-            "Comme le match-up est intersectoriel, il faut surtout separer la these de croissance de la these defensive."
+            f"{current_name} est surtout {current_archetype}, alors que {other_name} est davantage {other_archetype}. "
+            "Comme la comparaison est intersectorielle, il faut juger separement la croissance, la valorisation et la robustesse du bilan."
         )
 
     return (
         f"{current_name} et {other_name} evoluent dans un univers comparable, "
-        f"mais avec deux profils differents: {current_name} reste plutot {current_archetype}, "
-        f"tandis que {other_name} se lit davantage comme {other_archetype}."
+        f"mais avec deux profils differents: {current_name} est plutot {current_archetype}, "
+        f"tandis que {other_name} est davantage {other_archetype}."
     )
 
 
@@ -144,20 +161,20 @@ def describe_growth_tradeoff(current_company: dict[str, Any], other_company: dic
         eps_leader = current_name if current_eps > other_eps else other_name
 
     if sales_leader and eps_leader and sales_leader == eps_leader:
-        insight = f"Le momentum de croissance penche plutot vers {sales_leader}."
+        insight = f"Avantage croissance: {sales_leader} ressort comme le dossier le plus dynamique."
     elif sales_leader and eps_leader and sales_leader != eps_leader:
         insight = (
-            f"Le signal est partage: {sales_leader} accelere davantage sur les ventes, "
-            f"tandis que {eps_leader} transforme mieux cette croissance en EPS."
+            f"Lecture partagee: {sales_leader} accelere davantage sur les ventes, "
+            f"tandis que {eps_leader} convertit mieux cette croissance en EPS."
         )
     elif sales_leader:
-        insight = f"L'avantage principal vient surtout de la croissance du chiffre d'affaires pour {sales_leader}."
+        insight = f"Avantage croissance: {sales_leader} prend l'ascendant surtout via le chiffre d'affaires."
     elif eps_leader:
-        insight = f"L'avantage principal vient surtout de la croissance de l'EPS pour {eps_leader}."
+        insight = f"Avantage croissance: {eps_leader} prend l'ascendant surtout via la progression de l'EPS."
     else:
-        insight = "La dynamique de croissance reste assez proche, sans qu'un nom prenne vraiment le large."
+        insight = "La dynamique de croissance reste assez proche, sans leader net."
 
-    return f"{metric_line} {insight}"
+    return f"{insight} {metric_line}"
 
 
 def describe_valuation_tradeoff(current_company: dict[str, Any], other_company: dict[str, Any]) -> str:
@@ -184,17 +201,17 @@ def describe_valuation_tradeoff(current_company: dict[str, Any], other_company: 
         cheaper_on_ps = current_name if current_ps < other_ps else other_name
 
     if cheaper_on_pe and cheaper_on_ps and cheaper_on_pe == cheaper_on_ps:
-        insight = f"Sur les multiples principaux, {cheaper_on_pe} ressort comme l'option la moins chere."
+        insight = f"Avantage valorisation: {cheaper_on_pe} ressort comme l'option la moins chere sur les multiples principaux."
     elif cheaper_on_pe and cheaper_on_ps and cheaper_on_pe != cheaper_on_ps:
-        insight = f"La lecture est partagee: {cheaper_on_pe} semble moins cher sur le P/E, tandis que {cheaper_on_ps} parait plus raisonnable sur le P/S."
+        insight = f"Lecture partagee: {cheaper_on_pe} semble moins cher sur le P/E, tandis que {cheaper_on_ps} parait plus raisonnable sur le P/S."
     elif cheaper_on_pe:
-        insight = f"L'avantage de valorisation se voit surtout sur le P/E en faveur de {cheaper_on_pe}."
+        insight = f"Avantage valorisation: {cheaper_on_pe} semble meilleur marche surtout sur le P/E."
     elif cheaper_on_ps:
-        insight = f"L'avantage de valorisation se voit surtout sur le P/S en faveur de {cheaper_on_ps}."
+        insight = f"Avantage valorisation: {cheaper_on_ps} semble meilleur marche surtout sur le P/S."
     else:
         insight = "La valorisation relative ne departage pas clairement les deux dossiers pour l'instant."
 
-    return f"{'; '.join(metrics_line)}. {insight}"
+    return f"{insight} {'; '.join(metrics_line)}."
 
 
 def describe_balance_tradeoff(current_company: dict[str, Any], other_company: dict[str, Any]) -> str:
@@ -212,22 +229,22 @@ def describe_balance_tradeoff(current_company: dict[str, Any], other_company: di
 
     if current_net_cash is not None and other_net_cash is not None:
         if current_net_cash > 0 and other_net_cash < 0:
-            insight = f"{current_name} dispose du meilleur coussin de bilan grace a sa position nette de cash."
+            insight = f"Avantage solidite: {current_name} dispose du meilleur coussin de bilan grace a sa position nette de cash."
         elif other_net_cash > 0 and current_net_cash < 0:
-            insight = f"{other_name} dispose du meilleur coussin de bilan grace a sa position nette de cash."
+            insight = f"Avantage solidite: {other_name} dispose du meilleur coussin de bilan grace a sa position nette de cash."
         elif abs(current_health - other_health) >= 1.0:
             leader = current_name if current_health > other_health else other_name
-            insight = f"La robustesse operationnelle penche plutot vers {leader}."
+            insight = f"Avantage solidite: la robustesse operationnelle penche plutot vers {leader}."
         else:
             insight = "Les deux bilans paraissent globalement solides, avec davantage de nuances que de rupture nette."
     else:
         if abs(current_health - other_health) >= 1.0:
             leader = current_name if current_health > other_health else other_name
-            insight = f"La lecture de bilan reste legerement plus solide pour {leader}."
+            insight = f"Avantage solidite: la lecture de bilan reste legerement plus solide pour {leader}."
         else:
             insight = "La lecture de bilan ne montre pas d'ecart decisif."
 
-    return f"{metrics_line} {insight}"
+    return f"{insight} {metrics_line}"
 
 
 def objective_conclusion(
@@ -245,25 +262,25 @@ def objective_conclusion(
         current_value = current_company.get("growth_score")
         other_value = other_company.get("growth_score")
         leader = current_name if (current_value or 0) >= (other_value or 0) else other_name
-        return f"Sous un angle croissance, {leader} ressort mieux."
+        return f"Pour un objectif croissance, je pencherais vers {leader}."
     if "value" in objective_key:
         current_value = current_company.get("valuation_score")
         other_value = other_company.get("valuation_score")
         leader = current_name if (current_value or 0) >= (other_value or 0) else other_name
-        return f"Sous un angle value, {leader} semble offrir le meilleur point d'entree relatif."
+        return f"Pour un objectif value, {leader} semble offrir le meilleur point d'entree relatif."
     if "defens" in objective_key:
         current_value = current_company.get("health_score")
         other_value = other_company.get("health_score")
         leader = current_name if (current_value or 0) >= (other_value or 0) else other_name
-        return f"Sous un angle defensif, {leader} parait le plus robuste."
+        return f"Pour un objectif defensif, {leader} parait le plus robuste."
     if "revenu" in objective_key:
         current_income = (current_company.get("dividend_yield_pct") or 0) + max((current_company.get("fcf_yield_pct") or 0), 0)
         other_income = (other_company.get("dividend_yield_pct") or 0) + max((other_company.get("fcf_yield_pct") or 0), 0)
         leader = current_name if current_income >= other_income else other_name
-        return f"Sous un angle revenu, {leader} parait le plus favorable."
+        return f"Pour un objectif revenu, {leader} parait le plus favorable."
     if "court terme" in objective_key:
         leader = current_name if (current_technical.get("technical_score_out_of_10") or 0) >= (other_technical.get("technical_score_out_of_10") or 0) else other_name
-        return f"Sous un angle court terme, {leader} parait avoir le meilleur setup."
+        return f"Pour un angle court terme, {leader} parait avoir le meilleur setup."
 
     growth_leader = winner_name(current_company, other_company, current_company.get("growth_score"), other_company.get("growth_score"))
     value_leader = winner_name(current_company, other_company, current_company.get("valuation_score"), other_company.get("valuation_score"))
@@ -285,18 +302,22 @@ def objective_conclusion(
     )
     if growth_leader and health_leader and growth_leader != health_leader:
         return (
-            f"Sous un angle equilibre, {growth_leader} garde l'avantage sur le potentiel de croissance, "
-            f"alors que {health_leader} reste le choix le plus defensif."
+            f"Si tu privilegies la qualite et la resilience, {health_leader} est le choix le plus robuste. "
+            f"Si tu acceptes davantage de risque pour plus de croissance, {growth_leader} est le nom le plus offensif."
         )
     if value_leader and health_leader and value_leader != health_leader and not growth_leader:
         return (
-            f"Sous un angle equilibre, {value_leader} semble offrir la meilleure lecture de valorisation, "
-            f"tandis que {health_leader} garde le bilan le plus rassurant."
+            f"{health_leader} reste le dossier le plus rassurant, tandis que {value_leader} parait plus interessant si tu priorises la valorisation."
         )
     if abs(current_score - other_score) < 1.0:
-        return "Sous un angle equilibre, il n'y a pas d'ecart ecrasant; le choix depend surtout de ce que tu privilegies entre potentiel, valorisation et stabilite."
+        preferred_quality = health_leader or current_name
+        preferred_growth = growth_leader or other_name
+        return (
+            f"Il n'y a pas d'ecart ecrasant. Pour un profil plus prudent, je regarderais d'abord {preferred_quality}; "
+            f"pour un profil plus offensif, {preferred_growth} peut etre plus attrayant."
+        )
     leader = current_name if current_score > other_score else other_name
-    return f"Sous un angle equilibre, {leader} a legerement l'avantage."
+    return f"Sous un angle equilibre, {leader} garde un leger avantage global."
 
 
 def comparison_focus_from_message(user_message: str | None) -> str | None:

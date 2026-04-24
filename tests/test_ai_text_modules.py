@@ -1,6 +1,11 @@
 import unittest
 
-from ai.comparison_utils import comparison_focus_from_message, describe_matchup
+from ai.comparison_utils import (
+    business_model_sentence,
+    comparison_focus_from_message,
+    describe_matchup,
+    objective_conclusion,
+)
 from ai.response_utils import compose_professional_response, dedupe_repetitive_sentences
 
 
@@ -34,8 +39,32 @@ class ComparisonUtilsTests(unittest.TestCase):
             {"ticker": "DUOL", "sector_name": "Consumer", "benchmark_name": "Consumer Apps & Platforms"},
             True,
         )
-        self.assertIn("intersectoriel", text)
-        self.assertIn("these de croissance", text)
+        self.assertIn("intersectorielle", text)
+        self.assertIn("croissance", text)
+
+    def test_business_model_sentence_avoids_default_cycle_language(self):
+        text = business_model_sentence(
+            {
+                "ticker": "MSFT",
+                "company_name": "Microsoft",
+                "sector_name": "Default",
+                "benchmark_name": "Big Tech / GAFAM",
+                "business_model_hint": "company exposed to the Default cycle",
+            }
+        )
+        self.assertNotIn("Default cycle", text)
+        self.assertIn("mega-cap technologique", text)
+
+    def test_objective_conclusion_is_more_actionable_for_balanced_angle(self):
+        text = objective_conclusion(
+            "Equilibre",
+            {"ticker": "MSFT", "growth_score": 7.0, "valuation_score": 5.5, "health_score": 8.0},
+            {"ticker": "DUOL", "growth_score": 8.0, "valuation_score": 7.0, "health_score": 6.0},
+            {"technical_score_out_of_10": 7.0},
+            {"technical_score_out_of_10": 6.0},
+        )
+        self.assertIn("qualite et la resilience", text)
+        self.assertIn("davantage de risque pour plus de croissance", text)
 
 
 if __name__ == "__main__":

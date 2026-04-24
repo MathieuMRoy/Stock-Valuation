@@ -1066,7 +1066,7 @@ def _comparison_tool_response_to_text(payload: dict[str, Any], user_message: str
     other_ticker = other.get("ticker") or payload.get("resolved_ticker") or "N/A"
     objective_label = objective.get("label") or "Equilibre"
 
-    opening = f"Sur un angle {objective_label.lower()}, voici la lecture la plus utile entre {current_name} ({current_ticker}) et {other_name} ({other_ticker})."
+    opening = f"Comparaison rapide entre {current_name} ({current_ticker}) et {other_name} ({other_ticker}) sous un angle {objective_label.lower()}."
     matchup_body = _describe_matchup(current, other, bool(context.get("is_cross_sector")))
 
     source_refs = comparison.get("source_refs") or payload.get("source_refs") or {}
@@ -1088,11 +1088,11 @@ def _comparison_tool_response_to_text(payload: dict[str, Any], user_message: str
         )
 
     all_sections = {
-        "Nature du match-up": matchup_body,
-        "Croissance / upside": _describe_growth_tradeoff(current, other),
-        "Valorisation": _describe_valuation_tradeoff(current, other),
-        "Solidite / bilan": _describe_balance_tradeoff(current, other),
-        "Verdict selon l'angle choisi": _objective_conclusion(
+        "Ce que fait chaque entreprise": matchup_body,
+        "Meilleure pour la croissance": _describe_growth_tradeoff(current, other),
+        "Meilleure pour la valorisation": _describe_valuation_tradeoff(current, other),
+        "Meilleure pour la solidite": _describe_balance_tradeoff(current, other),
+        "Conclusion pratique": _objective_conclusion(
             objective_label,
             current,
             other,
@@ -1102,11 +1102,11 @@ def _comparison_tool_response_to_text(payload: dict[str, Any], user_message: str
     }
     focus = _comparison_focus_from_message(user_message)
     if focus == "croissance":
-        selected_titles = ["Nature du match-up", "Croissance / upside", "Verdict selon l'angle choisi"]
+        selected_titles = ["Ce que fait chaque entreprise", "Meilleure pour la croissance", "Conclusion pratique"]
     elif focus == "valorisation":
-        selected_titles = ["Nature du match-up", "Valorisation", "Verdict selon l'angle choisi"]
+        selected_titles = ["Ce que fait chaque entreprise", "Meilleure pour la valorisation", "Conclusion pratique"]
     elif focus == "solidite":
-        selected_titles = ["Nature du match-up", "Solidite / bilan", "Verdict selon l'angle choisi"]
+        selected_titles = ["Ce que fait chaque entreprise", "Meilleure pour la solidite", "Conclusion pratique"]
     else:
         selected_titles = list(all_sections.keys())
     sections = [(title, all_sections.get(title)) for title in selected_titles]
