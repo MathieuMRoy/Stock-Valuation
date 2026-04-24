@@ -53,7 +53,8 @@ MODEL_NAME = "gemini-3.1-pro-preview"
 APP_NAME = "stock_valuation_multi_agent"
 SUPERVISOR_AGENT_NAME = "stock_chat_supervisor"
 CHAT_ENGINE_VERSION = "2026-04-20-specialist-ai-v8"
-SPECIALIST_MAX_OUTPUT_TOKENS = 900
+SPECIALIST_MAX_OUTPUT_TOKENS = 750
+SPECIALIST_MAX_REFINEMENT_PASSES = 2
 
 AGENT_DISPLAY_NAMES = {
     SUPERVISOR_AGENT_NAME: "Superviseur",
@@ -1226,7 +1227,7 @@ def _generate_specialist_ai_response(
         )
         accumulated_text = ""
 
-        for attempt in range(3):
+        for attempt in range(SPECIALIST_MAX_REFINEMENT_PASSES):
             prompt = base_prompt
             if accumulated_text:
                 prompt = (
@@ -1259,6 +1260,106 @@ def _generate_specialist_ai_response(
         return cleaned_text.strip() if _is_specialist_answer_usable(cleaned_text, specialist_name) else None
     except Exception:
         return None
+
+
+def _get_chat_runtime_cache(chat_context: dict[str, Any]) -> dict[str, Any]:
+    return chat_context.setdefault("runtime_cache", {})
+
+
+def _get_cached_chat_value(
+    chat_context: dict[str, Any],
+    bucket: str,
+    cache_key: str,
+    builder: Callable[[], Any],
+) -> Any:
+    runtime_cache = _get_chat_runtime_cache(chat_context)
+    bucket_cache = runtime_cache.setdefault(bucket, {})
+    if cache_key not in bucket_cache:
+        bucket_cache[cache_key] = builder()
+    return bucket_cache[cache_key]
+
+
+def _specialist_ai_cache_key(
+    specialist_name: str,
+    user_message: str,
+    context_payload: dict[str, Any],
+) -> str:
+    prompt_hash = hashlib.sha1(_intent_text(user_message).encode("utf-8")).hexdigest()[:12]
+    payload_hash = hashlib.sha1(
+        json.dumps(_json_safe(context_payload), sort_keys=True, ensure_ascii=False).encode("utf-8")
+    ).hexdigest()[:16]
+    return f"{specialist_name}:{prompt_hash}:{payload_hash}"
+
+
+def _should_use_specialist_ai(specialist_name: str, user_message: str) -> bool:
+    if os.getenv("ENABLE_LLM_SPECIALIST_REFINEMENT", "").strip().lower() in {"1", "true", "yes"}:
+        return True
+
+    normalized_message = _intent_text(user_message)
+    if not normalized_message:
+        return False
+
+    if specialist_name == "comparison_agent":
+        return os.getenv("ENABLE_LLM_COMPARISON_REFINEMENT", "").strip().lower() in {"1", "true", "yes"}
+
+    deep_keywords = (
+        "pourquoi",
+        "explique",
+        "detail",
+        "details",
+        "detaill",
+        "nuance",
+        "these",
+        "thèse",
+        "scenario",
+        "scénario",
+        "interpre",
+        "interpr",
+        "convient",
+        "profil",
+        "bon investissement",
+        "jeune investisseur",
+        "donne moi ton avis",
+        "ton avis",
+        "resume",
+        "résume",
+        "synthese",
+        "synthèse",
+        "en profondeur",
+        "long terme",
+        "court terme",
+    )
+    if any(keyword in normalized_message for keyword in deep_keywords):
+        return True
+
+    return len(normalized_message.split()) >= 14
+
+
+def _maybe_refine_specialist_response(
+    *,
+    chat_context: dict[str, Any],
+    specialist_name: str,
+    user_message: str,
+    context_payload: dict[str, Any],
+    system_instruction: str,
+    fallback_text: str,
+) -> str:
+    if not fallback_text or not _should_use_specialist_ai(specialist_name, user_message):
+        return fallback_text
+
+    cache_key = _specialist_ai_cache_key(specialist_name, user_message, context_payload)
+    ai_text = _get_cached_chat_value(
+        chat_context,
+        "specialist_ai_answers",
+        cache_key,
+        lambda: _generate_specialist_ai_response(
+            specialist_name=specialist_name,
+            user_message=user_message,
+            context_payload=context_payload,
+            system_instruction=system_instruction,
+        ),
+    )
+    return ai_text or fallback_text
 
 
 def _intent_text(value: str) -> str:
@@ -1344,6 +1445,76 @@ def _build_local_fallback_context(metrics: dict, bench: dict, scores: dict, tech
     }
 
 
+def _get_cached_current_data(chat_context: dict[str, Any], ticker: str) -> dict[str, Any]:
+    clean_ticker = str(ticker or "").upper().strip()
+    return _get_cached_chat_value(
+        chat_context,
+        "financial_data",
+        clean_ticker,
+        lambda: get_financial_data_secure(clean_ticker, cache_version=FINANCIAL_DATA_CACHE_VERSION),
+    )
+
+
+def _get_cached_source_refs(chat_context: dict[str, Any], ticker: str, data: dict[str, Any]) -> dict[str, Any]:
+    clean_ticker = str(ticker or "").upper().strip()
+    return _get_cached_chat_value(
+        chat_context,
+        "source_refs",
+        clean_ticker,
+        lambda: _build_source_refs(clean_ticker, data),
+    )
+
+
+def _get_cached_news_snapshot(chat_context: dict[str, Any], ticker: str, data: dict[str, Any]) -> dict[str, Any]:
+    clean_ticker = str(ticker or "").upper().strip()
+    return _get_cached_chat_value(
+        chat_context,
+        "news_snapshots",
+        clean_ticker,
+        lambda: _build_recent_news_snapshot(data),
+    )
+
+
+def _get_cached_analyst_snapshot(chat_context: dict[str, Any], ticker: str, data: dict[str, Any]) -> dict[str, Any]:
+    clean_ticker = str(ticker or "").upper().strip()
+    return _get_cached_chat_value(
+        chat_context,
+        "analyst_snapshots",
+        clean_ticker,
+        lambda: _build_analyst_snapshot(data),
+    )
+
+
+def _get_cached_insider_snapshot(chat_context: dict[str, Any], ticker: str, data: dict[str, Any]) -> dict[str, Any]:
+    clean_ticker = str(ticker or "").upper().strip()
+    return _get_cached_chat_value(
+        chat_context,
+        "insider_snapshots",
+        clean_ticker,
+        lambda: _build_insider_snapshot(data),
+    )
+
+
+def _get_cached_short_interest_snapshot(chat_context: dict[str, Any], ticker: str) -> dict[str, Any]:
+    clean_ticker = str(ticker or "").upper().strip()
+    return _get_cached_chat_value(
+        chat_context,
+        "short_interest_snapshots",
+        clean_ticker,
+        lambda: _build_short_interest_snapshot(clean_ticker),
+    )
+
+
+def _get_cached_sec_snapshot(chat_context: dict[str, Any], ticker: str) -> dict[str, Any]:
+    clean_ticker = str(ticker or "").upper().strip()
+    return _get_cached_chat_value(
+        chat_context,
+        "sec_snapshots",
+        clean_ticker,
+        lambda: _build_sec_snapshot(clean_ticker),
+    )
+
+
 def _build_local_news_response(chat_context: dict[str, Any], user_message: str) -> tuple[str | None, dict[str, Any] | None]:
     """Generate a personalized news answer for the current ticker."""
     fallback_context = chat_context.get("fallback_context") or {}
@@ -1352,34 +1523,11 @@ def _build_local_news_response(chat_context: dict[str, Any], user_message: str) 
         return None, None
 
     try:
-        current_data = get_financial_data_secure(current_ticker, cache_version=FINANCIAL_DATA_CACHE_VERSION)
-        news_snapshot = _build_recent_news_snapshot(current_data)
+        current_data = _get_cached_current_data(chat_context, current_ticker)
+        news_snapshot = _get_cached_news_snapshot(chat_context, current_ticker, current_data)
         company_name = news_snapshot.get("company_name") or fallback_context.get("company_name") or current_ticker
         trace = _build_agent_trace(["news_agent", SUPERVISOR_AGENT_NAME], SUPERVISOR_AGENT_NAME)
-        ai_text = _generate_specialist_ai_response(
-            specialist_name="news_agent",
-            user_message=user_message,
-            context_payload={
-                "ticker": current_ticker,
-                "company_name": company_name,
-                "as_of_date": date.today().isoformat(),
-                "question": user_message,
-                "news_snapshot": news_snapshot,
-                "company_snapshot": fallback_context.get("company"),
-                "source_refs": fallback_context.get("sources") or _build_source_refs(current_ticker, current_data),
-            },
-            system_instruction=_specialist_system_instruction(
-                "Tu es le news_agent d'une application finance. Reponds en francais a la question exacte de l'utilisateur. "
-                "Priorise les informations les plus recentes et datees. Distingue bien les news de marche, les communiques "
-                "et le contexte earnings. Si l'actualite est maigre ou pas tres recente, dis-le franchement. "
-                "Adapte la reponse a l'entreprise demandee et explique ce que l'actualite change, ou ne change pas, dans la these.",
-                include_sources=True,
-            ),
-        )
-        if ai_text:
-            return ai_text, trace
-
-        source_refs = fallback_context.get("sources") or _build_source_refs(current_ticker, current_data)
+        source_refs = fallback_context.get("sources") or _get_cached_source_refs(chat_context, current_ticker, current_data)
         market_news = news_snapshot.get("recent_market_news") or []
         press_releases = news_snapshot.get("recent_press_releases") or []
         earnings_context = news_snapshot.get("earnings_context") or {}
@@ -1406,7 +1554,7 @@ def _build_local_news_response(chat_context: dict[str, Any], user_message: str) 
         elif last_known_earnings_date:
             catalyst_sentence = f"La derniere publication datee reperee est celle du {last_known_earnings_date}."
 
-        return _compose_professional_response(
+        fallback_text = _compose_professional_response(
             opening,
             [
                 ("Faits recents", _bullet_lines(recent_items) or "Le flux d'information disponible est assez maigre pour l'instant."),
@@ -1417,6 +1565,29 @@ def _build_local_news_response(chat_context: dict[str, Any], user_message: str) 
                 ),
             ],
             source_refs=source_refs,
+        )
+        context_payload = {
+            "ticker": current_ticker,
+            "company_name": company_name,
+            "as_of_date": date.today().isoformat(),
+            "question": user_message,
+            "news_snapshot": news_snapshot,
+            "company_snapshot": fallback_context.get("company"),
+            "source_refs": source_refs,
+        }
+        return _maybe_refine_specialist_response(
+            chat_context=chat_context,
+            specialist_name="news_agent",
+            user_message=user_message,
+            context_payload=context_payload,
+            system_instruction=_specialist_system_instruction(
+                "Tu es le news_agent d'une application finance. Reponds en francais a la question exacte de l'utilisateur. "
+                "Priorise les informations les plus recentes et datees. Distingue bien les news de marche, les communiques "
+                "et le contexte earnings. Si l'actualite est maigre ou pas tres recente, dis-le franchement. "
+                "Adapte la reponse a l'entreprise demandee et explique ce que l'actualite change, ou ne change pas, dans la these.",
+                include_sources=True,
+            ),
+            fallback_text=fallback_text,
         ), trace
     except Exception as exc:
         trace = _build_agent_trace(["news_agent"], "news_agent")
@@ -1430,32 +1601,12 @@ def _build_local_market_signal_response(chat_context: dict[str, Any], user_messa
         return None, None
 
     try:
-        current_data = get_financial_data_secure(current_ticker, cache_version=FINANCIAL_DATA_CACHE_VERSION)
-        analyst_snapshot = _build_analyst_snapshot(current_data)
-        insider_snapshot = _build_insider_snapshot(current_data)
-        short_snapshot = _build_short_interest_snapshot(current_ticker)
+        current_data = _get_cached_current_data(chat_context, current_ticker)
+        analyst_snapshot = _get_cached_analyst_snapshot(chat_context, current_ticker, current_data)
+        insider_snapshot = _get_cached_insider_snapshot(chat_context, current_ticker, current_data)
+        short_snapshot = _get_cached_short_interest_snapshot(chat_context, current_ticker)
         trace = _build_agent_trace(["market_signal_agent", SUPERVISOR_AGENT_NAME], SUPERVISOR_AGENT_NAME)
-        ai_text = _generate_specialist_ai_response(
-            specialist_name="market_signal_agent",
-            user_message=user_message,
-            context_payload={
-                "ticker": current_ticker,
-                "question": user_message,
-                "company_snapshot": fallback_context.get("company"),
-                "analyst_snapshot": analyst_snapshot,
-                "insider_snapshot": insider_snapshot,
-                "short_interest_snapshot": short_snapshot,
-                "source_refs": fallback_context.get("sources") or _build_source_refs(current_ticker, current_data),
-            },
-            system_instruction=_specialist_system_instruction(
-                "Tu es le market_signal_agent. Reponds en francais a la question exacte de l'utilisateur. "
-                "Interprete les signaux analystes, insiders et short interest sans sur-vendre la conclusion. "
-                "Explique ce que les donnees suggerent pour ce titre precis et signale clairement les zones manquantes.",
-                include_sources=True,
-            ),
-        )
-        if ai_text:
-            return ai_text, trace
+        source_refs = fallback_context.get("sources") or _get_cached_source_refs(chat_context, current_ticker, current_data)
 
         score = 0
         dominant_rating = analyst_snapshot.get("dominant_rating")
@@ -1498,14 +1649,36 @@ def _build_local_market_signal_response(chat_context: dict[str, Any], user_messa
                 f"days to cover {short_snapshot.get('latest_days_to_cover', 'N/A')}."
             )
 
-        return _compose_professional_response(
+        fallback_text = _compose_professional_response(
             opening,
             [
                 ("Analystes", analyst_body or "Pas de consensus analystes vraiment exploitable dans le snapshot actuel."),
                 ("Insiders", insider_body or "Pas de flux insider suffisamment lisible ici."),
                 ("Short interest", short_body or "Pas de donnees short interest suffisamment propres ici."),
             ],
-            source_refs=fallback_context.get("sources") or _build_source_refs(current_ticker, current_data),
+            source_refs=source_refs,
+        )
+        context_payload = {
+            "ticker": current_ticker,
+            "question": user_message,
+            "company_snapshot": fallback_context.get("company"),
+            "analyst_snapshot": analyst_snapshot,
+            "insider_snapshot": insider_snapshot,
+            "short_interest_snapshot": short_snapshot,
+            "source_refs": source_refs,
+        }
+        return _maybe_refine_specialist_response(
+            chat_context=chat_context,
+            specialist_name="market_signal_agent",
+            user_message=user_message,
+            context_payload=context_payload,
+            system_instruction=_specialist_system_instruction(
+                "Tu es le market_signal_agent. Reponds en francais a la question exacte de l'utilisateur. "
+                "Interprete les signaux analystes, insiders et short interest sans sur-vendre la conclusion. "
+                "Explique ce que les donnees suggerent pour ce titre precis et signale clairement les zones manquantes.",
+                include_sources=True,
+            ),
+            fallback_text=fallback_text,
         ), trace
     except Exception as exc:
         trace = _build_agent_trace(["market_signal_agent"], "market_signal_agent")
@@ -1519,31 +1692,11 @@ def _build_local_filings_response(chat_context: dict[str, Any], user_message: st
         return None, None
 
     try:
-        snapshot = _build_sec_snapshot(current_ticker)
+        snapshot = _get_cached_sec_snapshot(chat_context, current_ticker)
         trace = _build_agent_trace(["filings_agent", SUPERVISOR_AGENT_NAME], SUPERVISOR_AGENT_NAME)
         if not snapshot.get("available"):
             message = snapshot.get("error") or f"Les donnees SEC officielles ne sont pas disponibles pour {current_ticker}."
             return message, _build_agent_trace(["filings_agent"], "filings_agent")
-
-        ai_text = _generate_specialist_ai_response(
-            specialist_name="filings_agent",
-            user_message=user_message,
-            context_payload={
-                "ticker": current_ticker,
-                "question": user_message,
-                "company_snapshot": fallback_context.get("company"),
-                "sec_snapshot": snapshot,
-                "source_refs": fallback_context.get("sources"),
-            },
-            system_instruction=_specialist_system_instruction(
-                "Tu es le filings_agent. Reponds en francais en t'appuyant d'abord sur les chiffres officiels SEC fournis. "
-                "Adapte la reponse a la question posee: tendance des revenus, qualite des profits, evolution recente, ou credibilite du bilan. "
-                "Mentionne les periodes exactes quand elles existent, et n'invente pas de donnees.",
-                include_sources=True,
-            ),
-        )
-        if ai_text:
-            return ai_text, trace
 
         latest_annual = snapshot.get("latest_annual_metrics") or {}
         latest_quarter = snapshot.get("latest_quarter_metrics") or {}
@@ -1560,7 +1713,7 @@ def _build_local_filings_response(chat_context: dict[str, Any], user_message: st
                 f"{snapshot.get('latest_quarter_period', 'N/A')}: revenus {_format_compact_number(latest_quarter.get('Total Revenue'), '$')}, "
                 f"net income {_format_compact_number(latest_quarter.get('Net Income'), '$')}."
             )
-        return _compose_professional_response(
+        fallback_text = _compose_professional_response(
             opening,
             [
                 ("Lecture annuelle", annual_body or "Je n'ai pas de bloc annuel propre dans ce snapshot."),
@@ -1568,6 +1721,26 @@ def _build_local_filings_response(chat_context: dict[str, Any], user_message: st
                 ("Ce que j'en retiens", "Les filings servent surtout a verifier la qualite des revenus, des profits et du bilan au-dela du bruit de marche."),
             ],
             source_refs=fallback_context.get("sources"),
+        )
+        context_payload = {
+            "ticker": current_ticker,
+            "question": user_message,
+            "company_snapshot": fallback_context.get("company"),
+            "sec_snapshot": snapshot,
+            "source_refs": fallback_context.get("sources"),
+        }
+        return _maybe_refine_specialist_response(
+            chat_context=chat_context,
+            specialist_name="filings_agent",
+            user_message=user_message,
+            context_payload=context_payload,
+            system_instruction=_specialist_system_instruction(
+                "Tu es le filings_agent. Reponds en francais en t'appuyant d'abord sur les chiffres officiels SEC fournis. "
+                "Adapte la reponse a la question posee: tendance des revenus, qualite des profits, evolution recente, ou credibilite du bilan. "
+                "Mentionne les periodes exactes quand elles existent, et n'invente pas de donnees.",
+                include_sources=True,
+            ),
+            fallback_text=fallback_text,
         ), trace
     except Exception as exc:
         trace = _build_agent_trace(["filings_agent"], "filings_agent")
@@ -1583,24 +1756,6 @@ def _build_local_technical_response(chat_context: dict[str, Any], user_message: 
         return None, None
 
     trace = _build_agent_trace(["technical_agent", SUPERVISOR_AGENT_NAME], SUPERVISOR_AGENT_NAME)
-    ai_text = _generate_specialist_ai_response(
-        specialist_name="technical_agent",
-        user_message=user_message,
-        context_payload={
-            "ticker": ticker,
-            "question": user_message,
-            "company_snapshot": company,
-            "technical_snapshot": technical,
-            "investor_objective": chat_context.get("investor_objective"),
-        },
-        system_instruction=_specialist_system_instruction(
-            "Tu es le technical_agent. Reponds en francais et adapte la lecture technique a la question precise de l'utilisateur. "
-            "Explique le setup, le momentum et le risque de court terme sans transformer cela en conseil ferme. "
-            "Utilise les chiffres techniques fournis et dis quand le signal est faible ou incomplet."
-        ),
-    )
-    if ai_text:
-        return ai_text, trace
 
     score = technical.get("technical_score_out_of_10", "N/A")
     bull_flag = "oui" if technical.get("bull_flag_detected") else "non"
@@ -1611,13 +1766,32 @@ def _build_local_technical_response(chat_context: dict[str, Any], user_message: 
         opening = f"Techniquement, {ticker} est plutot neutre a legerement positif."
     else:
         opening = f"Techniquement, {ticker} reste fragile ou peu convaincant pour l'instant."
-    return _compose_professional_response(
+    fallback_text = _compose_professional_response(
         opening,
         [
             ("Momentum", f"Score technique {score}/10."),
             ("Signal", f"Bull flag detecte: {bull_flag}."),
             ("Lecture investisseur", "A utiliser surtout comme lecture de momentum et de timing, pas comme these d'investissement complete a lui seul."),
         ],
+    )
+    context_payload = {
+        "ticker": ticker,
+        "question": user_message,
+        "company_snapshot": company,
+        "technical_snapshot": technical,
+        "investor_objective": chat_context.get("investor_objective"),
+    }
+    return _maybe_refine_specialist_response(
+        chat_context=chat_context,
+        specialist_name="technical_agent",
+        user_message=user_message,
+        context_payload=context_payload,
+        system_instruction=_specialist_system_instruction(
+            "Tu es le technical_agent. Reponds en francais et adapte la lecture technique a la question precise de l'utilisateur. "
+            "Explique le setup, le momentum et le risque de court terme sans transformer cela en conseil ferme. "
+            "Utilise les chiffres techniques fournis et dis quand le signal est faible ou incomplet."
+        ),
+        fallback_text=fallback_text,
     ), trace
 
 
@@ -1632,29 +1806,6 @@ def _build_local_risk_response(chat_context: dict[str, Any], user_message: str) 
 
     trace = _build_agent_trace(["risk_agent", SUPERVISOR_AGENT_NAME], SUPERVISOR_AGENT_NAME)
     risk_profile = _infer_risk_user_profile(user_message)
-    ai_text = _generate_specialist_ai_response(
-        specialist_name="risk_agent",
-        user_message=user_message,
-        context_payload={
-            "ticker": ticker,
-            "question": user_message,
-            "company_snapshot": company,
-            "technical_snapshot": technical,
-            "peer_snapshot": peer,
-            "investor_objective": chat_context.get("investor_objective"),
-            "business_profile": _business_model_sentence(company),
-            "risk_user_profile": risk_profile,
-        },
-        system_instruction=_specialist_system_instruction(
-            "Tu es le risk_agent. Reponds en francais de maniere personnalisee au titre et a la question. "
-            "Explique les principaux risques, les facteurs de resilience et le type d'investisseur auquel le dossier correspond. "
-            "Si l'utilisateur demande si le titre est adapte a un jeune investisseur, a un profil prudent ou a un angle revenu, "
-            "commence par un verdict direct et clair, puis explique pourquoi. "
-            "Si l'entreprise est financiere, bancaire, energetique ou cyclique, adapte clairement le raisonnement."
-        ),
-    )
-    if ai_text:
-        return ai_text, trace
 
     verdict = _risk_fit_verdict(company, technical, risk_profile)
     risk_driver = _primary_risk_driver(company, technical)
@@ -1675,10 +1826,34 @@ def _build_local_risk_response(chat_context: dict[str, Any], user_message: str) 
                 "Comme il s'agit d'un titre financier, la qualite du capital et du credit compte plus que la dette nette brute.",
             )
         )
-    return _compose_professional_response(
+    fallback_text = _compose_professional_response(
         f"Pour {risk_subject}, {ticker} me semble {verdict}.",
         sections,
         source_refs=fallback_context.get("sources"),
+    )
+    context_payload = {
+        "ticker": ticker,
+        "question": user_message,
+        "company_snapshot": company,
+        "technical_snapshot": technical,
+        "peer_snapshot": peer,
+        "investor_objective": chat_context.get("investor_objective"),
+        "business_profile": _business_model_sentence(company),
+        "risk_user_profile": risk_profile,
+    }
+    return _maybe_refine_specialist_response(
+        chat_context=chat_context,
+        specialist_name="risk_agent",
+        user_message=user_message,
+        context_payload=context_payload,
+        system_instruction=_specialist_system_instruction(
+            "Tu es le risk_agent. Reponds en francais de maniere personnalisee au titre et a la question. "
+            "Explique les principaux risques, les facteurs de resilience et le type d'investisseur auquel le dossier correspond. "
+            "Si l'utilisateur demande si le titre est adapte a un jeune investisseur, a un profil prudent ou a un angle revenu, "
+            "commence par un verdict direct et clair, puis explique pourquoi. "
+            "Si l'entreprise est financiere, bancaire, energetique ou cyclique, adapte clairement le raisonnement."
+        ),
+        fallback_text=fallback_text,
     ), trace
 
 
@@ -1691,27 +1866,6 @@ def _build_local_fundamental_response(chat_context: dict[str, Any], user_message
         return None, None
 
     trace = _build_agent_trace(["fundamental_agent", SUPERVISOR_AGENT_NAME], SUPERVISOR_AGENT_NAME)
-    ai_text = _generate_specialist_ai_response(
-        specialist_name="fundamental_agent",
-        user_message=user_message,
-        context_payload={
-            "ticker": ticker,
-            "question": user_message,
-            "company_snapshot": company,
-            "peer_snapshot": peer,
-            "investor_objective": chat_context.get("investor_objective"),
-            "business_profile": _business_model_sentence(company),
-            "source_refs": fallback_context.get("sources"),
-        },
-        system_instruction=_specialist_system_instruction(
-            "Tu es le fundamental_agent. Reponds en francais en adaptant la reponse a la question exacte de l'utilisateur. "
-            "Utilise les multiples, la croissance, le cash-flow, le bilan et le benchmark fournis. "
-            "Ne recopie pas toujours le meme plan: choisis l'angle le plus pertinent pour ce titre et cette question.",
-            include_sources=True,
-        ),
-    )
-    if ai_text:
-        return ai_text, trace
 
     valuation_score = _to_float(company.get("valuation_score")) or 0.0
     growth_score = _to_float(company.get("growth_score")) or 0.0
@@ -1721,7 +1875,7 @@ def _build_local_fundamental_response(chat_context: dict[str, Any], user_message
         opening = f"Fondamentalement, {ticker} est surtout un dossier de croissance ou de qualite plus qu'un dossier bon marche."
     else:
         opening = f"Fondamentalement, {ticker} parait assez equilibre sans signal extreme."
-    return _compose_professional_response(
+    fallback_text = _compose_professional_response(
         opening,
         [
             (
@@ -1739,6 +1893,28 @@ def _build_local_fundamental_response(chat_context: dict[str, Any], user_message
             ),
         ],
         source_refs=fallback_context.get("sources"),
+    )
+    context_payload = {
+        "ticker": ticker,
+        "question": user_message,
+        "company_snapshot": company,
+        "peer_snapshot": peer,
+        "investor_objective": chat_context.get("investor_objective"),
+        "business_profile": _business_model_sentence(company),
+        "source_refs": fallback_context.get("sources"),
+    }
+    return _maybe_refine_specialist_response(
+        chat_context=chat_context,
+        specialist_name="fundamental_agent",
+        user_message=user_message,
+        context_payload=context_payload,
+        system_instruction=_specialist_system_instruction(
+            "Tu es le fundamental_agent. Reponds en francais en adaptant la reponse a la question exacte de l'utilisateur. "
+            "Utilise les multiples, la croissance, le cash-flow, le bilan et le benchmark fournis. "
+            "Ne recopie pas toujours le meme plan: choisis l'angle le plus pertinent pour ce titre et cette question.",
+            include_sources=True,
+        ),
+        fallback_text=fallback_text,
     ), trace
 
 
@@ -1751,6 +1927,56 @@ def _build_local_peer_response(chat_context: dict[str, Any], user_message: str) 
         return None, None
 
     trace = _build_agent_trace(["peer_agent", SUPERVISOR_AGENT_NAME], SUPERVISOR_AGENT_NAME)
+    peer_sales = _to_float(peer.get("peer_sales_growth_pct")) or 0.0
+    company_sales = _to_float(company.get("sales_growth_pct")) or 0.0
+    if company_sales > peer_sales + 2:
+        opening = f"Face a ses pairs, {ticker} parait surtout meilleur sur la croissance."
+    elif company_sales < peer_sales - 2:
+        opening = f"Face a ses pairs, {ticker} parait plus mature ou moins dynamique que le groupe."
+    else:
+        opening = f"Face a ses pairs, {ticker} reste plutot proche du benchmark global."
+
+    fallback_text = _compose_professional_response(
+        opening,
+        [
+            ("Benchmark", f"Groupe de reference: {peer.get('benchmark_name', 'N/A')}."),
+            (
+                "Croissance",
+                f"Ventes {_format_pct(company.get('sales_growth_pct'))} vs pairs {_format_pct(peer.get('peer_sales_growth_pct'))}, "
+                f"EPS {_format_pct(company.get('eps_growth_pct'))} vs pairs {_format_pct(peer.get('peer_eps_growth_pct'))}.",
+            ),
+            (
+                "Valorisation relative",
+                f"Trailing P/E {_format_ratio(company.get('pe_ratio'))} vs cible pairs {_format_ratio(peer.get('peer_target_pe'))}, "
+                f"P/S {_format_ratio(company.get('ps_ratio'))} vs cible pairs {_format_ratio(peer.get('peer_target_ps'))}.",
+            ),
+        ],
+        source_refs=fallback_context.get("sources"),
+    )
+    context_payload = {
+        "ticker": ticker,
+        "question": user_message,
+        "company_snapshot": company,
+        "peer_snapshot": peer,
+        "investor_objective": chat_context.get("investor_objective"),
+        "business_profile": _business_model_sentence(company),
+        "source_refs": fallback_context.get("sources"),
+    }
+    return _maybe_refine_specialist_response(
+        chat_context=chat_context,
+        specialist_name="peer_agent",
+        user_message=user_message,
+        context_payload=context_payload,
+        system_instruction=_specialist_system_instruction(
+            "Tu es le peer_agent. Reponds en francais en comparant le titre courant a son groupe de pairs et a son benchmark. "
+            "Explique si le titre semble plus cher ou moins cher que ses pairs, s'il croit plus vite ou moins vite, "
+            "et ce que cela implique pour la these d'investissement. "
+            "Adapte la reponse a la question de l'utilisateur, evite les listes generiques et utilise les chiffres du contexte.",
+            include_sources=True,
+        ),
+        fallback_text=fallback_text,
+    ), trace
+
     ai_text = _generate_specialist_ai_response(
         specialist_name="peer_agent",
         user_message=user_message,
@@ -1782,7 +2008,7 @@ def _build_local_peer_response(chat_context: dict[str, Any], user_message: str) 
         opening = f"Face a ses pairs, {ticker} parait plus mature ou moins dynamique que le groupe."
     else:
         opening = f"Face a ses pairs, {ticker} reste plutot proche du benchmark global."
-    return _compose_professional_response(
+    fallback_text = _compose_professional_response(
         opening,
         [
             ("Benchmark", f"Groupe de reference: {peer.get('benchmark_name', 'N/A')}."),
@@ -1798,6 +2024,29 @@ def _build_local_peer_response(chat_context: dict[str, Any], user_message: str) 
             ),
         ],
         source_refs=fallback_context.get("sources"),
+    )
+    context_payload = {
+        "ticker": ticker,
+        "question": user_message,
+        "company_snapshot": company,
+        "peer_snapshot": peer,
+        "investor_objective": chat_context.get("investor_objective"),
+        "business_profile": _business_model_sentence(company),
+        "source_refs": fallback_context.get("sources"),
+    }
+    return _maybe_refine_specialist_response(
+        chat_context=chat_context,
+        specialist_name="peer_agent",
+        user_message=user_message,
+        context_payload=context_payload,
+        system_instruction=_specialist_system_instruction(
+            "Tu es le peer_agent. Reponds en francais en comparant le titre courant a son groupe de pairs et a son benchmark. "
+            "Explique si le titre semble plus cher ou moins cher que ses pairs, s'il croit plus vite ou moins vite, "
+            "et ce que cela implique pour la these d'investissement. "
+            "Adapte la reponse a la question de l'utilisateur, evite les listes generiques et utilise les chiffres du contexte.",
+            include_sources=True,
+        ),
+        fallback_text=fallback_text,
     ), trace
 
 
@@ -1809,6 +2058,69 @@ def _build_local_meta_response(chat_context: dict[str, Any], user_message: str) 
         return None, None
 
     trace = _build_agent_trace([SUPERVISOR_AGENT_NAME], SUPERVISOR_AGENT_NAME)
+    fallback_text = _compose_professional_response(
+        f"Voici comment le chat multi-agents peut t'aider sur {ticker}.",
+        [
+            (
+                "Agents d'analyse",
+                _bullet_lines(
+                    [
+                        "`fundamental_agent` : valorisation, croissance, cash-flow et qualite financiere.",
+                        "`technical_agent` : tendance, momentum et setup de marche.",
+                        "`risk_agent` : risques, resilience et adequation au profil investisseur.",
+                    ]
+                ),
+            ),
+            (
+                "Agents de contexte",
+                _bullet_lines(
+                    [
+                        "`peer_agent` : comparaison avec les pairs et le benchmark.",
+                        "`comparison_agent` : comparaison directe avec une autre action.",
+                        "`news_agent` : actualites recentes, catalyseurs et earnings.",
+                    ]
+                ),
+            ),
+            (
+                "Agents de validation",
+                _bullet_lines(
+                    [
+                        "`market_signal_agent` : analystes, insiders et short interest.",
+                        "`filings_agent` : chiffres officiels SEC et lecture comptable.",
+                    ]
+                ),
+            ),
+        ],
+    )
+    context_payload = {
+        "ticker": ticker,
+        "question": user_message,
+        "company_snapshot": company,
+        "investor_objective": chat_context.get("investor_objective"),
+        "available_agents": [
+            {"name": "fundamental_agent", "role": "evaluation, valorisation, croissance et qualite financiere"},
+            {"name": "technical_agent", "role": "momentum, tendance et lecture technique"},
+            {"name": "peer_agent", "role": "comparaison avec les pairs et le benchmark"},
+            {"name": "comparison_agent", "role": "comparaison directe entre deux actions"},
+            {"name": "news_agent", "role": "actualite recente, catalyseurs et publications"},
+            {"name": "market_signal_agent", "role": "analystes, insiders et short interest"},
+            {"name": "filings_agent", "role": "chiffres SEC officiels et qualite comptable"},
+            {"name": "risk_agent", "role": "profil de risque, resilience et adequation investisseur"},
+        ],
+    }
+    return _maybe_refine_specialist_response(
+        chat_context=chat_context,
+        specialist_name="supervisor_agent",
+        user_message=user_message,
+        context_payload=context_payload,
+        system_instruction=_specialist_system_instruction(
+            "Tu es le superviseur d'un chat multi-agents finance. Reponds en francais a la question meta de l'utilisateur. "
+            "Explique clairement quels agents existent, ce qu'ils font, et comment ils peuvent aider sur le titre courant. "
+            "Reste conversationnel et adapte ta reponse a la question, sans renvoyer un resume financier du titre si ce n'est pas demande."
+        ),
+        fallback_text=fallback_text,
+    ), trace
+
     ai_text = _generate_specialist_ai_response(
         specialist_name="supervisor_agent",
         user_message=user_message,
@@ -1907,6 +2219,47 @@ def _build_local_generic_response(chat_context: dict[str, Any], user_message: st
         return None, None
 
     trace = _build_agent_trace([SUPERVISOR_AGENT_NAME], SUPERVISOR_AGENT_NAME)
+    fallback_text = _compose_professional_response(
+        f"Je n'ai pas pu recuperer toute la synthese multi-agents, mais voici une lecture fiable et courte pour {ticker}.",
+        [
+            ("Verdict rapide", f"Angle actif {objective.get('label', 'Equilibre')} avec benchmark {peer.get('benchmark_name', 'N/A')}."), 
+            (
+                "Fondamentaux",
+                f"Trailing P/E {_format_ratio(company.get('pe_ratio'))}, P/S {_format_ratio(company.get('ps_ratio'))}, "
+                f"score value {company.get('valuation_score', 'N/A')}/10 et score croissance {company.get('growth_score', 'N/A')}/10.",
+            ),
+            (
+                "Solidite et technique",
+                f"{_format_balance_sheet_profile(company)}, score sante {company.get('health_score', 'N/A')}/10, "
+                f"score technique {technical.get('technical_score_out_of_10', 'N/A')}/10.",
+            ),
+        ],
+        source_refs=fallback_context.get("sources"),
+    )
+    context_payload = {
+        "ticker": ticker,
+        "question": user_message,
+        "company_snapshot": company,
+        "peer_snapshot": peer,
+        "technical_snapshot": technical,
+        "investor_objective": objective,
+        "source_refs": fallback_context.get("sources"),
+        "business_profile": _business_model_sentence(company),
+    }
+    return _maybe_refine_specialist_response(
+        chat_context=chat_context,
+        specialist_name="supervisor_agent",
+        user_message=user_message,
+        context_payload=context_payload,
+        system_instruction=_specialist_system_instruction(
+            "Tu es le superviseur d'un assistant multi-agents finance. Le run principal a echoue, mais tu dois quand meme repondre proprement a la question de l'utilisateur en francais. "
+            "Adapte la reponse a la question exacte, utilise le contexte du titre courant, et evite de reciter toujours le meme resume. "
+            "Si la question est large, fais une reponse courte et utile. Si des donnees manquent, dis-le.",
+            include_sources=True,
+        ),
+        fallback_text=fallback_text,
+    ), trace
+
     ai_text = _generate_specialist_ai_response(
         specialist_name="supervisor_agent",
         user_message=user_message,
@@ -2496,11 +2849,7 @@ def _build_sec_snapshot(ticker: str) -> dict[str, Any]:
 
 
 @lru_cache(maxsize=64)
-@lru_cache(maxsize=64)
 def _compute_stock_context(ticker: str, include_technical: bool = True) -> dict[str, Any]:
-    ticker = (ticker or "").upper().strip()
-    data = get_financial_data_secure(ticker, cache_version=FINANCIAL_DATA_CACHE_VERSION)
-    current_price = float(data.get("price", 0) or 0)
     ticker = (ticker or "").upper().strip()
     data = get_financial_data_secure(ticker, cache_version=FINANCIAL_DATA_CACHE_VERSION)
     current_price = float(data.get("price", 0) or 0)
