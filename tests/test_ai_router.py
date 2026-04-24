@@ -11,6 +11,15 @@ class RouterIntentTests(unittest.TestCase):
         router = SpecialistRouter({"meta": lambda prompt: ("meta", None)})
         self.assertEqual(router.resolve("Qui sont les agents disponibles ?"), "meta")
 
+    def test_routes_named_risk_agent_questions_to_risk(self):
+        router = SpecialistRouter(
+            {
+                "meta": lambda prompt: ("meta", None),
+                "risk": lambda prompt: ("risk", None),
+            }
+        )
+        self.assertEqual(router.resolve("qu'EST-CE QUE L'AGENT RISQUE EN PENSE DE DUOL?"), "risk")
+
     def test_routes_peer_questions_to_peer_handler(self):
         router = SpecialistRouter({"peer": lambda prompt: ("peer", None)})
         self.assertEqual(router.resolve("compare apple avec ses pairs"), "peer")
