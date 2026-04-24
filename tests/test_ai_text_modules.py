@@ -4,6 +4,7 @@ from ai.comparison_utils import (
     business_model_sentence,
     comparison_focus_from_message,
     describe_matchup,
+    describe_valuation_tradeoff,
     objective_conclusion,
 )
 from ai.response_utils import compose_professional_response, dedupe_repetitive_sentences
@@ -65,6 +66,15 @@ class ComparisonUtilsTests(unittest.TestCase):
         )
         self.assertIn("qualite et la resilience", text)
         self.assertIn("davantage de risque pour plus de croissance", text)
+
+    def test_describe_valuation_tradeoff_handles_missing_pe_cleanly(self):
+        text = describe_valuation_tradeoff(
+            {"ticker": "MDA.TO", "pe_ratio": 57.15, "ps_ratio": 3.80},
+            {"ticker": "RKLB", "pe_ratio": None, "ps_ratio": 81.26},
+        )
+        self.assertIn("P/E n'est pas vraiment exploitable pour RKLB", text)
+        self.assertIn("MDA.TO", text)
+        self.assertNotIn("RKLB semble moins cher sur le P/E", text)
 
 
 if __name__ == "__main__":
