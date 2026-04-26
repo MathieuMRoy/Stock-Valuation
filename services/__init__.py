@@ -16,18 +16,21 @@ from .analyzer_service import (
 )
 from .screener_engine import ScreenerCandidate, market_cap_ok, quick_intrinsic_dcf, run_screener
 from .data_quality import DataQualityReport, build_data_quality_report, quality_label
+from .sector_profiles import SectorProfile, get_sector_profile, sector_profile_summary
 from .valuation_guardrails import blend_reasonable_intrinsic_values, is_reasonable_intrinsic_value, upside_pct
 
 __all__ = [
     "AnalyzerSnapshot",
     "DataQualityReport",
     "INVESTOR_OBJECTIVES",
+    "SectorProfile",
     "ScreenerCandidate",
     "blend_reasonable_intrinsic_values",
     "build_data_quality_report",
     "build_investor_objective_snapshot",
     "business_model_hint",
     "extract_next_earnings",
+    "get_sector_profile",
     "is_financial_company",
     "market_cap_ok",
     "prepare_analyzer_snapshot",
@@ -37,6 +40,7 @@ __all__ = [
     "resolve_share_count",
     "risk_label",
     "run_screener",
+    "sector_profile_summary",
     "statement_basis_label",
     "is_reasonable_intrinsic_value",
     "upside_pct",

@@ -25,7 +25,11 @@ TECHNICAL_DETAIL_KEYS = (
     "momentum_3m_pct",
     "momentum_6m_pct",
     "drawdown_from_52w_high_pct",
+    "volatility_20d_pct",
+    "volatility_60d_pct",
     "volume_vs_20d_pct",
+    "support_60d",
+    "resistance_60d",
 )
 
 
@@ -151,9 +155,13 @@ def _timing_risk_body(snapshot: dict[str, Any]) -> str:
     drawdown = _fmt_pct(snapshot.get("drawdown_from_52w_high_pct"), signed=True)
     atr = _fmt_pct(snapshot.get("atr_pct"))
     volume = _fmt_pct(snapshot.get("volume_vs_20d_pct"), signed=True)
+    volatility = _fmt_pct(snapshot.get("volatility_20d_pct"))
+    support = _fmt_price(snapshot.get("support_60d"))
+    resistance = _fmt_price(snapshot.get("resistance_60d"))
     return (
         f"Bull flag detecte: {bull_flag}. Distance du plus haut 52 semaines: {drawdown}; "
-        f"ATR/price: {atr}; volume vs moyenne 20 jours: {volume}."
+        f"ATR/price: {atr}; volatilite annualisee 20j: {volatility}; volume vs moyenne 20 jours: {volume}. "
+        f"Zone 60j: support {support}, resistance {resistance}."
     )
 
 

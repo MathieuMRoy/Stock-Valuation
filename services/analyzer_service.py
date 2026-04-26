@@ -9,6 +9,7 @@ import pandas as pd
 
 from data import get_benchmark_data
 from .data_quality import build_data_quality_report, safe_float
+from .sector_profiles import get_sector_profile
 
 
 FINANCIAL_DATA_CACHE_VERSION = "2026-04-06-ai-news-v4"
@@ -80,6 +81,7 @@ class AnalyzerSnapshot:
     quote_currency: str
     financial_currency: str
     is_financial: bool
+    sector_profile: dict
     next_earnings: str
     revenue_basis: str
     eps_basis: str
@@ -148,9 +150,7 @@ def extract_next_earnings(calendar_data) -> str:
 
 def is_financial_company(sector_name: str | None, benchmark_name: str | None) -> bool:
     """Detect banks and other financial institutions needing special heuristics."""
-    text = " ".join([str(sector_name or ""), str(benchmark_name or "")]).lower()
-    keywords = ["financial", "bank", "banks", "insurance", "capital markets", "asset management"]
-    return any(keyword in text for keyword in keywords)
+    return get_sector_profile(sector_name, benchmark_name).key == "financial"
 
 
 def risk_label(altman_z: float | None, piotroski: int | None, is_financial: bool = False) -> str:
@@ -196,18 +196,7 @@ def profile_label(
 
 def business_model_hint(sector_name: str | None, benchmark_name: str | None) -> str:
     """Provide a compact business-model descriptor for cross-sector comparisons."""
-    text = " ".join([str(sector_name or ""), str(benchmark_name or "")]).lower()
-    if "energy" in text or "oil" in text or "gas" in text:
-        return "energy producer with commodity-price exposure"
-    if "bank" in text or "financial" in text:
-        return "financial institution driven by capital strength and credit quality"
-    if "consumer app" in text or "platform" in text or "streaming" in text:
-        return "consumer platform with growth-sensitive multiples"
-    if "saas" in text or "cloud" in text or "software" in text or "technology" in text:
-        return "software or platform business with valuation sensitivity to growth"
-    if "pharma" in text or "biotech" in text:
-        return "healthcare business influenced by product pipeline and regulation"
-    return f"company exposed to the {sector_name or benchmark_name or 'broader market'} cycle"
+    return get_sector_profile(sector_name, benchmark_name).business_model
 
 
 def build_investor_objective_snapshot(objective_key: str) -> dict:
@@ -322,14 +311,18 @@ def prepare_analyzer_snapshot(
     sales_growth = safe_float(data.get("rev_growth"))
     eps_growth = safe_float(data.get("eps_growth"))
     bench_data = get_benchmark_data(ticker, data.get("sector", "Default"))
-    is_financial = is_financial_company(data.get("sector", "Default"), bench_data.get("name"))
+    sector_profile = get_sector_profile(data.get("sector", "Default"), bench_data.get("name"))
+    is_financial = sector_profile.key == "financial"
 
     metrics = {
         "company_name": data.get("long_name", ticker),
         "ticker": ticker,
         "sector_name": data.get("sector", "Default"),
         "benchmark_name": bench_data.get("name"),
-        "business_model_hint": business_model_hint(data.get("sector", "Default"), bench_data.get("name")),
+        "business_model_hint": sector_profile.business_model,
+        "sector_profile_key": sector_profile.key,
+        "sector_profile_label": sector_profile.label,
+        "sector_prompt_hint": sector_profile.ai_prompt_hint,
         "price": current_price,
         "pe": pe,
         "forward_pe": forward_pe,
@@ -372,6 +365,10 @@ def prepare_analyzer_snapshot(
         valuation_warnings.append("EPS TTM unavailable or negative; P/E valuation is disabled.")
     if fcf_ttm <= 0 and not is_financial:
         valuation_warnings.append("FCF TTM unavailable or negative; DCF valuation is disabled.")
+    if sector_profile.key != "default" and sector_profile.avoid_metrics:
+        valuation_warnings.append(
+            f"Sector note: avoid over-weighting {', '.join(sector_profile.avoid_metrics)} for this profile."
+        )
 
     return AnalyzerSnapshot(
         ticker=ticker,
@@ -402,6 +399,7 @@ def prepare_analyzer_snapshot(
         quote_currency=quote_currency,
         financial_currency=financial_currency,
         is_financial=is_financial,
+        sector_profile=sector_profile.as_dict(),
         next_earnings=extract_next_earnings(data.get("calendar")),
         revenue_basis=statement_basis_label(data.get("inc_q"), data.get("inc_a"), "Yahoo info fallback"),
         eps_basis=(

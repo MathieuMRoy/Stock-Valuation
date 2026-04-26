@@ -2,7 +2,24 @@
 Technical Charts - Price chart visualization
 """
 import pandas as pd
-import streamlit as st
+
+try:
+    import streamlit as st
+except ImportError:  # pragma: no cover - used by lightweight test environments
+    class _StreamlitFallback:
+        @staticmethod
+        def warning(message):
+            return None
+
+        @staticmethod
+        def info(message):
+            return None
+
+        @staticmethod
+        def pyplot(fig):
+            return None
+
+    st = _StreamlitFallback()
 
 # Check for matplotlib availability
 try:
