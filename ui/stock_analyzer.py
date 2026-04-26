@@ -26,10 +26,11 @@ from services import (
     INVESTOR_OBJECTIVES,
     blend_reasonable_intrinsic_values,
     build_investor_objective_snapshot,
+    combined_risk_label,
+    market_risk_label,
     prepare_analyzer_snapshot,
     profile_label,
     quality_label,
-    risk_label,
     sector_profile_summary,
     upside_pct,
     valuation_label,
@@ -480,6 +481,7 @@ def render_stock_analyzer(api_key: str, sidebar_state: dict | None = None):
                 pattern = bull_flag_score(tech_df)
                 tech = summarize_technical_setup(tech_df, pattern)
             tech_bundle = {"price_df": price_df, "tech_df": tech_df, "tech": tech}
+            st.session_state[f"ai_chat_tech_{ticker_final}"] = dict(tech)
         return tech_bundle
 
     # Help section
@@ -531,7 +533,14 @@ def render_stock_analyzer(api_key: str, sidebar_state: dict | None = None):
     analyst_gap = ((analyst_target / current_price) - 1) * 100 if analyst_target and current_price else 0.0
     next_earnings = snapshot.next_earnings
     valuation_verdict = valuation_label(valuation_gap)
-    risk_verdict = risk_label(altman_z, piotroski, is_financial=is_financial)
+    technical_for_risk = load_technical_bundle()["tech"]
+    risk_verdict = combined_risk_label(
+        altman_z,
+        piotroski,
+        is_financial=is_financial,
+        technical=technical_for_risk,
+    )
+    market_risk_verdict = market_risk_label(technical_for_risk)
     profile_verdict = profile_label(cur_sales_gr, cur_eps_gr, ps, float(bench_data.get("ps", 0) or 0), is_financial=is_financial)
 
     _render_overview_card(
@@ -561,6 +570,11 @@ def render_stock_analyzer(api_key: str, sidebar_state: dict | None = None):
     else:
         top_metrics[3].metric("Cash net / dette", _format_market_cap(cash - debt))
     top_metrics[4].metric("Prochaine publication", next_earnings)
+    st.caption(
+        f"Risque marche: {market_risk_verdict}. "
+        f"Drawdown 52W { _format_pct(technical_for_risk.get('drawdown_from_52w_high_pct'), signed=True) }, "
+        f"volatilite 20j { _format_pct(technical_for_risk.get('volatility_20d_pct')) }."
+    )
 
     revenue_basis = snapshot.revenue_basis
     eps_basis = snapshot.eps_basis
@@ -579,7 +593,7 @@ def render_stock_analyzer(api_key: str, sidebar_state: dict | None = None):
         )
     )
     quality_status = quality_label(snapshot.data_quality)
-    cached_technical_snapshot = st.session_state.get(f"ai_chat_tech_{ticker_final}", {})
+    cached_technical_snapshot = technical_for_risk
     _render_quality_badges(quality_status, str(sector_profile.get("label") or "General"), cached_technical_snapshot)
 
     _render_context_banner(

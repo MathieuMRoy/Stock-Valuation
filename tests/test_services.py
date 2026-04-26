@@ -8,10 +8,12 @@ from services import (
     blend_reasonable_intrinsic_values,
     build_data_quality_report,
     build_investor_objective_snapshot,
+    combined_risk_label,
     extract_next_earnings,
     get_sector_profile,
     is_financial_company,
     is_reasonable_intrinsic_value,
+    market_risk_label,
     market_cap_ok,
     profile_label,
     quick_intrinsic_dcf,
@@ -47,11 +49,25 @@ class AnalyzerServiceTests(unittest.TestCase):
         self.assertIn("cycle", profile.valuation_caveat.lower())
 
     def test_labels_cover_core_paths(self):
-        self.assertEqual(risk_label(3.5, 7), "Lower risk")
+        self.assertEqual(risk_label(3.5, 7), "Lower financial risk")
         self.assertEqual(risk_label(None, 7, is_financial=True), "Stable bank profile")
         self.assertEqual(valuation_label(25), "Undervalued setup")
         self.assertEqual(valuation_label(-25), "Rich valuation")
         self.assertEqual(profile_label(0.25, 0.18, 8.0, 6.0), "Growth-oriented profile")
+
+    def test_combined_risk_blocks_lower_label_after_big_drawdown(self):
+        technical = {
+            "drawdown_from_52w_high_pct": -80.0,
+            "volatility_20d_pct": 45.0,
+            "technical_score_out_of_10": 4.0,
+            "momentum_3m_pct": -55.0,
+        }
+
+        self.assertEqual(market_risk_label(technical), "Severe market risk")
+        self.assertEqual(
+            combined_risk_label(4.2, 8, technical=technical),
+            "Severe market risk",
+        )
 
     def test_objective_snapshot_falls_back_to_balanced(self):
         snapshot = build_investor_objective_snapshot("unknown")
