@@ -8,6 +8,7 @@ from ai.comparison_utils import (
     objective_conclusion,
 )
 from ai.response_utils import compose_professional_response, dedupe_repetitive_sentences
+from ai.technical_utils import compose_technical_response, technical_snapshot_is_sparse
 
 
 class ResponseUtilsTests(unittest.TestCase):
@@ -75,6 +76,49 @@ class ComparisonUtilsTests(unittest.TestCase):
         self.assertIn("P/E n'est pas vraiment exploitable pour RKLB", text)
         self.assertIn("MDA.TO", text)
         self.assertNotIn("RKLB semble moins cher sur le P/E", text)
+
+
+class TechnicalUtilsTests(unittest.TestCase):
+    def test_sparse_technical_snapshot_does_not_become_fake_bearish_signal(self):
+        response = compose_technical_response(
+            "DUOL",
+            {"technical_score_out_of_10": 0.0, "bull_flag_detected": False},
+        )
+
+        self.assertTrue(technical_snapshot_is_sparse({"technical_score_out_of_10": 0.0}))
+        self.assertIn("pas assez de donnees techniques fiables", response)
+        self.assertNotIn("0.0/10", response)
+        self.assertNotIn("reste fragile", response)
+
+    def test_rich_technical_snapshot_mentions_trend_momentum_and_rsi(self):
+        response = compose_technical_response(
+            "DUOL",
+            {
+                "technical_score_out_of_10": 7.5,
+                "bull_flag_detected": True,
+                "latest_close": 100,
+                "last_price_date": "2026-04-24",
+                "sma20": 96,
+                "sma50": 92,
+                "sma200": 80,
+                "distance_to_sma20_pct": 4.2,
+                "distance_to_sma50_pct": 8.7,
+                "distance_to_sma200_pct": 25.0,
+                "rsi14": 62,
+                "macd_status": "positif",
+                "momentum_1m_pct": 12,
+                "momentum_3m_pct": 18,
+                "momentum_6m_pct": 22,
+                "drawdown_from_52w_high_pct": -8,
+                "atr_pct": 4.5,
+                "volume_vs_20d_pct": 15,
+            },
+        )
+
+        self.assertIn("setup constructif", response)
+        self.assertIn("SMA50", response)
+        self.assertIn("RSI 62.0", response)
+        self.assertIn("1 mois +12.0%", response)
 
 
 if __name__ == "__main__":

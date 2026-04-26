@@ -27,6 +27,7 @@ from . import comparison_utils as _comparison_helpers
 from .models import AgentTracePayload, ChatSessionContext, StockContext
 from . import primitives as _primitive_helpers
 from . import response_utils as _response_helpers
+from . import technical_utils as _technical_helpers
 from .router import (
     SpecialistRouter,
     looks_like_agent_meta_request as _router_looks_like_agent_meta_request,
@@ -52,7 +53,7 @@ from technical import add_indicators, bull_flag_score, fetch_price_history
 MODEL_NAME = "gemini-3.1-pro-preview"
 APP_NAME = "stock_valuation_multi_agent"
 SUPERVISOR_AGENT_NAME = "stock_chat_supervisor"
-CHAT_ENGINE_VERSION = "2026-04-20-specialist-ai-v8"
+CHAT_ENGINE_VERSION = "2026-04-26-technical-agent-v1"
 SPECIALIST_MAX_OUTPUT_TOKENS = 750
 SPECIALIST_MAX_REFINEMENT_PASSES = 2
 
@@ -1515,6 +1516,165 @@ def _get_cached_sec_snapshot(chat_context: dict[str, Any], ticker: str) -> dict[
     )
 
 
+def _numeric_series(df: pd.DataFrame, column: str) -> pd.Series:
+    if df is None or df.empty or column not in df.columns:
+        return pd.Series(dtype="float64")
+    return pd.to_numeric(df[column], errors="coerce").dropna()
+
+
+def _latest_row_value(row: pd.Series, column: str) -> float | None:
+    if column not in row:
+        return None
+    return _to_float(row.get(column))
+
+
+def _pct_change_over_sessions(close_series: pd.Series, sessions: int) -> float | None:
+    if close_series is None or close_series.empty or len(close_series) <= sessions:
+        return None
+    latest = close_series.iloc[-1]
+    previous = close_series.iloc[-sessions - 1]
+    if not previous:
+        return None
+    return _to_float(((latest / previous) - 1) * 100)
+
+
+def _date_label(value: Any) -> str | None:
+    if value is None:
+        return None
+    try:
+        parsed = pd.to_datetime(value, errors="coerce")
+        if pd.notna(parsed):
+            return pd.Timestamp(parsed).date().isoformat()
+    except Exception:
+        pass
+    text = str(value).strip()
+    return text[:10] if text else None
+
+
+def _build_technical_snapshot_from_price_frame(ticker: str, price_df: pd.DataFrame) -> dict[str, Any]:
+    clean_ticker = str(ticker or "").upper().strip()
+    if price_df is None or price_df.empty:
+        return {
+            "technical_score_out_of_10": None,
+            "bull_flag_detected": False,
+            "data_quality": "insufficient",
+            "diagnostic": f"No price history available for {clean_ticker}.",
+        }
+
+    tech_df = add_indicators(price_df)
+    if tech_df is None or tech_df.empty:
+        return {
+            "technical_score_out_of_10": None,
+            "bull_flag_detected": False,
+            "data_quality": "insufficient",
+            "diagnostic": f"Price history for {clean_ticker} could not be enriched with indicators.",
+        }
+
+    pattern = bull_flag_score(tech_df)
+    snapshot = _build_technical_snapshot(pattern)
+    close_series = _numeric_series(tech_df, "Close")
+    if close_series.empty:
+        snapshot.update(
+            {
+                "data_quality": "insufficient",
+                "diagnostic": f"No usable close prices available for {clean_ticker}.",
+            }
+        )
+        return snapshot
+
+    clean_df = tech_df.dropna(subset=["Close"]).copy()
+    latest_row = clean_df.iloc[-1]
+    latest_close = _to_float(close_series.iloc[-1])
+
+    snapshot.update(
+        {
+            "data_quality": "rich" if len(close_series) >= 80 else "limited",
+            "data_points": int(len(close_series)),
+            "latest_close": latest_close,
+            "last_price_date": _date_label(latest_row.get("Date")) if "Date" in latest_row else None,
+            "sma20": _latest_row_value(latest_row, "SMA20"),
+            "sma50": _latest_row_value(latest_row, "SMA50"),
+            "sma100": _latest_row_value(latest_row, "SMA100"),
+            "sma200": _latest_row_value(latest_row, "SMA200"),
+            "rsi14": _latest_row_value(latest_row, "RSI14"),
+            "macd": _latest_row_value(latest_row, "MACD"),
+            "macd_signal": _latest_row_value(latest_row, "MACDSignal"),
+            "atr": _latest_row_value(latest_row, "ATR"),
+            "momentum_1m_pct": _pct_change_over_sessions(close_series, 21),
+            "momentum_3m_pct": _pct_change_over_sessions(close_series, 63),
+            "momentum_6m_pct": _pct_change_over_sessions(close_series, 126),
+            "high_52w": _to_float(close_series.max()),
+            "low_52w": _to_float(close_series.min()),
+        }
+    )
+
+    for key, label in (("sma20", "distance_to_sma20_pct"), ("sma50", "distance_to_sma50_pct"), ("sma200", "distance_to_sma200_pct")):
+        average = _to_float(snapshot.get(key))
+        if latest_close is not None and average and average > 0:
+            snapshot[label] = _to_float(((latest_close / average) - 1) * 100)
+
+    high_52w = _to_float(snapshot.get("high_52w"))
+    if latest_close is not None and high_52w and high_52w > 0:
+        snapshot["drawdown_from_52w_high_pct"] = _to_float(((latest_close / high_52w) - 1) * 100)
+
+    atr = _to_float(snapshot.get("atr"))
+    if latest_close is not None and atr is not None and latest_close > 0:
+        snapshot["atr_pct"] = _to_float((atr / latest_close) * 100)
+
+    macd = _to_float(snapshot.get("macd"))
+    macd_signal = _to_float(snapshot.get("macd_signal"))
+    if macd is not None and macd_signal is not None:
+        snapshot["macd_status"] = "positif" if macd >= macd_signal else "negatif"
+
+    volume_series = _numeric_series(tech_df, "Volume")
+    if len(volume_series) >= 20:
+        volume_avg_20d = volume_series.iloc[-20:].mean()
+        latest_volume = volume_series.iloc[-1]
+        if volume_avg_20d:
+            snapshot["volume_vs_20d_pct"] = _to_float(((latest_volume / volume_avg_20d) - 1) * 100)
+
+    return snapshot
+
+
+def _build_technical_snapshot_from_history(ticker: str) -> dict[str, Any]:
+    try:
+        price_df = fetch_price_history(ticker, "1y")
+        return _build_technical_snapshot_from_price_frame(ticker, price_df)
+    except Exception as exc:
+        return {
+            "technical_score_out_of_10": None,
+            "bull_flag_detected": False,
+            "data_quality": "insufficient",
+            "diagnostic": f"Unable to fetch price history for {ticker}: {exc}",
+        }
+
+
+def _ensure_enriched_technical_snapshot(
+    chat_context: dict[str, Any],
+    ticker: str,
+    base_snapshot: dict[str, Any],
+) -> dict[str, Any]:
+    clean_ticker = str(ticker or "").upper().strip()
+    base = dict(base_snapshot or {})
+    if not clean_ticker or not _technical_helpers.technical_snapshot_is_sparse(base):
+        return base
+
+    enriched = _get_cached_chat_value(
+        chat_context,
+        "technical_history_snapshots",
+        clean_ticker,
+        lambda: _build_technical_snapshot_from_history(clean_ticker),
+    )
+    merged = {**base, **(enriched or {})}
+    fallback_context = chat_context.get("fallback_context")
+    if isinstance(fallback_context, dict):
+        fallback_context["technical"] = merged
+    stock_context = chat_context.get("stock_context")
+    if isinstance(stock_context, dict):
+        stock_context["technical"] = merged
+    return merged
+
+
 def _build_local_news_response(chat_context: dict[str, Any], user_message: str) -> tuple[str | None, dict[str, Any] | None]:
     """Generate a personalized news answer for the current ticker."""
     fallback_context = chat_context.get("fallback_context") or {}
@@ -1756,23 +1916,12 @@ def _build_local_technical_response(chat_context: dict[str, Any], user_message: 
         return None, None
 
     trace = _build_agent_trace(["technical_agent", SUPERVISOR_AGENT_NAME], SUPERVISOR_AGENT_NAME)
-
-    score = technical.get("technical_score_out_of_10", "N/A")
-    bull_flag = "oui" if technical.get("bull_flag_detected") else "non"
-    score_value = _to_float(score) or 0.0
-    if score_value >= 7:
-        opening = f"Techniquement, {ticker} garde plutot un setup constructif."
-    elif score_value >= 5:
-        opening = f"Techniquement, {ticker} est plutot neutre a legerement positif."
-    else:
-        opening = f"Techniquement, {ticker} reste fragile ou peu convaincant pour l'instant."
-    fallback_text = _compose_professional_response(
-        opening,
-        [
-            ("Momentum", f"Score technique {score}/10."),
-            ("Signal", f"Bull flag detecte: {bull_flag}."),
-            ("Lecture investisseur", "A utiliser surtout comme lecture de momentum et de timing, pas comme these d'investissement complete a lui seul."),
-        ],
+    technical = _ensure_enriched_technical_snapshot(chat_context, ticker, technical)
+    source_refs = fallback_context.get("sources")
+    fallback_text = _technical_helpers.compose_technical_response(
+        ticker,
+        technical,
+        source_refs=source_refs,
     )
     context_payload = {
         "ticker": ticker,
@@ -1780,6 +1929,7 @@ def _build_local_technical_response(chat_context: dict[str, Any], user_message: 
         "company_snapshot": company,
         "technical_snapshot": technical,
         "investor_objective": chat_context.get("investor_objective"),
+        "source_refs": source_refs,
     }
     return _maybe_refine_specialist_response(
         chat_context=chat_context,
@@ -1788,8 +1938,8 @@ def _build_local_technical_response(chat_context: dict[str, Any], user_message: 
         context_payload=context_payload,
         system_instruction=_specialist_system_instruction(
             "Tu es le technical_agent. Reponds en francais et adapte la lecture technique a la question precise de l'utilisateur. "
-            "Explique le setup, le momentum et le risque de court terme sans transformer cela en conseil ferme. "
-            "Utilise les chiffres techniques fournis et dis quand le signal est faible ou incomplet."
+            "Explique le setup, le momentum, les moyennes mobiles, le RSI et le risque de court terme sans transformer cela en conseil ferme. "
+            "Si les donnees techniques sont insuffisantes, dis-le clairement plutot que de conclure que le titre est faible."
         ),
         fallback_text=fallback_text,
     ), trace
@@ -2540,10 +2690,44 @@ def _build_peer_snapshot(bench: dict) -> dict[str, Any]:
 
 
 def _build_technical_snapshot(tech: dict) -> dict[str, Any]:
-    return {
-        "technical_score_out_of_10": _to_float(tech.get("score")),
-        "bull_flag_detected": bool(tech.get("is_bull_flag")),
+    payload = tech or {}
+    snapshot = {
+        "technical_score_out_of_10": _to_float(payload.get("score", payload.get("technical_score_out_of_10"))),
+        "bull_flag_detected": bool(payload.get("is_bull_flag", payload.get("bull_flag_detected", False))),
     }
+
+    numeric_keys = (
+        "data_points",
+        "latest_close",
+        "sma20",
+        "sma50",
+        "sma100",
+        "sma200",
+        "distance_to_sma20_pct",
+        "distance_to_sma50_pct",
+        "distance_to_sma200_pct",
+        "rsi14",
+        "macd",
+        "macd_signal",
+        "atr",
+        "atr_pct",
+        "momentum_1m_pct",
+        "momentum_3m_pct",
+        "momentum_6m_pct",
+        "high_52w",
+        "low_52w",
+        "drawdown_from_52w_high_pct",
+        "volume_vs_20d_pct",
+    )
+    for key in numeric_keys:
+        if key in payload:
+            snapshot[key] = _to_float(payload.get(key))
+
+    for key in ("notes", "data_quality", "diagnostic", "last_price_date", "macd_status"):
+        if payload.get(key) is not None:
+            snapshot[key] = payload.get(key)
+
+    return snapshot
 
 
 def _quote_page_url(ticker: str) -> str:
@@ -2927,8 +3111,7 @@ def _compute_stock_context(ticker: str, include_technical: bool = True) -> dict[
 
     if include_technical:
         price_df = fetch_price_history(ticker, "1y")
-        tech_df = add_indicators(price_df)
-        technical = bull_flag_score(tech_df)
+        technical = _build_technical_snapshot_from_price_frame(ticker, price_df)
     else:
         technical = {}
 
