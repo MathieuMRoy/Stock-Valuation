@@ -17,10 +17,13 @@ from scoring import plot_radar
 from ai import build_ai_chat_signature, chat_with_ai_analyst, create_ai_chat_session
 from services import (
     INVESTOR_OBJECTIVES,
+    blend_reasonable_intrinsic_values,
     build_investor_objective_snapshot,
     prepare_analyzer_snapshot,
     profile_label,
+    quality_label,
     risk_label,
+    upside_pct,
     valuation_label,
 )
 
@@ -64,14 +67,6 @@ def _format_market_cap(value: float | None) -> str:
     if abs(value) >= 1_000_000:
         return f"{value / 1_000_000:.2f} M$"
     return f"{value:,.0f} $"
-
-
-def _blend_intrinsic(values: list[float]) -> float:
-    """Blend positive valuation outputs into a single quick-read figure."""
-    positives = [float(value) for value in values if value and float(value) > 0]
-    if not positives:
-        return 0.0
-    return sum(positives) / len(positives)
 
 
 def _render_context_banner(title: str, copy: str):
@@ -389,8 +384,12 @@ def render_stock_analyzer(api_key: str, sidebar_state: dict | None = None):
     base_res = run_calc(1.0, 1.0, 0.0)
     bull_res = run_calc(1.2, 1.2, -0.01)
 
-    blended_intrinsic = _blend_intrinsic([base_res[0], base_res[1], base_res[2]])
-    valuation_gap = ((blended_intrinsic / current_price) - 1) * 100 if blended_intrinsic and current_price else 0.0
+    blended_intrinsic, guardrail_warnings = blend_reasonable_intrinsic_values(
+        {"DCF": base_res[0], "P/S": base_res[1], "P/E": base_res[2]},
+        current_price,
+    )
+    valuation_gap_raw = upside_pct(blended_intrinsic, current_price)
+    valuation_gap = valuation_gap_raw if valuation_gap_raw is not None else 0.0
     analyst_target = float(data.get("target_price") or 0)
     analyst_gap = ((analyst_target / current_price) - 1) * 100 if analyst_target and current_price else 0.0
     next_earnings = snapshot.next_earnings
@@ -410,7 +409,11 @@ def render_stock_analyzer(api_key: str, sidebar_state: dict | None = None):
 
     top_metrics = st.columns(5)
     top_metrics[0].metric("Prix actuel", f"{current_price:.2f} $")
-    top_metrics[1].metric("Juste valeur mixte", _format_currency(blended_intrinsic), delta=f"{valuation_gap:+.1f}%")
+    top_metrics[1].metric(
+        "Juste valeur mixte",
+        _format_currency(blended_intrinsic),
+        delta=f"{valuation_gap:+.1f}%" if valuation_gap_raw is not None else None,
+    )
     top_metrics[2].metric(
         "Objectif analystes",
         _format_currency(analyst_target if analyst_target > 0 else None),
@@ -428,17 +431,23 @@ def render_stock_analyzer(api_key: str, sidebar_state: dict | None = None):
     as_of_date = date.today().isoformat()
     recent_news_count = snapshot.recent_news_count
     press_release_count = snapshot.press_release_count
+    all_quality_notes = list(dict.fromkeys([*snapshot.data_quality_reasons, *snapshot.valuation_warnings, *guardrail_warnings]))
+    quality_status = quality_label(snapshot.data_quality)
 
     _render_context_banner(
         "Etat des donnees",
-        f"Mis a jour au {as_of_date}. Cache {FINANCIAL_DATA_CACHE_VERSION}. Les prix viennent du flux live, les etats sont caches, et le chat consomme ce meme contexte date.",
+        f"Statut {quality_status}. Mis a jour au {as_of_date}. Cache {FINANCIAL_DATA_CACHE_VERSION}. Les prix viennent du flux live, les etats sont caches, et le chat consomme ce meme contexte date.",
     )
+    if all_quality_notes:
+        with st.expander("Notes de qualite des donnees et garde-fous", expanded=snapshot.data_quality == "critical"):
+            for note in all_quality_notes[:8]:
+                st.caption(f"- {note}")
     _render_provenance_panel(
         [
             {
                 "label": "Marche",
                 "source": "Yahoo Finance quote + recommendations",
-                "meta": f"Au {as_of_date} | Devise de cotation {quote_currency}",
+                "meta": f"Au {as_of_date} | Devise de cotation {quote_currency} | Qualite {quality_status}",
                 "copy": f"Le prix actuel et l'objectif analystes viennent du flux live de {ticker_final}.",
             },
             {
@@ -456,6 +465,12 @@ def render_stock_analyzer(api_key: str, sidebar_state: dict | None = None):
                     if not is_financial
                     else f"Revenu TTM {_format_market_cap(revenue_ttm)} et dernieres lignes d'etats utilisees, sans raccourci de dette nette pour les banques."
                 ),
+            },
+            {
+                "label": "Garde-fous valuation",
+                "source": "Sanity checks internes",
+                "meta": f"{len(guardrail_warnings)} sorties filtrees | {len(snapshot.valuation_warnings)} alertes de donnees",
+                "copy": "La juste valeur mixte ignore les sorties negatives, manquantes ou trop extremes afin d'eviter les faux upside spectaculaires.",
             },
             {
                 "label": "Contexte IA news",

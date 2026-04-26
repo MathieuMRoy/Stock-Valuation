@@ -1,8 +1,8 @@
 """
 Yahoo Finance data fetcher - Robust functions for fetching financial data
 """
+import logging
 import pandas as pd
-import yfinance as yf
 import yfinance as yf
 import streamlit as st
 import requests
@@ -11,6 +11,15 @@ import re
 from .news import fetch_ir_press_releases, fetch_recent_company_news
 
 FINANCIAL_DATA_CACHE_VERSION = "2026-04-06-ai-news-v4"
+LOGGER = logging.getLogger(__name__)
+
+
+def _record_warning(out: dict, message: str, exc: Exception | None = None):
+    warnings = out.setdefault("warnings", [])
+    if message not in warnings:
+        warnings.append(message)
+    if exc is not None:
+        LOGGER.debug("%s: %s", message, exc)
 
 
 def _safe_df(x) -> pd.DataFrame:
@@ -94,7 +103,8 @@ def _scrape_yahoo_price(ticker: str) -> float:
             return float(match_streamer.group(1))
             
         return 0.0
-    except:
+    except Exception as exc:
+        LOGGER.debug("Yahoo HTML price scrape failed for %s: %s", ticker, exc)
         return 0.0
 
 
@@ -103,19 +113,19 @@ def _robust_price(stock: yf.Ticker, ticker: str) -> float:
     try:
         if hasattr(stock, 'fast_info'):
             return float(stock.fast_info['last_price'])
-    except:
-        pass
+    except Exception as exc:
+        LOGGER.debug("fast_info last_price failed for %s: %s", ticker, exc)
     try:
         hist = stock.history(period="1d")
         if not hist.empty and "Close" in hist.columns:
             return float(hist["Close"].iloc[-1])
-    except:
-        pass
+    except Exception as exc:
+        LOGGER.debug("history price fallback failed for %s: %s", ticker, exc)
     try:
         info = stock.info or {}
         return float(info.get("currentPrice") or info.get("regularMarketPrice") or 0.0)
-    except:
-        pass
+    except Exception as exc:
+        LOGGER.debug("info price fallback failed for %s: %s", ticker, exc)
     return _scrape_yahoo_price(ticker)
 
 
@@ -124,8 +134,8 @@ def _robust_shares(stock: yf.Ticker) -> float:
     shares = 0.0
     try:
         shares = float(stock.info.get("sharesOutstanding", 0))
-    except:
-        pass
+    except Exception as exc:
+        LOGGER.debug("sharesOutstanding lookup failed: %s", exc)
     if shares <= 0:
         try:
             if hasattr(stock, 'fast_info'):
@@ -133,8 +143,8 @@ def _robust_shares(stock: yf.Ticker) -> float:
                 price = stock.fast_info['last_price']
                 if price > 0:
                     shares = mcap / price
-        except:
-            pass
+        except Exception as exc:
+            LOGGER.debug("fast_info share fallback failed: %s", exc)
     return shares
 
 
@@ -153,7 +163,8 @@ def get_growth_manual(df: pd.DataFrame, keys: list) -> float:
         elif len(vals) >= 2 and vals[1] != 0:
             return float((vals[0] - vals[1]) / abs(vals[1]))
         return 0.0
-    except:
+    except Exception as exc:
+        LOGGER.debug("Manual growth calculation failed: %s", exc)
         return 0.0
 
 
@@ -168,7 +179,8 @@ def get_item_safe(df: pd.DataFrame, search_terms: list) -> float:
             if isinstance(val, pd.Series):
                 return float(val.iloc[0])
             return float(val)
-        except:
+        except Exception as exc:
+            LOGGER.debug("Could not parse item %s: %s", search_terms, exc)
             return 0.0
     return 0.0
 
@@ -284,7 +296,8 @@ def get_financial_data_secure(ticker: str, cache_version: str = FINANCIAL_DATA_C
         "price": 0.0, "shares_info": 0.0, "sector": "Default",
         "rev_growth": 0.0, "eps_growth": 0.0, "trailing_eps": 0.0, "pe_ratio": 0.0, "forward_pe": 0.0, "dividend_yield": 0.0, "revenue_ttm": 0.0,
         "quote_currency": None, "financial_currency": None,
-        "long_name": ticker, "industry": None, "quote_type": None, "error": None, "market_cap": None, "insiders": pd.DataFrame()
+        "long_name": ticker, "industry": None, "quote_type": None, "error": None, "market_cap": None, "insiders": pd.DataFrame(),
+        "warnings": [], "data_quality": "unchecked", "data_quality_reasons": [],
     }
     try:
         stock = yf.Ticker(ticker)
@@ -294,8 +307,8 @@ def get_financial_data_secure(ticker: str, cache_version: str = FINANCIAL_DATA_C
         full_info = {}
         try:
             full_info = stock.info or {}
-        except:
-            pass
+        except Exception as exc:
+            _record_warning(out, "Yahoo info payload unavailable.", exc)
 
         out["sector"] = full_info.get("sector", "Default") or "Default"
         out["industry"] = full_info.get("industry")
@@ -320,6 +333,7 @@ def get_financial_data_secure(ticker: str, cache_version: str = FINANCIAL_DATA_C
             out["market_cap"] = full_info.get("marketCap", None)
             if out["market_cap"] and out["price"] > 0:
                 out["shares_calc"] = float(out["market_cap"]) / float(out["price"])
+                _record_warning(out, "Shares outstanding estimated from market cap / price.")
 
         bs_q = _safe_df(getattr(stock, "quarterly_balance_sheet", None))
         inc_q = _safe_df(getattr(stock, "quarterly_financials", None))
@@ -341,8 +355,8 @@ def get_financial_data_secure(ticker: str, cache_version: str = FINANCIAL_DATA_C
         
         try:
             out["insiders"] = _safe_df(stock.insider_transactions)
-        except:
-            pass
+        except Exception as exc:
+            _record_warning(out, "Insider transactions unavailable.", exc)
 
         if out["rev_growth"] == 0:
             out["rev_growth"] = float(get_growth_manual(out["inc"], ["TotalRevenue", "Revenue"]) or 0)
@@ -351,16 +365,41 @@ def get_financial_data_secure(ticker: str, cache_version: str = FINANCIAL_DATA_C
 
         try:
             out["reco_summary"] = getattr(stock, "recommendations_summary", None)
-        except:
-            pass
+        except Exception as exc:
+            _record_warning(out, "Recommendation summary unavailable.", exc)
         try:
             out["calendar"] = getattr(stock, "calendar", None)
-        except:
-            pass
+        except Exception as exc:
+            _record_warning(out, "Earnings calendar unavailable.", exc)
         out["news"] = fetch_recent_company_news(ticker, out["long_name"])
         out["ir_news"] = fetch_ir_press_releases(out["long_name"])
+
+        quality_reasons = []
+        if out["price"] <= 0:
+            quality_reasons.append("Current price missing.")
+        if out["shares_info"] <= 0 and not out.get("shares_calc") and not out.get("market_cap"):
+            quality_reasons.append("Share count and market cap missing.")
+        if out["revenue_ttm"] <= 0:
+            quality_reasons.append("Revenue TTM missing.")
+        if out["bs"].empty:
+            quality_reasons.append("Balance sheet missing.")
+        if out["inc"].empty:
+            quality_reasons.append("Income statement missing.")
+        if out["cf"].empty:
+            quality_reasons.append("Cash-flow statement missing.")
+
+        out["data_quality_reasons"] = quality_reasons + out.get("warnings", [])
+        if out["price"] <= 0 or (out["shares_info"] <= 0 and not out.get("shares_calc") and not out.get("market_cap")):
+            out["data_quality"] = "critical"
+        elif quality_reasons or out.get("warnings"):
+            out["data_quality"] = "warning"
+        else:
+            out["data_quality"] = "ok"
         
         return out
     except Exception as e:
+        LOGGER.exception("Financial data fetch failed for %s", ticker)
         out["error"] = str(e)
+        out["data_quality"] = "critical"
+        out["data_quality_reasons"] = [str(e)]
         return out

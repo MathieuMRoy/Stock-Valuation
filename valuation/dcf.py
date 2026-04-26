@@ -2,6 +2,20 @@
 DCF Valuation - Discounted Cash Flow and reverse DCF calculations
 """
 
+TERMINAL_GROWTH_RATE = 0.03
+MIN_TERMINAL_SPREAD = 0.005
+MIN_GROWTH_RATE = -0.50
+MAX_GROWTH_RATE = 0.50
+
+
+def _bounded_growth(value: float) -> float:
+    """Keep user/model assumptions inside a sane valuation range."""
+    try:
+        number = float(value or 0)
+    except (TypeError, ValueError):
+        return 0.0
+    return max(MIN_GROWTH_RATE, min(number, MAX_GROWTH_RATE))
+
 
 def calculate_valuation(
     gr_sales: float,
@@ -39,18 +53,22 @@ def calculate_valuation(
     """
     current_fcf = float(fcf or 0)
     safe_shares = max(shares, 1.0)
+    gr_sales = _bounded_growth(gr_sales)
+    gr_fcf = _bounded_growth(gr_fcf)
+    gr_eps = _bounded_growth(gr_eps)
+    wacc_val = float(wacc_val or 0)
     
     # DCF Calculation
-    if current_fcf <= 0 or wacc_val <= 0:
+    if current_fcf <= 0 or wacc_val <= TERMINAL_GROWTH_RATE + MIN_TERMINAL_SPREAD:
         price_dcf = 0.0
     else:
         fcf_projections = [current_fcf * (1 + gr_fcf) ** (i + 1) for i in range(5)]
-        terminal_val = (fcf_projections[-1] * 1.03) / max((wacc_val - 0.03), 1e-6)
+        terminal_val = (fcf_projections[-1] * (1 + TERMINAL_GROWTH_RATE)) / (wacc_val - TERMINAL_GROWTH_RATE)
         pv_fcf = sum([val / ((1 + wacc_val) ** (i + 1)) for i, val in enumerate(fcf_projections)])
         price_dcf = ((pv_fcf + (terminal_val / ((1 + wacc_val) ** 5))) + cash - debt) / safe_shares
 
     # P/S Calculation (using WACC for discounting)
-    if revenue <= 0:
+    if revenue <= 0 or wacc_val <= 0 or ps_target <= 0:
         price_sales = 0.0
     else:
         future_market_cap = (revenue * ((1 + gr_sales) ** 5)) * ps_target
@@ -58,7 +76,7 @@ def calculate_valuation(
         price_sales = discounted_mc / safe_shares
 
     # P/E Calculation
-    if eps <= 0:
+    if eps <= 0 or wacc_val <= 0 or pe_target <= 0:
         price_earnings = 0.0
     else:
         eps_future = eps * ((1 + gr_eps) ** 5)

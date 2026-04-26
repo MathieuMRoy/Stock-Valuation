@@ -3,16 +3,20 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import logging
 from typing import Callable, Iterable
 
 import pandas as pd
 
+from .data_quality import safe_float
+from .valuation_guardrails import MAX_REASONABLE_UPSIDE_PCT, is_reasonable_intrinsic_value, upside_pct
+
 ProgressCallback = Callable[[int, int, str, str], None]
 FINANCIAL_DATA_CACHE_VERSION = "2026-04-06-ai-news-v4"
-MAX_REASONABLE_UPSIDE_PCT = 300.0
 NON_OPERATING_QUOTE_TYPES = {"etf", "fund", "mutualfund", "closedendfund", "trust", "index", "commodity"}
 UNSUITABLE_SECTOR_KEYWORDS = {"financial", "financial services", "banks", "insurance"}
 CYCLICAL_SECTOR_KEYWORDS = {"energy", "basic materials", "materials"}
+LOGGER = logging.getLogger(__name__)
 
 
 @dataclass(slots=True)
@@ -144,8 +148,8 @@ def _is_unsuitable_for_fast_dcf(data: dict) -> bool:
 
 def _conservative_growth_rate(data: dict, fallback_fcf_growth_pct: float) -> float:
     sector = _normalized_text(data.get("sector"))
-    observed_growth = float(data.get("rev_growth", 0) or 0)
-    fallback_growth = max(float(fallback_fcf_growth_pct or 0) / 100.0, 0.02)
+    observed_growth = safe_float(data.get("rev_growth"))
+    fallback_growth = max(safe_float(fallback_fcf_growth_pct) / 100.0, 0.02)
 
     if _is_cyclical_sector(sector):
         lower_bound, upper_bound = 0.00, 0.05
@@ -158,7 +162,7 @@ def _conservative_growth_rate(data: dict, fallback_fcf_growth_pct: float) -> flo
 
 def _sector_adjusted_wacc(data: dict, wacc_pct: float) -> float:
     sector = _normalized_text(data.get("sector"))
-    base_wacc = max(float(wacc_pct or 0) / 100.0, 0.08)
+    base_wacc = max(safe_float(wacc_pct) / 100.0, 0.08)
 
     if _is_cyclical_sector(sector):
         base_wacc += 0.02
@@ -207,9 +211,20 @@ def quick_intrinsic_dcf(
         data_fetcher = data_fetcher or get_financial_data_secure
         valuation_calculator = valuation_calculator or calculate_valuation
 
-    data = data_fetcher(ticker, cache_version=cache_version)
-    price = float(data.get("price", 0) or 0)
-    shares = float(data.get("shares_info", 0) or 0)
+    try:
+        data = data_fetcher(ticker, cache_version=cache_version)
+    except Exception as exc:
+        LOGGER.warning("Skipping %s because data fetch failed: %s", ticker, exc)
+        return None
+
+    if data.get("data_quality") == "critical":
+        LOGGER.info("Skipping %s because data quality is critical: %s", ticker, data.get("data_quality_reasons"))
+        return None
+
+    price = safe_float(data.get("price"))
+    shares = safe_float(data.get("shares_info"))
+    if shares <= 0 and safe_float(data.get("market_cap")) > 0 and price > 0:
+        shares = safe_float(data.get("market_cap")) / price
     if price <= 0 or shares <= 0:
         return None
     if not market_cap_ok(data, minimum_market_cap):
@@ -217,7 +232,7 @@ def quick_intrinsic_dcf(
     if _is_unsuitable_for_fast_dcf(data):
         return None
 
-    market_cap = float(data.get("market_cap", 0) or 0)
+    market_cap = safe_float(data.get("market_cap"))
     if market_cap <= 0:
         market_cap = shares * price
     if market_cap <= 0:
@@ -250,18 +265,19 @@ def quick_intrinsic_dcf(
         debt,
         shares,
     )
-    if dcf_value <= 0:
+    if not is_reasonable_intrinsic_value(dcf_value, price, max_upside_pct=MAX_REASONABLE_UPSIDE_PCT):
+        LOGGER.info("Skipping %s because DCF value is outside guardrails: price=%s value=%s", ticker, price, dcf_value)
         return None
 
-    upside_pct = (dcf_value / price - 1) * 100
-    if upside_pct <= 0 or upside_pct > MAX_REASONABLE_UPSIDE_PCT:
+    candidate_upside = upside_pct(dcf_value, price)
+    if candidate_upside is None or candidate_upside <= 0:
         return None
 
     return ScreenerCandidate(
         ticker=ticker,
         price=price,
         intrinsic=dcf_value,
-        upside=upside_pct,
+        upside=candidate_upside,
         bucket=str(data.get("sector") or "Unknown"),
     )
 
