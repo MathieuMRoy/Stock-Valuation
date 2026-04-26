@@ -8,6 +8,7 @@ from datetime import date
 import pandas as pd
 
 from data import get_benchmark_data
+from .data_quality import build_data_quality_report, safe_float
 
 
 FINANCIAL_DATA_CACHE_VERSION = "2026-04-06-ai-news-v4"
@@ -86,6 +87,10 @@ class AnalyzerSnapshot:
     press_release_count: int
     manual_shares_applied: bool
     share_count_unavailable: bool
+    share_count_estimated: bool
+    data_quality: str
+    data_quality_reasons: list[str]
+    valuation_warnings: list[str]
 
 
 def extract_next_earnings(calendar_data) -> str:
@@ -226,6 +231,32 @@ def statement_basis_label(df_quarterly, df_annual, fallback_label: str) -> str:
     return fallback_label
 
 
+def resolve_share_count(
+    *,
+    price: float,
+    raw_shares: float,
+    reported_market_cap: float,
+    manual_shares_millions: float = 0.0,
+) -> tuple[float, float, bool, bool, bool]:
+    """Resolve shares/market cap without silently using one fake share."""
+    manual_applied = manual_shares_millions > 0
+    if manual_applied:
+        shares = manual_shares_millions * 1_000_000
+        market_cap = shares * price if price > 0 else reported_market_cap
+        return shares, market_cap, False, False, True
+
+    if raw_shares > 1:
+        market_cap = raw_shares * price if price > 0 else reported_market_cap
+        if reported_market_cap > 0 and price > 0:
+            market_cap = reported_market_cap
+        return raw_shares, market_cap, False, False, False
+
+    if reported_market_cap > 0 and price > 0:
+        return reported_market_cap / price, reported_market_cap, False, True, False
+
+    return 1.0, max(reported_market_cap, 0.0), True, False, False
+
+
 def prepare_analyzer_snapshot(
     ticker: str,
     manual_shares_millions: float = 0.0,
@@ -237,23 +268,23 @@ def prepare_analyzer_snapshot(
 
     data = get_financial_data_secure(ticker, cache_version=cache_version)
 
-    current_price = float(data.get("price", 0) or 0)
+    current_price = safe_float(data.get("price"))
     bs = data.get("bs", pd.DataFrame())
     inc = data.get("inc", pd.DataFrame())
     cf = data.get("cf", pd.DataFrame())
     piotroski = calculate_piotroski_score(bs, inc, cf)
 
-    raw_shares = float(data.get("shares_info", 0) or 0)
-    manual_shares_applied = manual_shares_millions > 0
-    shares = manual_shares_millions * 1_000_000 if manual_shares_applied else raw_shares
-    share_count_unavailable = shares <= 1
-    if share_count_unavailable:
-        shares = 1.0
-
-    market_cap = shares * current_price
+    raw_shares = safe_float(data.get("shares_info"))
+    reported_market_cap = safe_float(data.get("market_cap"))
+    shares, market_cap, share_count_unavailable, share_count_estimated, manual_shares_applied = resolve_share_count(
+        price=current_price,
+        raw_shares=raw_shares,
+        reported_market_cap=reported_market_cap,
+        manual_shares_millions=manual_shares_millions,
+    )
     altman_z = calculate_altman_z(bs, inc, market_cap) if current_price > 0 else 0.0
 
-    revenue_ttm = float(data.get("revenue_ttm", 0) or 0)
+    revenue_ttm = safe_float(data.get("revenue_ttm"))
     if revenue_ttm == 0:
         revenue_ttm = get_ttm_or_latest(inc, ["TotalRevenue", "Revenue"])
 
@@ -263,7 +294,7 @@ def prepare_analyzer_snapshot(
     cash = get_item_safe(bs, ["CashAndCashEquivalents", "Cash"])
     debt = get_debt_safe(bs)
 
-    eps_ttm = float(data.get("trailing_eps", 0) or 0)
+    eps_ttm = safe_float(data.get("trailing_eps"))
     if eps_ttm == 0:
         inc_q = data.get("inc_q")
         inc_a = data.get("inc_a")
@@ -279,17 +310,17 @@ def prepare_analyzer_snapshot(
         if shares > 0:
             eps_ttm = net_inc_ttm / shares
 
-    pe = float(data.get("pe_ratio", 0) or 0)
+    pe = safe_float(data.get("pe_ratio"))
     if pe == 0 and eps_ttm > 0:
         pe = current_price / eps_ttm
 
-    forward_pe = float(data.get("forward_pe", 0) or 0)
+    forward_pe = safe_float(data.get("forward_pe"))
     quote_currency = str(data.get("quote_currency") or "N/A")
     financial_currency = str(data.get("financial_currency") or quote_currency or "N/A")
     ps = market_cap / revenue_ttm if revenue_ttm > 0 else 0
 
-    sales_growth = float(data.get("rev_growth", 0) or 0)
-    eps_growth = float(data.get("eps_growth", 0) or 0)
+    sales_growth = safe_float(data.get("rev_growth"))
+    eps_growth = safe_float(data.get("eps_growth"))
     bench_data = get_benchmark_data(ticker, data.get("sector", "Default"))
     is_financial = is_financial_company(data.get("sector", "Default"), bench_data.get("name"))
 
@@ -305,7 +336,7 @@ def prepare_analyzer_snapshot(
         "ps": ps,
         "sales_gr": sales_growth,
         "eps_gr": eps_growth,
-        "dividend_yield": float(data.get("dividend_yield", 0) or 0),
+        "dividend_yield": safe_float(data.get("dividend_yield")),
         "trailing_eps": eps_ttm,
         "quote_currency": quote_currency,
         "financial_currency": financial_currency,
@@ -317,6 +348,30 @@ def prepare_analyzer_snapshot(
         "is_financial": is_financial,
     }
     scores = score_out_of_10(metrics, bench_data)
+    data_quality_report = build_data_quality_report(
+        price=current_price,
+        shares=shares,
+        market_cap=market_cap,
+        revenue_ttm=revenue_ttm,
+        eps_ttm=eps_ttm,
+        fcf_ttm=fcf_ttm,
+        balance_sheet=bs,
+        income_statement=inc,
+        cash_flow=cf,
+        fetcher_warnings=list(data.get("data_quality_reasons") or data.get("warnings") or []),
+        fetcher_error=data.get("error"),
+    )
+    valuation_warnings: list[str] = []
+    if share_count_estimated:
+        valuation_warnings.append("Share count estimated from reported market cap and current price.")
+    if share_count_unavailable:
+        valuation_warnings.append("Share count unavailable; per-share values are not reliable until manually overridden.")
+    if revenue_ttm <= 0:
+        valuation_warnings.append("Revenue TTM unavailable; P/S valuation is disabled.")
+    if eps_ttm <= 0:
+        valuation_warnings.append("EPS TTM unavailable or negative; P/E valuation is disabled.")
+    if fcf_ttm <= 0 and not is_financial:
+        valuation_warnings.append("FCF TTM unavailable or negative; DCF valuation is disabled.")
 
     return AnalyzerSnapshot(
         ticker=ticker,
@@ -351,11 +406,15 @@ def prepare_analyzer_snapshot(
         revenue_basis=statement_basis_label(data.get("inc_q"), data.get("inc_a"), "Yahoo info fallback"),
         eps_basis=(
             "Yahoo trailing EPS"
-            if float(data.get("trailing_eps", 0) or 0)
+            if safe_float(data.get("trailing_eps"))
             else statement_basis_label(data.get("inc_q"), data.get("inc_a"), "Net income fallback")
         ),
         recent_news_count=len(data.get("news") or []),
         press_release_count=len(data.get("ir_news") or []),
         manual_shares_applied=manual_shares_applied,
         share_count_unavailable=share_count_unavailable,
+        share_count_estimated=share_count_estimated,
+        data_quality=data_quality_report.status,
+        data_quality_reasons=[*data_quality_report.blockers, *data_quality_report.warnings],
+        valuation_warnings=list(dict.fromkeys(valuation_warnings)),
     )

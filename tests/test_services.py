@@ -1,18 +1,31 @@
 import unittest
+from importlib.util import module_from_spec, spec_from_file_location
+from pathlib import Path
 
 import pandas as pd
 
 from services import (
+    blend_reasonable_intrinsic_values,
+    build_data_quality_report,
     build_investor_objective_snapshot,
     extract_next_earnings,
     is_financial_company,
+    is_reasonable_intrinsic_value,
     market_cap_ok,
     profile_label,
     quick_intrinsic_dcf,
+    resolve_share_count,
     risk_label,
     run_screener,
+    upside_pct,
     valuation_label,
 )
+
+_DCF_SPEC = spec_from_file_location("dcf_module", Path(__file__).resolve().parents[1] / "valuation" / "dcf.py")
+_DCF_MODULE = module_from_spec(_DCF_SPEC)
+assert _DCF_SPEC and _DCF_SPEC.loader
+_DCF_SPEC.loader.exec_module(_DCF_MODULE)
+calculate_valuation = _DCF_MODULE.calculate_valuation
 
 
 class AnalyzerServiceTests(unittest.TestCase):
@@ -35,6 +48,64 @@ class AnalyzerServiceTests(unittest.TestCase):
         snapshot = build_investor_objective_snapshot("unknown")
         self.assertEqual(snapshot["key"], "balanced")
         self.assertEqual(snapshot["label"], "Equilibre")
+
+    def test_resolve_share_count_estimates_from_market_cap_when_shares_missing(self):
+        shares, market_cap, unavailable, estimated, manual = resolve_share_count(
+            price=25.0,
+            raw_shares=0.0,
+            reported_market_cap=2_500_000_000.0,
+        )
+
+        self.assertEqual(shares, 100_000_000.0)
+        self.assertEqual(market_cap, 2_500_000_000.0)
+        self.assertFalse(unavailable)
+        self.assertTrue(estimated)
+        self.assertFalse(manual)
+
+    def test_data_quality_report_marks_missing_core_inputs_critical(self):
+        report = build_data_quality_report(
+            price=0,
+            shares=0,
+            market_cap=0,
+            revenue_ttm=0,
+            eps_ttm=0,
+            fcf_ttm=0,
+            balance_sheet=pd.DataFrame(),
+            income_statement=pd.DataFrame(),
+            cash_flow=pd.DataFrame(),
+        )
+
+        self.assertEqual(report.status, "critical")
+        self.assertIn("Current price is missing.", report.blockers)
+
+    def test_valuation_guardrails_filter_unrealistic_intrinsic_values(self):
+        self.assertTrue(is_reasonable_intrinsic_value(130, 100))
+        self.assertFalse(is_reasonable_intrinsic_value(1000, 100))
+        self.assertAlmostEqual(upside_pct(130, 100), 30.0)
+
+        blended, warnings = blend_reasonable_intrinsic_values({"DCF": 1000, "P/S": 120, "P/E": 0}, 100)
+        self.assertEqual(blended, 120)
+        self.assertEqual(len(warnings), 2)
+
+    def test_dcf_guardrail_blocks_terminal_spread_explosion(self):
+        dcf, sales, earnings = calculate_valuation(
+            0.1,
+            0.1,
+            0.1,
+            0.031,
+            5,
+            20,
+            1_000_000_000,
+            100_000_000,
+            1.0,
+            0,
+            0,
+            100_000_000,
+        )
+
+        self.assertEqual(dcf, 0.0)
+        self.assertGreater(sales, 0.0)
+        self.assertGreater(earnings, 0.0)
 
 
 class ScreenerEngineTests(unittest.TestCase):
@@ -103,6 +174,21 @@ class ScreenerEngineTests(unittest.TestCase):
             wacc_pct=10.0,
             data_fetcher=lambda ticker, cache_version: self._base_screening_payload(),
             valuation_calculator=lambda *args: (60.0, 0.0, 0.0),
+        )
+
+        self.assertIsNone(candidate)
+
+    def test_quick_intrinsic_dcf_skips_critical_data_quality(self):
+        candidate = quick_intrinsic_dcf(
+            "BROKEN",
+            minimum_market_cap=1_000_000_000,
+            fallback_fcf_growth_pct=15.0,
+            wacc_pct=10.0,
+            data_fetcher=lambda ticker, cache_version: self._base_screening_payload(
+                data_quality="critical",
+                data_quality_reasons=["Current price missing."],
+            ),
+            valuation_calculator=lambda *args: (25.0, 0.0, 0.0),
         )
 
         self.assertIsNone(candidate)
