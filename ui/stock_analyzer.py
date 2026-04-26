@@ -12,7 +12,14 @@ from data import TICKER_DB
 from fetchers.yahoo_finance import FINANCIAL_DATA_CACHE_VERSION
 from fetchers.stock_analysis import get_extended_history
 from valuation import calculate_valuation, solve_reverse_dcf, display_relative_analysis, compute_asset_based_value
-from technical import fetch_price_history, add_indicators, bull_flag_score, plot_technical_chart, plot_fundamental_overlay
+from technical import (
+    fetch_price_history,
+    add_indicators,
+    bull_flag_score,
+    summarize_technical_setup,
+    plot_technical_chart,
+    plot_fundamental_overlay,
+)
 from scoring import plot_radar
 from ai import build_ai_chat_signature, chat_with_ai_analyst, create_ai_chat_session
 from services import (
@@ -23,6 +30,7 @@ from services import (
     profile_label,
     quality_label,
     risk_label,
+    sector_profile_summary,
     upside_pct,
     valuation_label,
 )
@@ -69,6 +77,28 @@ def _format_market_cap(value: float | None) -> str:
     return f"{value:,.0f} $"
 
 
+def _format_pct(value: float | None, decimals: int = 1, signed: bool = False) -> str:
+    """Format percentage values that are already expressed in percentage points."""
+    if value is None:
+        return "N/A"
+    try:
+        number = float(value)
+    except Exception:
+        return "N/A"
+    prefix = "+" if signed and number > 0 else ""
+    return f"{prefix}{number:.{decimals}f}%"
+
+
+def _format_ratio(value: float | None, decimals: int = 1) -> str:
+    if value is None:
+        return "N/A"
+    try:
+        number = float(value)
+    except Exception:
+        return "N/A"
+    return f"{number:.{decimals}f}x" if number > 0 else "N/A"
+
+
 def _render_context_banner(title: str, copy: str):
     """Render a compact context banner above the chat or data source blocks."""
     st.markdown(
@@ -80,6 +110,113 @@ def _render_context_banner(title: str, copy: str):
         """,
         unsafe_allow_html=True,
     )
+
+
+def _render_quality_badges(quality_status: str, sector_label: str, technical_snapshot: dict | None = None):
+    """Render compact reliability/context badges near the top of the report."""
+    tech = technical_snapshot or {}
+    technical_label = tech.get("trend_label") or "Technique lazy-load"
+    st.markdown(
+        f"""
+        <div class="vmp-chip-row">
+            <span class="vmp-chip">Donnees: {escape(quality_status)}</span>
+            <span class="vmp-chip">Secteur: {escape(sector_label)}</span>
+            <span class="vmp-chip">Technique: {escape(str(technical_label))}</span>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def _build_export_report(
+    *,
+    ticker: str,
+    snapshot,
+    blended_intrinsic: float | None,
+    valuation_gap_raw: float | None,
+    analyst_target: float,
+    quality_status: str,
+    sector_profile: dict,
+    technical_snapshot: dict | None = None,
+) -> str:
+    """Build a clean markdown export of the current stock analysis."""
+    tech = technical_snapshot or {}
+    sector_metrics = ", ".join(sector_profile.get("primary_metrics") or [])
+    caveats = [
+        sector_profile.get("valuation_caveat"),
+        sector_profile.get("risk_caveat"),
+        *snapshot.data_quality_reasons[:4],
+        *snapshot.valuation_warnings[:4],
+    ]
+    caveat_lines = "\n".join(f"- {item}" for item in dict.fromkeys(item for item in caveats if item))
+
+    technical_lines = "Technical data has not been loaded yet."
+    if tech.get("data_quality") and tech.get("data_quality") != "insufficient":
+        technical_lines = "\n".join(
+            [
+                f"- Trend: {tech.get('trend_label', 'N/A')}",
+                f"- Score: {_format_ratio(tech.get('technical_score_out_of_10'), 1).replace('x', '/10')}",
+                f"- RSI: {_format_pct(tech.get('rsi14'), 1).replace('%', '')}",
+                f"- 3M momentum: {_format_pct(tech.get('momentum_3m_pct'), signed=True)}",
+                f"- Drawdown from 52W high: {_format_pct(tech.get('drawdown_from_52w_high_pct'), signed=True)}",
+            ]
+        )
+
+    return "\n".join(
+        [
+            f"# {ticker} stock analysis",
+            "",
+            f"Generated: {date.today().isoformat()}",
+            f"Data quality: {quality_status}",
+            f"Sector profile: {sector_profile.get('label', 'N/A')}",
+            "",
+            "## Snapshot",
+            f"- Current price: {_format_currency(snapshot.current_price)}",
+            f"- Blended fair value: {_format_currency(blended_intrinsic)}",
+            f"- Blended upside: {_format_pct(valuation_gap_raw, signed=True)}",
+            f"- Analyst target: {_format_currency(analyst_target if analyst_target > 0 else None)}",
+            f"- Market cap: {_format_market_cap(snapshot.market_cap)}",
+            "",
+            "## Sector lens",
+            f"- Business model: {sector_profile.get('business_model', 'N/A')}",
+            f"- Primary metrics: {sector_metrics or 'N/A'}",
+            f"- Benchmark: {snapshot.bench_data.get('name', 'N/A')}",
+            "",
+            "## Core metrics",
+            f"- Sales growth: {snapshot.sales_growth * 100:.1f}%",
+            f"- EPS growth: {snapshot.eps_growth * 100:.1f}%",
+            f"- P/S: {_format_ratio(snapshot.ps)}",
+            f"- P/E: {_format_ratio(snapshot.pe)}",
+            f"- Forward P/E: {_format_ratio(snapshot.forward_pe)}",
+            f"- Piotroski: {snapshot.piotroski if snapshot.piotroski is not None else 'N/A'}",
+            f"- Altman Z: {snapshot.altman_z if snapshot.altman_z is not None else 'N/A'}",
+            "",
+            "## Technicals",
+            technical_lines,
+            "",
+            "## Caveats",
+            caveat_lines or "- No major caveat flagged by the app.",
+            "",
+            "Educational use only. This is not financial advice.",
+        ]
+    )
+
+
+def _valuation_candidates_for_sector(base_res: tuple, sector_profile: dict) -> tuple[dict[str, float], list[str]]:
+    """Select valuation methods that make sense for the company's sector."""
+    key = str(sector_profile.get("key") or "default")
+    all_candidates = {"DCF": base_res[0], "P/S": base_res[1], "P/E": base_res[2]}
+
+    if key == "financial":
+        return {"P/E": base_res[2]}, ["Sector guardrail: bank/financial blend excludes DCF and P/S shortcuts."]
+    if key == "energy":
+        return {"DCF": base_res[0], "P/E": base_res[2]}, ["Sector guardrail: energy blend excludes P/S and favours cash-flow plus cycle-aware earnings."]
+    if key in {"industrial", "healthcare"}:
+        return {"DCF": base_res[0], "P/E": base_res[2]}, [f"Sector guardrail: {key} blend favours earnings and cash-flow over pure sales multiples."]
+    if key == "software":
+        return all_candidates, ["Sector guardrail: software/platform blend keeps P/S because earnings may still be scaling."]
+
+    return all_candidates, []
 
 
 def _render_provenance_panel(entries: list[dict]):
@@ -328,6 +465,7 @@ def render_stock_analyzer(api_key: str, sidebar_state: dict | None = None):
     cur_eps_gr = snapshot.eps_growth
     bench_data = snapshot.bench_data
     is_financial = snapshot.is_financial
+    sector_profile = snapshot.sector_profile
     metrics = snapshot.metrics
     scores = snapshot.scores
 
@@ -339,7 +477,8 @@ def render_stock_analyzer(api_key: str, sidebar_state: dict | None = None):
             with st.spinner("Loading technical dataset..."):
                 price_df = fetch_price_history(ticker_final, "1y")
                 tech_df = add_indicators(price_df)
-                tech = bull_flag_score(tech_df)
+                pattern = bull_flag_score(tech_df)
+                tech = summarize_technical_setup(tech_df, pattern)
             tech_bundle = {"price_df": price_df, "tech_df": tech_df, "tech": tech}
         return tech_bundle
 
@@ -384,10 +523,8 @@ def render_stock_analyzer(api_key: str, sidebar_state: dict | None = None):
     base_res = run_calc(1.0, 1.0, 0.0)
     bull_res = run_calc(1.2, 1.2, -0.01)
 
-    blended_intrinsic, guardrail_warnings = blend_reasonable_intrinsic_values(
-        {"DCF": base_res[0], "P/S": base_res[1], "P/E": base_res[2]},
-        current_price,
-    )
+    sector_candidates, sector_guardrail_notes = _valuation_candidates_for_sector(base_res, sector_profile)
+    blended_intrinsic, guardrail_warnings = blend_reasonable_intrinsic_values(sector_candidates, current_price)
     valuation_gap_raw = upside_pct(blended_intrinsic, current_price)
     valuation_gap = valuation_gap_raw if valuation_gap_raw is not None else 0.0
     analyst_target = float(data.get("target_price") or 0)
@@ -431,17 +568,59 @@ def render_stock_analyzer(api_key: str, sidebar_state: dict | None = None):
     as_of_date = date.today().isoformat()
     recent_news_count = snapshot.recent_news_count
     press_release_count = snapshot.press_release_count
-    all_quality_notes = list(dict.fromkeys([*snapshot.data_quality_reasons, *snapshot.valuation_warnings, *guardrail_warnings]))
+    all_quality_notes = list(
+        dict.fromkeys(
+            [
+                *snapshot.data_quality_reasons,
+                *snapshot.valuation_warnings,
+                *sector_guardrail_notes,
+                *guardrail_warnings,
+            ]
+        )
+    )
     quality_status = quality_label(snapshot.data_quality)
+    cached_technical_snapshot = st.session_state.get(f"ai_chat_tech_{ticker_final}", {})
+    _render_quality_badges(quality_status, str(sector_profile.get("label") or "General"), cached_technical_snapshot)
 
     _render_context_banner(
         "Etat des donnees",
         f"Statut {quality_status}. Mis a jour au {as_of_date}. Cache {FINANCIAL_DATA_CACHE_VERSION}. Les prix viennent du flux live, les etats sont caches, et le chat consomme ce meme contexte date.",
     )
+    _render_context_banner(
+        "Lecture sectorielle",
+        (
+            f"{sector_profile_summary(sector_profile)} "
+            f"{sector_profile.get('valuation_caveat', '')} "
+            f"{sector_profile.get('risk_caveat', '')}"
+        ),
+    )
     if all_quality_notes:
         with st.expander("Notes de qualite des donnees et garde-fous", expanded=snapshot.data_quality == "critical"):
             for note in all_quality_notes[:8]:
                 st.caption(f"- {note}")
+    with st.expander("Rapport exportable et limites de lecture", expanded=False):
+        st.caption("Le rapport reprend les chiffres visibles, les garde-fous et les limites sectorielles.")
+        report_markdown = _build_export_report(
+            ticker=ticker_final,
+            snapshot=snapshot,
+            blended_intrinsic=blended_intrinsic,
+            valuation_gap_raw=valuation_gap_raw,
+            analyst_target=analyst_target,
+            quality_status=quality_status,
+            sector_profile=sector_profile,
+            technical_snapshot=cached_technical_snapshot,
+        )
+        st.download_button(
+            "Exporter le rapport Markdown",
+            data=report_markdown,
+            file_name=f"{ticker_final}_valuation_report.md",
+            mime="text/markdown",
+            use_container_width=True,
+        )
+        st.caption(
+            "Limite importante: les modeles de valorisation ne remplacent pas une verification manuelle des etats financiers, "
+            "surtout pour les banques, les ressources et les dossiers cycliques."
+        )
     _render_provenance_panel(
         [
             {
@@ -469,8 +648,14 @@ def render_stock_analyzer(api_key: str, sidebar_state: dict | None = None):
             {
                 "label": "Garde-fous valuation",
                 "source": "Sanity checks internes",
-                "meta": f"{len(guardrail_warnings)} sorties filtrees | {len(snapshot.valuation_warnings)} alertes de donnees",
+                "meta": f"{len(guardrail_warnings)} sorties filtrees | {len(sector_guardrail_notes)} regle(s) sectorielle(s)",
                 "copy": "La juste valeur mixte ignore les sorties negatives, manquantes ou trop extremes afin d'eviter les faux upside spectaculaires.",
+            },
+            {
+                "label": "Lecture sectorielle",
+                "source": sector_profile.get("label", "General operating company"),
+                "meta": "Modele d'affaires + metriques prioritaires",
+                "copy": sector_profile.get("valuation_caveat", "La lecture depend du secteur et du cycle."),
             },
             {
                 "label": "Contexte IA news",
@@ -577,10 +762,7 @@ def render_stock_analyzer(api_key: str, sidebar_state: dict | None = None):
         price_df = technical_data["price_df"]
         tech_df = technical_data["tech_df"]
         tech = technical_data["tech"]
-        st.session_state[f"ai_chat_tech_{ticker_final}"] = {
-            "score": tech.get("score", 0),
-            "is_bull_flag": bool(tech.get("is_bull_flag", False)),
-        }
+        st.session_state[f"ai_chat_tech_{ticker_final}"] = dict(tech)
     else:
         price_df = pd.DataFrame()
         tech_df = pd.DataFrame()
@@ -830,6 +1012,7 @@ def render_stock_analyzer(api_key: str, sidebar_state: dict | None = None):
 
     elif section == "💵 DCF (Cash)":
         st.subheader("💵 Buy Price (DCF)")
+        st.caption(sector_profile.get("valuation_caveat", "Use DCF with sanity checks."))
         c1, c2 = st.columns(2)
         c1.metric("Current Price", f"{current_price:.2f} $")
         c2.metric("Intrinsic (Neutral)", f"{base_res[0]:.2f} $", delta=f"{base_res[0]-current_price:.2f}")
@@ -859,6 +1042,7 @@ def render_stock_analyzer(api_key: str, sidebar_state: dict | None = None):
 
     elif section == "📈 Sales (P/S)":
         st.subheader("📈 Buy Price (Sales)")
+        st.caption(sector_profile.get("valuation_caveat", "Compare P/S against similar business models."))
         c1, c2 = st.columns(2)
         c1.metric("Current Price", f"{current_price:.2f} $")
         c2.metric("Intrinsic (Neutral)", f"{base_res[1]:.2f} $", delta=f"{base_res[1]-current_price:.2f}")
@@ -877,6 +1061,7 @@ def render_stock_analyzer(api_key: str, sidebar_state: dict | None = None):
 
     elif section == "💰 Earnings (P/E)":
         st.subheader("💰 Buy Price (P/E)")
+        st.caption(sector_profile.get("valuation_caveat", "Compare P/E against peers with similar cyclicality and margin profile."))
         c1, c2 = st.columns(2)
         c1.metric("Current Price", f"{current_price:.2f} $")
         c2.metric("Intrinsic (Neutral)", f"{base_res[2]:.2f} $", delta=f"{base_res[2]-current_price:.2f}")
@@ -1091,9 +1276,35 @@ def render_stock_analyzer(api_key: str, sidebar_state: dict | None = None):
 
     elif section == "📉 Tech":
         st.subheader("📉 Technical Analysis")
-        c1, c2 = st.columns(2)
-        c1.metric("Bull Flag Score", f"{tech['score']}/10")
-        c2.metric("Pattern", "Bull Flag" if tech['is_bull_flag'] else "None")
+        st.caption(
+            "Lecture technique basee sur tendance, RSI, moyennes mobiles, momentum, volatilite, drawdown et zones de support/resistance."
+        )
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("Technical score", f"{tech.get('score', 0):.1f}/10")
+        c2.metric("Trend", tech.get("trend_label", "N/A"))
+        c3.metric("RSI 14", f"{float(tech.get('rsi14') or 0):.1f}" if tech.get("rsi14") is not None else "N/A")
+        c4.metric("3M momentum", _format_pct(tech.get("momentum_3m_pct"), signed=True))
+
+        c5, c6, c7, c8 = st.columns(4)
+        c5.metric("vs SMA50", _format_pct(tech.get("distance_to_sma50_pct"), signed=True))
+        c6.metric("vs SMA200", _format_pct(tech.get("distance_to_sma200_pct"), signed=True))
+        c7.metric("Drawdown 52W", _format_pct(tech.get("drawdown_from_52w_high_pct"), signed=True))
+        c8.metric("Volatilite 20j", _format_pct(tech.get("volatility_20d_pct")))
+
+        support_cols = st.columns(3)
+        support_cols[0].metric("Support 60j", _format_currency(tech.get("support_60d")))
+        support_cols[1].metric("Resistance 60j", _format_currency(tech.get("resistance_60d")))
+        support_cols[2].metric("Timing risk", tech.get("timing_risk_label", "N/A"))
+
+        with st.expander("Comment lire ces signaux", expanded=False):
+            st.write(
+                "Le score technique sert surtout au timing. Un bon dossier fondamental peut rester faible techniquement, "
+                "et un bon setup technique ne suffit pas a valider une these d'investissement."
+            )
+            st.caption(
+                f"Derniere date de prix: {tech.get('last_price_date', 'N/A')}. "
+                f"Donnees utilisees: {tech.get('data_points', 'N/A')} sessions."
+            )
         
         # UI Controls for Chart
         col_overlays, col_indicators = st.columns(2)

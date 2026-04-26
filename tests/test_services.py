@@ -9,6 +9,7 @@ from services import (
     build_data_quality_report,
     build_investor_objective_snapshot,
     extract_next_earnings,
+    get_sector_profile,
     is_financial_company,
     is_reasonable_intrinsic_value,
     market_cap_ok,
@@ -20,6 +21,7 @@ from services import (
     upside_pct,
     valuation_label,
 )
+from technical import add_indicators, summarize_technical_setup
 
 _DCF_SPEC = spec_from_file_location("dcf_module", Path(__file__).resolve().parents[1] / "valuation" / "dcf.py")
 _DCF_MODULE = module_from_spec(_DCF_SPEC)
@@ -36,6 +38,13 @@ class AnalyzerServiceTests(unittest.TestCase):
     def test_is_financial_company_detects_banks(self):
         self.assertTrue(is_financial_company("Financial Services", "Canadian Banks"))
         self.assertFalse(is_financial_company("Technology", "Big Tech / GAFAM"))
+
+    def test_sector_profile_uses_energy_specific_caveats(self):
+        profile = get_sector_profile("Energy", "Energy & Oil Majors")
+
+        self.assertEqual(profile.key, "energy")
+        self.assertIn("Commodity", profile.business_model.title())
+        self.assertIn("cycle", profile.valuation_caveat.lower())
 
     def test_labels_cover_core_paths(self):
         self.assertEqual(risk_label(3.5, 7), "Lower risk")
@@ -227,6 +236,31 @@ class ScreenerEngineTests(unittest.TestCase):
         self.assertEqual(results[0].ticker, "AAA")
         self.assertEqual(results[0].bucket, "Technology (USA)")
         self.assertEqual(progress_calls[0], (1, 2, "Technology", "USA"))
+
+
+class TechnicalSummaryTests(unittest.TestCase):
+    def test_summarize_technical_setup_adds_actionable_metrics(self):
+        dates = pd.date_range("2025-01-01", periods=220, freq="B")
+        close = pd.Series(range(100, 320), dtype="float64")
+        price_frame = pd.DataFrame(
+            {
+                "Date": dates,
+                "Open": close - 1,
+                "High": close + 2,
+                "Low": close - 2,
+                "Close": close,
+                "Volume": [1_000_000 + i * 1000 for i in range(220)],
+            }
+        )
+
+        technical_frame = add_indicators(price_frame)
+        summary = summarize_technical_setup(technical_frame, {"score": 7, "is_bull_flag": True})
+
+        self.assertEqual(summary["data_quality"], "rich")
+        self.assertGreater(summary["technical_score_out_of_10"], 7)
+        self.assertTrue(summary["bull_flag_detected"])
+        self.assertIn("support_60d", summary)
+        self.assertIn("volatility_20d_pct", summary)
 
 
 if __name__ == "__main__":

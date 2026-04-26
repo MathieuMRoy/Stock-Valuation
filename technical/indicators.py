@@ -4,7 +4,19 @@ Technical Indicators - Price history and technical analysis indicators
 import numpy as np
 import pandas as pd
 import yfinance as yf
-import streamlit as st
+
+try:
+    import streamlit as st
+except ImportError:  # pragma: no cover - used by lightweight test environments
+    class _StreamlitFallback:
+        @staticmethod
+        def cache_data(*args, **kwargs):
+            def decorator(func):
+                return func
+
+            return decorator
+
+    st = _StreamlitFallback()
 
 
 @st.cache_data(ttl=1800)

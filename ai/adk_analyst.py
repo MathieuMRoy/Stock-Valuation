@@ -47,13 +47,14 @@ from fetchers.sec_edgar import get_sec_financials
 from fetchers.short_interest import get_historical_short_interest
 from fetchers.yahoo_finance import FINANCIAL_DATA_CACHE_VERSION
 from scoring import calculate_altman_z, calculate_piotroski_score, score_out_of_10
-from technical import add_indicators, bull_flag_score, fetch_price_history
+from services.sector_profiles import get_sector_profile
+from technical import add_indicators, bull_flag_score, fetch_price_history, summarize_technical_setup
 
 
 MODEL_NAME = "gemini-3.1-pro-preview"
 APP_NAME = "stock_valuation_multi_agent"
 SUPERVISOR_AGENT_NAME = "stock_chat_supervisor"
-CHAT_ENGINE_VERSION = "2026-04-26-technical-agent-v1"
+CHAT_ENGINE_VERSION = "2026-04-26-sector-technical-v2"
 SPECIALIST_MAX_OUTPUT_TOKENS = 750
 SPECIALIST_MAX_REFINEMENT_PASSES = 2
 
@@ -1571,7 +1572,7 @@ def _build_technical_snapshot_from_price_frame(ticker: str, price_df: pd.DataFra
         }
 
     pattern = bull_flag_score(tech_df)
-    snapshot = _build_technical_snapshot(pattern)
+    snapshot = summarize_technical_setup(tech_df, pattern)
     close_series = _numeric_series(tech_df, "Close")
     if close_series.empty:
         snapshot.update(
@@ -2577,31 +2578,12 @@ def _normalize_lookup(value: str) -> str:
 
 def _is_financial_company(sector_name: str | None, benchmark_name: str | None) -> bool:
     """Detect financial institutions that should avoid operating-company shortcuts."""
-    text = " ".join([str(sector_name or ""), str(benchmark_name or "")]).lower()
-    keywords = ["financial", "bank", "banks", "insurance", "capital markets", "asset management"]
-    return any(keyword in text for keyword in keywords)
+    return get_sector_profile(sector_name, benchmark_name).key == "financial"
 
 
 def _business_model_hint(sector_name: str | None, benchmark_name: str | None) -> str:
     """Give the model a compact business description to improve cross-sector comparisons."""
-    text = " ".join([str(sector_name or ""), str(benchmark_name or "")]).lower()
-    if "energy" in text or "oil" in text or "gas" in text:
-        return "energy producer with commodity-price exposure"
-    if "bank" in text or "financial" in text:
-        return "financial institution driven by capital strength and credit quality"
-    if "consumer app" in text or "platform" in text or "streaming" in text:
-        return "consumer platform with growth-sensitive multiples"
-    if "saas" in text or "cloud" in text or "software" in text or "technology" in text:
-        return "software or platform business with valuation sensitivity to growth"
-    if "pharma" in text or "biotech" in text:
-        return "healthcare business influenced by product pipeline and regulation"
-    clean_sector = str(sector_name or "").strip()
-    clean_benchmark = str(benchmark_name or "").strip()
-    if clean_sector and clean_sector.lower() != "default":
-        return f"listed company exposed to the {clean_sector} cycle"
-    if clean_benchmark and clean_benchmark.lower() != "default":
-        return f"listed company exposed to the {clean_benchmark} cycle"
-    return "diversified listed company with mixed drivers"
+    return get_sector_profile(sector_name, benchmark_name).business_model
 
 
 def _generate_aliases(company_name: str) -> set[str]:
@@ -2655,6 +2637,9 @@ def _build_company_snapshot(metrics: dict, scores: dict) -> dict[str, Any]:
         "sector_name": metrics.get("sector_name"),
         "benchmark_name": metrics.get("benchmark_name"),
         "business_model_hint": metrics.get("business_model_hint"),
+        "sector_profile_key": metrics.get("sector_profile_key"),
+        "sector_profile_label": metrics.get("sector_profile_label"),
+        "sector_prompt_hint": metrics.get("sector_prompt_hint"),
         "is_financial": bool(metrics.get("is_financial", False)),
         "price": _to_float(metrics.get("price")),
         "pe_ratio": _to_float(metrics.get("pe")),
@@ -2717,13 +2702,19 @@ def _build_technical_snapshot(tech: dict) -> dict[str, Any]:
         "high_52w",
         "low_52w",
         "drawdown_from_52w_high_pct",
+        "volatility_20d_pct",
+        "volatility_60d_pct",
         "volume_vs_20d_pct",
+        "support_20d",
+        "support_60d",
+        "resistance_20d",
+        "resistance_60d",
     )
     for key in numeric_keys:
         if key in payload:
             snapshot[key] = _to_float(payload.get(key))
 
-    for key in ("notes", "data_quality", "diagnostic", "last_price_date", "macd_status"):
+    for key in ("notes", "data_quality", "diagnostic", "last_price_date", "macd_status", "trend_label", "setup_label", "timing_risk_label"):
         if payload.get(key) is not None:
             snapshot[key] = payload.get(key)
 
@@ -3079,7 +3070,8 @@ def _compute_stock_context(ticker: str, include_technical: bool = True) -> dict[
     ps = market_cap / revenue_ttm if market_cap > 0 and revenue_ttm > 0 else 0
 
     benchmark = get_benchmark_data(ticker, data.get("sector", "Default"))
-    is_financial = _is_financial_company(data.get("sector", "Default"), benchmark.get("name"))
+    sector_profile = get_sector_profile(data.get("sector", "Default"), benchmark.get("name"))
+    is_financial = sector_profile.key == "financial"
     piotroski = calculate_piotroski_score(bs, inc, cf)
     altman_z = None if is_financial else calculate_altman_z(bs, inc, market_cap)
 
@@ -3088,7 +3080,10 @@ def _compute_stock_context(ticker: str, include_technical: bool = True) -> dict[
         "ticker": ticker.upper(),
         "sector_name": data.get("sector", "Default"),
         "benchmark_name": benchmark.get("name"),
-        "business_model_hint": _business_model_hint(data.get("sector", "Default"), benchmark.get("name")),
+        "business_model_hint": sector_profile.business_model,
+        "sector_profile_key": sector_profile.key,
+        "sector_profile_label": sector_profile.label,
+        "sector_prompt_hint": sector_profile.ai_prompt_hint,
         "price": current_price,
         "pe": pe,
         "forward_pe": float(data.get("forward_pe", 0) or 0),
