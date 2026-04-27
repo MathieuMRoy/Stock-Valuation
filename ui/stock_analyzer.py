@@ -27,6 +27,7 @@ from services import (
     blend_reasonable_intrinsic_values,
     build_investor_objective_snapshot,
     combined_risk_label,
+    markdown_report_to_pdf_bytes,
     market_risk_label,
     prepare_analyzer_snapshot,
     profile_label,
@@ -624,11 +625,23 @@ def render_stock_analyzer(api_key: str, sidebar_state: dict | None = None):
             sector_profile=sector_profile,
             technical_snapshot=cached_technical_snapshot,
         )
-        st.download_button(
-            "Exporter le rapport Markdown",
+        report_pdf = markdown_report_to_pdf_bytes(
+            report_markdown,
+            document_title=f"{ticker_final} valuation report",
+        )
+        export_cols = st.columns(2)
+        export_cols[0].download_button(
+            "Exporter Markdown",
             data=report_markdown,
             file_name=f"{ticker_final}_valuation_report.md",
             mime="text/markdown",
+            use_container_width=True,
+        )
+        export_cols[1].download_button(
+            "Exporter PDF",
+            data=report_pdf,
+            file_name=f"{ticker_final}_valuation_report.pdf",
+            mime="application/pdf",
             use_container_width=True,
         )
         st.caption(

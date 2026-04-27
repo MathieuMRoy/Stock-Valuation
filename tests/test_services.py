@@ -13,6 +13,7 @@ from services import (
     get_sector_profile,
     is_financial_company,
     is_reasonable_intrinsic_value,
+    markdown_report_to_pdf_bytes,
     market_risk_label,
     market_cap_ok,
     profile_label,
@@ -68,6 +69,23 @@ class AnalyzerServiceTests(unittest.TestCase):
             combined_risk_label(4.2, 8, technical=technical),
             "Severe market risk",
         )
+
+    def test_markdown_report_exports_valid_pdf_bytes(self):
+        pdf_bytes = markdown_report_to_pdf_bytes(
+            "\n".join(
+                [
+                    "# DUOL stock analysis",
+                    "",
+                    "## Snapshot",
+                    "- Current price: 93.53 $",
+                    "- Risk: Severe market risk",
+                ]
+            ),
+            document_title="DUOL valuation report",
+        )
+
+        self.assertTrue(pdf_bytes.startswith(b"%PDF-"))
+        self.assertGreater(len(pdf_bytes), 1_000)
 
     def test_objective_snapshot_falls_back_to_balanced(self):
         snapshot = build_investor_objective_snapshot("unknown")
