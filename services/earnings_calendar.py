@@ -140,23 +140,6 @@ def fetch_nasdaq_earnings_calendar(
     if not events:
         return pd.DataFrame()
 
-    def _patch_mc(ev: dict[str, Any]):
-        try:
-            import yfinance as yf
-            val = getattr(yf.Ticker(ev["Ticker"]).fast_info, "market_cap", 0.0)
-            if val and val > 0:
-                ev["Market Cap Value"] = float(val)
-        except Exception:
-            pass
-
-    import concurrent.futures
-    with concurrent.futures.ThreadPoolExecutor(max_workers=15) as executor:
-        futures = [executor.submit(_patch_mc, ev) for ev in events]
-        concurrent.futures.wait(futures, timeout=8.0)
-
-    # Re-apply the formatting if needed, though calendar_view.py & report_export
-    # mainly rely on 'Market Cap Value' directly anyway.
-
     return (
         pd.DataFrame(events)
         .drop_duplicates(["Ticker", "Date"])
