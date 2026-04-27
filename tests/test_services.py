@@ -1,4 +1,5 @@
 import unittest
+from datetime import date
 from importlib.util import module_from_spec, spec_from_file_location
 from pathlib import Path
 
@@ -10,6 +11,7 @@ from services import (
     build_investor_objective_snapshot,
     combined_risk_label,
     extract_next_earnings,
+    fetch_nasdaq_earnings_for_date,
     get_sector_profile,
     is_financial_company,
     is_reasonable_intrinsic_value,
@@ -37,6 +39,40 @@ class AnalyzerServiceTests(unittest.TestCase):
     def test_extract_next_earnings_from_calendar_dict(self):
         calendar = {"Earnings Date": ["2030-05-10", "2030-08-10"]}
         self.assertTrue(extract_next_earnings(calendar).startswith("2030-05-10"))
+
+    def test_fetch_nasdaq_earnings_for_date_normalizes_rows(self):
+        class FakeResponse:
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return {
+                    "data": {
+                        "rows": [
+                            {
+                                "symbol": "MSFT",
+                                "name": "Microsoft Corporation",
+                                "time": "time-after-hours",
+                                "marketCap": "$3,000,000,000,000",
+                                "fiscalQuarterEnding": "Mar/2026",
+                                "epsForecast": "$3.20",
+                                "noOfEsts": "12",
+                                "lastYearEPS": "$2.94",
+                            }
+                        ]
+                    }
+                }
+
+        events = fetch_nasdaq_earnings_for_date(
+            date(2026, 4, 27),
+            request_get=lambda *args, **kwargs: FakeResponse(),
+        )
+
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0]["Ticker"], "MSFT")
+        self.assertEqual(events[0]["Time"], "After close")
+        self.assertEqual(events[0]["EPS Forecast"], "$3.20")
+        self.assertEqual(events[0]["Source"], "Nasdaq")
 
     def test_is_financial_company_detects_banks(self):
         self.assertTrue(is_financial_company("Financial Services", "Canadian Banks"))
