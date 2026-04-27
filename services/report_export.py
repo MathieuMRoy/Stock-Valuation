@@ -217,13 +217,19 @@ class _PdfReportCanvas:
         self._rect(0, 0, 1, 1, _PAPER)
         self._polygon([(0.78, 1.0), (1.0, 1.0), (1.0, 0.74), (0.88, 0.82)], _CREAM, alpha=0.75)
         self._polygon([(0.0, 0.0), (0.16, 0.0), (0.0, 0.16)], "#d8f3f2", alpha=0.7)
-        self._rect(0, 0.966, 1, 0.034, _NAVY)
-        self._rect(0, 0.966, 0.22, 0.034, _TEAL, alpha=0.95)
-        self._text(_LEFT, 0.983, "Valuation Master Pro", size=8.5, weight="bold", color="white", va="center")
-        self._text(1 - _RIGHT, 0.983, f"PAGE {self.page_number}", size=7.5, color="#d4e7f7", ha="right", va="center")
+        if self.page_number == 1:
+            self._text(_LEFT, 0.967, "VALUATION MASTER PRO", size=8.2, weight="bold", color=_NAVY, va="center")
+            self._rect(_LEFT, 0.945, 0.055, 0.004, _TEAL)
+            self._text(1 - _RIGHT, 0.967, "Equity research export", size=8, color=_MUTED, ha="right", va="center")
+            self.y = 0.91
+        else:
+            self._rect(0, 0.966, 1, 0.034, _NAVY)
+            self._rect(0, 0.966, 0.22, 0.034, _TEAL, alpha=0.95)
+            self._text(_LEFT, 0.983, "Valuation Master Pro", size=8.5, weight="bold", color="white", va="center")
+            self._text(1 - _RIGHT, 0.983, f"PAGE {self.page_number}", size=7.5, color="#d4e7f7", ha="right", va="center")
+            self.y = _TOP
         self._text(_LEFT, 0.045, "Educational use only. Not financial advice.", size=7, color=_MUTED)
         self._text(1 - _RIGHT, 0.045, self.title, size=7, color=_MUTED, ha="right")
-        self.y = _TOP
 
     def _save_and_new_page(self) -> None:
         self.pdf.savefig(self.figure)
@@ -261,32 +267,55 @@ class _PdfReportCanvas:
         self.y -= 0.012
 
     def hero(self, report: ParsedReport) -> None:
-        hero_height = 0.255
+        hero_height = 0.315
         y = self.y - hero_height
-        self._patch(_LEFT, y, _CONTENT_WIDTH, hero_height, facecolor=_NAVY, radius=0.028)
+        self._patch(_LEFT + 0.006, y - 0.006, _CONTENT_WIDTH, hero_height, facecolor="#c8d9e5", radius=0.028, alpha=0.42)
+        self._patch(_LEFT, y, _CONTENT_WIDTH, hero_height, facecolor=_CARD, edgecolor="#cfe1ef", linewidth=0.9, radius=0.028)
+        self._patch(_LEFT, y, 0.34, hero_height, facecolor=_NAVY, radius=0.028)
         self._polygon(
-            [(_LEFT + 0.55, self.y), (_LEFT + _CONTENT_WIDTH, self.y), (_LEFT + _CONTENT_WIDTH, y), (_LEFT + 0.72, y)],
+            [(_LEFT + 0.24, self.y), (_LEFT + 0.42, self.y), (_LEFT + 0.34, y), (_LEFT + 0.18, y)],
             "#123d55",
-            alpha=0.92,
+            alpha=0.82,
         )
         self._polygon(
-            [(_LEFT + 0.68, self.y), (_LEFT + _CONTENT_WIDTH, self.y), (_LEFT + _CONTENT_WIDTH, y + 0.085)],
+            [(_LEFT + 0.31, self.y), (_LEFT + 0.47, self.y), (_LEFT + 0.34, y + 0.07)],
             _TEAL,
-            alpha=0.45,
+            alpha=0.32,
         )
-        self._rect(_LEFT, y, 0.018, hero_height, _ORANGE)
+        self._polygon(
+            [(_LEFT + 0.56, self.y - 0.03), (_LEFT + _CONTENT_WIDTH, self.y - 0.03), (_LEFT + _CONTENT_WIDTH, y + 0.12)],
+            _CREAM,
+            alpha=0.95,
+        )
+        self._polygon(
+            [(_LEFT + 0.73, self.y), (_LEFT + _CONTENT_WIDTH, self.y), (_LEFT + _CONTENT_WIDTH, y + 0.22)],
+            "#dff6f4",
+            alpha=0.9,
+        )
         ticker = _report_ticker(report.title)
-        self._patch(_LEFT + 0.038, self.y - 0.075, 0.12, 0.075, facecolor=_CREAM, radius=0.019)
-        self._text(_LEFT + 0.098, self.y - 0.036, ticker, size=14, weight="bold", color=_NAVY, ha="center", va="center")
-        self._text(_LEFT + 0.038, self.y - 0.106, "EQUITY VALUATION REPORT", size=8, weight="bold", color=_ORANGE)
-        self._text(_LEFT + 0.038, self.y - 0.142, report.title, size=25, weight="bold", color="white")
-        self._text(_LEFT + 0.038, self.y - 0.183, "Concise investment snapshot with guardrails, technical context and sector lens.", size=9.5, color="#b9d8ee")
+        self._text(_LEFT + 0.038, self.y - 0.047, "EQUITY RESEARCH", size=8, weight="bold", color=_ORANGE)
+        self._text(_LEFT + 0.038, self.y - 0.096, ticker, size=34, weight="bold", color="white")
+        self._text(_LEFT + 0.04, self.y - 0.145, "Valuation memo", size=13, weight="bold", color="#d8ecfb")
+        self._rect(_LEFT + 0.04, self.y - 0.17, 0.11, 0.0045, _TEAL)
+        self._text(_LEFT + 0.04, self.y - 0.205, "Built with live market context, guardrails and sector-aware framing.", size=8.2, color="#b9d8ee")
+
+        self._text(_LEFT + 0.405, self.y - 0.055, "COMPANY SNAPSHOT", size=8, weight="bold", color=_TEAL)
+        self._text(_LEFT + 0.405, self.y - 0.105, report.title, size=22, weight="bold", color=_NAVY)
+        self._text(
+            _LEFT + 0.405,
+            self.y - 0.15,
+            "A presentation-ready export for reviewing valuation, risk, technicals and sector context.",
+            size=9.2,
+            color=_MUTED,
+        )
         if report.meta_lines:
             meta = "  |  ".join(report.meta_lines[:3])
-            self._text(_LEFT + 0.038, self.y - 0.22, meta, size=8, color="#d8ecfb")
-        self._patch(0.69, self.y - 0.19, 0.19, 0.072, facecolor="#07111d", edgecolor="#2b5f77", linewidth=0.8)
-        self._text(0.785, self.y - 0.148, "PDF MEMO", size=12, weight="bold", color=_ORANGE, ha="center", va="center")
-        self.y -= hero_height + 0.045
+            self._patch(_LEFT + 0.405, y + 0.032, 0.395, 0.058, facecolor="#f5fbff", edgecolor="#d7e8f5", linewidth=0.7, radius=0.015)
+            self._text(_LEFT + 0.423, y + 0.069, meta, size=7.6, color=_MUTED)
+        self._patch(0.782, y + 0.037, 0.105, 0.105, facecolor=_NAVY, radius=0.022)
+        self._text(0.835, y + 0.099, "PDF", size=14, weight="bold", color=_ORANGE, ha="center", va="center")
+        self._text(0.835, y + 0.067, "MEMO", size=8, weight="bold", color="white", ha="center", va="center")
+        self.y -= hero_height + 0.04
 
     def metric_cards(self, snapshot_lines: list[str]) -> None:
         metrics = [_split_bullet(line) for line in snapshot_lines if line.startswith("- ")]
