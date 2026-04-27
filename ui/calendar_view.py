@@ -164,7 +164,7 @@ def render_earnings_calendar():
     sort_cols = st.columns([1.1, 1.1, 1.8])
     sort_mode = sort_cols[0].selectbox(
         "Tri",
-        ["Date puis cap decroissante", "Cap decroissante", "Ticker A-Z"],
+        ["Date puis cap decroissante", "Cap decroissante", "Cap croissante", "Ticker A-Z"],
     )
     min_market_cap_label = sort_cols[1].selectbox(
         "Capitalisation min",
@@ -218,6 +218,8 @@ def render_earnings_calendar():
 
     if sort_mode == "Cap decroissante":
         filtered = filtered.sort_values(["Market Cap Value", "Date", "Ticker"], ascending=[False, True, True])
+    elif sort_mode == "Cap croissante":
+        filtered = filtered.sort_values(["Market Cap Value", "Date", "Ticker"], ascending=[True, True, True])
     elif sort_mode == "Ticker A-Z":
         filtered = filtered.sort_values(["Ticker", "Date"])
     else:
