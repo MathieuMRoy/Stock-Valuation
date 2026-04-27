@@ -20,6 +20,7 @@ from .screener_engine import ScreenerCandidate, market_cap_ok, quick_intrinsic_d
 from .data_quality import DataQualityReport, build_data_quality_report, quality_label
 from .sector_profiles import SectorProfile, get_sector_profile, sector_profile_summary
 from .valuation_guardrails import blend_reasonable_intrinsic_values, is_reasonable_intrinsic_value, upside_pct
+from .report_export import markdown_report_to_pdf_bytes
 
 __all__ = [
     "AnalyzerSnapshot",
@@ -37,6 +38,7 @@ __all__ = [
     "is_financial_company",
     "market_risk_label",
     "market_cap_ok",
+    "markdown_report_to_pdf_bytes",
     "prepare_analyzer_snapshot",
     "profile_label",
     "quality_label",
