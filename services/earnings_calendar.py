@@ -154,9 +154,6 @@ def fetch_nasdaq_earnings_calendar(
         futures = [executor.submit(_patch_mc, ev) for ev in events]
         concurrent.futures.wait(futures, timeout=8.0)
 
-    # Re-apply the formatting if needed, though calendar_view.py & report_export
-    # mainly rely on 'Market Cap Value' directly anyway.
-
     return (
         pd.DataFrame(events)
         .drop_duplicates(["Ticker", "Date"])
