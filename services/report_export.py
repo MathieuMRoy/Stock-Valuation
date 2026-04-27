@@ -200,10 +200,11 @@ class _PdfReportCanvas:
         ha: str = "left",
         va: str = "top",
     ) -> None:
+        safe_text = str(text).replace("$", r"\$")
         self.figure.text(
             x,
             y,
-            text,
+            safe_text,
             fontsize=size,
             fontweight=weight,
             color=color,
@@ -211,6 +212,25 @@ class _PdfReportCanvas:
             ha=ha,
             va=va,
         )
+
+    def _wrapped_text(
+        self,
+        x: float,
+        y: float,
+        text: str,
+        *,
+        width: int,
+        size: int = 10,
+        weight: str = "normal",
+        color: str = _INK,
+        line_gap: float = 0.021,
+    ) -> float:
+        """Draw wrapped text and return the next y-position."""
+        current_y = y
+        for line in _wrap_text(text, width):
+            self._text(x, current_y, line, size=size, weight=weight, color=color)
+            current_y -= line_gap
+        return current_y
 
     def _start_page(self) -> None:
         self.page_number += 1
@@ -267,54 +287,68 @@ class _PdfReportCanvas:
         self.y -= 0.012
 
     def hero(self, report: ParsedReport) -> None:
-        hero_height = 0.315
+        hero_height = 0.285
         y = self.y - hero_height
         self._patch(_LEFT + 0.006, y - 0.006, _CONTENT_WIDTH, hero_height, facecolor="#c8d9e5", radius=0.028, alpha=0.42)
         self._patch(_LEFT, y, _CONTENT_WIDTH, hero_height, facecolor=_CARD, edgecolor="#cfe1ef", linewidth=0.9, radius=0.028)
-        self._patch(_LEFT, y, 0.34, hero_height, facecolor=_NAVY, radius=0.028)
+        left_width = 0.30
+        right_x = _LEFT + left_width + 0.06
+        right_edge = _LEFT + _CONTENT_WIDTH - 0.035
+        self._patch(_LEFT, y, left_width, hero_height, facecolor=_NAVY, radius=0.028)
         self._polygon(
-            [(_LEFT + 0.24, self.y), (_LEFT + 0.42, self.y), (_LEFT + 0.34, y), (_LEFT + 0.18, y)],
+            [(_LEFT + 0.19, self.y), (_LEFT + 0.31, self.y), (_LEFT + 0.27, y), (_LEFT + 0.14, y)],
             "#123d55",
-            alpha=0.82,
+            alpha=0.62,
         )
         self._polygon(
-            [(_LEFT + 0.31, self.y), (_LEFT + 0.47, self.y), (_LEFT + 0.34, y + 0.07)],
+            [(_LEFT + 0.25, self.y), (_LEFT + 0.34, self.y), (_LEFT + 0.28, y + 0.07)],
             _TEAL,
-            alpha=0.32,
+            alpha=0.24,
         )
         self._polygon(
-            [(_LEFT + 0.56, self.y - 0.03), (_LEFT + _CONTENT_WIDTH, self.y - 0.03), (_LEFT + _CONTENT_WIDTH, y + 0.12)],
+            [(right_x + 0.26, self.y - 0.035), (_LEFT + _CONTENT_WIDTH, self.y - 0.035), (_LEFT + _CONTENT_WIDTH, y + 0.17)],
             _CREAM,
-            alpha=0.95,
+            alpha=0.7,
         )
         self._polygon(
-            [(_LEFT + 0.73, self.y), (_LEFT + _CONTENT_WIDTH, self.y), (_LEFT + _CONTENT_WIDTH, y + 0.22)],
+            [(right_x + 0.39, self.y), (_LEFT + _CONTENT_WIDTH, self.y), (_LEFT + _CONTENT_WIDTH, y + 0.225)],
             "#dff6f4",
-            alpha=0.9,
+            alpha=0.64,
         )
         ticker = _report_ticker(report.title)
-        self._text(_LEFT + 0.038, self.y - 0.047, "EQUITY RESEARCH", size=8, weight="bold", color=_ORANGE)
-        self._text(_LEFT + 0.038, self.y - 0.096, ticker, size=34, weight="bold", color="white")
-        self._text(_LEFT + 0.04, self.y - 0.145, "Valuation memo", size=13, weight="bold", color="#d8ecfb")
-        self._rect(_LEFT + 0.04, self.y - 0.17, 0.11, 0.0045, _TEAL)
-        self._text(_LEFT + 0.04, self.y - 0.205, "Built with live market context, guardrails and sector-aware framing.", size=8.2, color="#b9d8ee")
+        self._text(_LEFT + 0.032, self.y - 0.05, "EQUITY RESEARCH", size=8, weight="bold", color=_ORANGE)
+        self._text(_LEFT + 0.032, self.y - 0.102, ticker, size=32, weight="bold", color="white")
+        self._text(_LEFT + 0.034, self.y - 0.15, "Valuation memo", size=12.5, weight="bold", color="#d8ecfb")
+        self._rect(_LEFT + 0.034, self.y - 0.174, 0.105, 0.0045, _TEAL)
+        self._wrapped_text(
+            _LEFT + 0.034,
+            self.y - 0.205,
+            "Live context, guardrails and sector-aware framing.",
+            width=32,
+            size=8.0,
+            color="#b9d8ee",
+        )
 
-        self._text(_LEFT + 0.405, self.y - 0.055, "COMPANY SNAPSHOT", size=8, weight="bold", color=_TEAL)
-        self._text(_LEFT + 0.405, self.y - 0.105, report.title, size=22, weight="bold", color=_NAVY)
-        self._text(
-            _LEFT + 0.405,
-            self.y - 0.15,
-            "A presentation-ready export for reviewing valuation, risk, technicals and sector context.",
-            size=9.2,
+        self._text(right_x, self.y - 0.055, "COMPANY SNAPSHOT", size=8, weight="bold", color=_TEAL)
+        self._wrapped_text(right_x, self.y - 0.097, report.title, width=28, size=19, weight="bold", color=_NAVY, line_gap=0.039)
+        self._wrapped_text(
+            right_x,
+            self.y - 0.168,
+            "Presentation-ready export for valuation, risk, technicals and sector context.",
+            width=48,
+            size=8.8,
             color=_MUTED,
+            line_gap=0.021,
         )
         if report.meta_lines:
             meta = "  |  ".join(report.meta_lines[:3])
-            self._patch(_LEFT + 0.405, y + 0.032, 0.395, 0.058, facecolor="#f5fbff", edgecolor="#d7e8f5", linewidth=0.7, radius=0.015)
-            self._text(_LEFT + 0.423, y + 0.069, meta, size=7.6, color=_MUTED)
-        self._patch(0.782, y + 0.037, 0.105, 0.105, facecolor=_NAVY, radius=0.022)
-        self._text(0.835, y + 0.099, "PDF", size=14, weight="bold", color=_ORANGE, ha="center", va="center")
-        self._text(0.835, y + 0.067, "MEMO", size=8, weight="bold", color="white", ha="center", va="center")
+            self._patch(right_x, y + 0.032, 0.305, 0.064, facecolor="#f5fbff", edgecolor="#d7e8f5", linewidth=0.7, radius=0.015)
+            self._wrapped_text(right_x + 0.017, y + 0.073, meta, width=43, size=7.4, color=_MUTED, line_gap=0.016)
+        badge_width = 0.083
+        badge_x = right_edge - badge_width
+        self._patch(badge_x, y + 0.041, badge_width, 0.09, facecolor=_NAVY, radius=0.019)
+        self._text(badge_x + badge_width / 2, y + 0.095, "PDF", size=13, weight="bold", color=_ORANGE, ha="center", va="center")
+        self._text(badge_x + badge_width / 2, y + 0.068, "MEMO", size=7.3, weight="bold", color="white", ha="center", va="center")
         self.y -= hero_height + 0.04
 
     def metric_cards(self, snapshot_lines: list[str]) -> None:
