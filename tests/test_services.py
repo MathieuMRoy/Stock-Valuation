@@ -11,6 +11,7 @@ from services import (
     build_investor_objective_snapshot,
     combined_risk_label,
     extract_next_earnings,
+    earnings_calendar_to_pdf_bytes,
     fetch_nasdaq_earnings_for_date,
     get_sector_profile,
     is_financial_company,
@@ -332,6 +333,41 @@ class TechnicalSummaryTests(unittest.TestCase):
         self.assertTrue(summary["bull_flag_detected"])
         self.assertIn("support_60d", summary)
         self.assertIn("volatility_20d_pct", summary)
+
+
+class EarningsCalendarPdfTests(unittest.TestCase):
+    def test_earnings_calendar_to_pdf_bytes_produces_valid_pdf(self):
+        rows = [
+            {
+                "Ticker": "AAPL", "Company": "Apple Inc.", "Country": "USA / Nasdaq",
+                "Date": date(2026, 5, 4), "Day": "Monday", "Formatted": "May 04",
+                "DaysUntil": 7, "Time": "After close", "EPS Forecast": "$1.50",
+                "Estimates": "30", "Fiscal Quarter": "Mar/2026",
+                "Market Cap": "$3,000,000,000,000", "Market Cap Value": 3_000_000_000_000.0,
+                "Last Year EPS": "$1.40", "Source": "Nasdaq",
+            },
+            {
+                "Ticker": "MSFT", "Company": "Microsoft Corporation", "Country": "USA / Nasdaq",
+                "Date": date(2026, 5, 5), "Day": "Tuesday", "Formatted": "May 05",
+                "DaysUntil": 8, "Time": "Pre-market", "EPS Forecast": "$3.20",
+                "Estimates": "25", "Fiscal Quarter": "Mar/2026",
+                "Market Cap": "$2,800,000,000,000", "Market Cap Value": 2_800_000_000_000.0,
+                "Last Year EPS": "$2.94", "Source": "Nasdaq",
+            },
+            {
+                "Ticker": "AMZN", "Company": "Amazon.com Inc.", "Country": "USA / Nasdaq",
+                "Date": date(2026, 5, 6), "Day": "Wednesday", "Formatted": "May 06",
+                "DaysUntil": 9, "Time": "After close", "EPS Forecast": "$1.10",
+                "Estimates": "22", "Fiscal Quarter": "Mar/2026",
+                "Market Cap": "$2,000,000,000,000", "Market Cap Value": 2_000_000_000_000.0,
+                "Last Year EPS": "$0.98", "Source": "Nasdaq",
+            },
+        ]
+        df = pd.DataFrame(rows)
+        pdf_bytes = earnings_calendar_to_pdf_bytes(df, top_n=10)
+
+        self.assertTrue(pdf_bytes.startswith(b"%PDF-"))
+        self.assertGreater(len(pdf_bytes), 1_000)
 
 
 if __name__ == "__main__":
