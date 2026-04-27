@@ -695,7 +695,7 @@ def earnings_calendar_to_pdf_bytes(
                 fig.text(sx + 0.012, cy + card_h - 0.018, ticker_text, fontsize=13, fontweight="bold", color=_NAVY, family="DejaVu Sans", ha="left", va="top")
 
                 # Company name (Below Ticker)
-                company_name = str(row.get("Company Name", "")).replace("$", r"\$")
+                company_name = str(row.get("Company", "")).replace("$", r"\$")
                 if len(company_name) > 25:
                     company_name = company_name[:23] + ".."
                 fig.text(sx + 0.012, cy + card_h - 0.038, company_name, fontsize=6.5, color="#7d9db5", family="DejaVu Sans", ha="left", va="top")
