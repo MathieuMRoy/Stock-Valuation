@@ -680,50 +680,43 @@ def earnings_calendar_to_pdf_bytes(
                     transform=fig.transFigure, facecolor=bg_color, edgecolor="#d0dde8", linewidth=0.8
                 ))
 
+                accent_color = _BLUE if bucket == "Pre-market" else _ORANGE
+                if is_tbd:
+                    accent_color = _MUTED
+                    
+                fig.patches.append(Rectangle(
+                    (sx + 0.002, cy), 0.004, card_h,
+                    transform=fig.transFigure, facecolor=accent_color, edgecolor="none",
+                ))
+
                 ticker_text = str(row.get("Ticker", "")).replace("$", r"\$")
 
-                # Avatar Circle
-                circle_r = 0.012
-                cx = sx + 0.016
-                cy_avatar = cy + card_h / 2
-                av_color = _MUTED if is_tbd else _color_for_ticker(ticker_text)
-                fig.patches.append(Circle((cx, cy_avatar), circle_r, transform=fig.transFigure, facecolor=av_color, edgecolor="none"))
-                init = ticker_text[0].upper() if ticker_text else "?"
-                fig.text(cx, cy_avatar, init, fontsize=12, fontweight="bold", color="white", family="DejaVu Sans", ha="center", va="center")
+                # Ticker text (Top Left)
+                fig.text(sx + 0.012, cy + card_h - 0.018, ticker_text, fontsize=13, fontweight="bold", color=_NAVY, family="DejaVu Sans", ha="left", va="top")
 
-                # Ticker text
-                fig.text(cx + circle_r + 0.006, cy + card_h - 0.018, ticker_text, fontsize=13, fontweight="bold", color=_NAVY, family="DejaVu Sans", ha="left", va="top")
+                # Market Cap (Top Right)
+                cap_val = float(row.get("Market Cap Value", 0) or 0)
+                cap_text = _format_cap_short(cap_val).replace("$", r"\$")
+                fig.text(sx + sw - 0.006, cy + card_h - 0.018, cap_text, fontsize=8.5, fontweight="bold", color=_TEAL, family="DejaVu Sans", ha="right", va="top")
 
-                # EPS line with YoY Growth
+                # EPS line (Bottom Left)
                 raw_est = str(row.get("EPS Forecast", "N/A") or "N/A")
                 raw_ly = str(row.get("Last Year EPS", "N/A") or "N/A")
                 eps_forecast = raw_est.replace("$", r"\$")
                 last_year_eps = raw_ly.replace("$", r"\$")
                 
                 eps_line = f"Est: {eps_forecast}  |  LY: {last_year_eps}"
-                fig.text(cx + circle_r + 0.006, cy + 0.014, eps_line, fontsize=7.5, color="#3a6b8c", family="DejaVu Sans", ha="left", va="bottom")
+                fig.text(sx + 0.012, cy + 0.012, eps_line, fontsize=7.5, color="#3a6b8c", family="DejaVu Sans", ha="left", va="bottom")
 
-                # Growth Badge
+                # Growth text (Bottom Right)
                 est_f = _parse_eps_float(raw_est)
                 ly_f = _parse_eps_float(raw_ly)
                 if est_f is not None and ly_f is not None and ly_f != 0 and (ly_f > 0 or est_f > ly_f):
                     gro = (est_f - ly_f) / abs(ly_f) * 100
                     if abs(gro) < 500:
-                        gro_text = f" +{gro:.0f}%" if gro > 0 else f" {gro:.0f}%"
+                        gro_text = f"+{gro:.0f}%" if gro > 0 else f"{gro:.0f}%"
                         gro_color = "#2a9d8f" if gro > 0 else "#e76f51"
-                        fig.text(cx + circle_r + 0.006 + 0.038, cy + card_h - 0.018, gro_text, fontsize=7.5, fontweight="bold", color=gro_color, family="DejaVu Sans", ha="left", va="top")
-
-                # Market Cap Badge
-                cap_val = float(row.get("Market Cap Value", 0) or 0)
-                cap_text = _format_cap_short(cap_val).replace("$", r"\$")
-                
-                # tiny pill background for cap
-                fig.patches.append(FancyBboxPatch(
-                    (sx + sw - 0.030, cy + card_h - 0.026), 0.024, 0.014,
-                    boxstyle="round,pad=0.004,rounding_size=0.004",
-                    transform=fig.transFigure, facecolor="#e8f5e9", edgecolor="none"
-                ))
-                fig.text(sx + sw - 0.008, cy + card_h - 0.020, cap_text, fontsize=8.5, fontweight="bold", color=_TEAL, family="DejaVu Sans", ha="right", va="top")
+                        fig.text(sx + sw - 0.006, cy + 0.012, gro_text, fontsize=7.5, fontweight="bold", color=gro_color, family="DejaVu Sans", ha="right", va="bottom")
 
                 card_y = cy - card_gap - card_gap
 
