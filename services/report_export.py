@@ -640,13 +640,15 @@ def earnings_calendar_to_pdf_bytes(
         needs_pre_col = has_pre or has_tbd
         needs_post_col = has_post
 
+        half_w = (col_w - 0.006) / 2
         sub_cols = []
         if needs_pre_col and not needs_post_col:
-            sub_cols.append(("Pre-market", col_x, col_w))
+            sx_centered = col_x + (col_w - half_w) / 2
+            sub_cols.append(("Pre-market", sx_centered, half_w))
         elif needs_post_col and not needs_pre_col:
-            sub_cols.append(("After close", col_x, col_w))
+            sx_centered = col_x + (col_w - half_w) / 2
+            sub_cols.append(("After close", sx_centered, half_w))
         else:
-            half_w = (col_w - 0.006) / 2
             sub_cols.append(("Pre-market", col_x, half_w))
             sub_cols.append(("After close", col_x + half_w + 0.006, half_w))
 
