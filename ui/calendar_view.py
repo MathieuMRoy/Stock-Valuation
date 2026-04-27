@@ -9,7 +9,7 @@ import streamlit as st
 import yfinance as yf
 
 from data import TICKER_DB
-from services import fetch_nasdaq_earnings_calendar
+from services import earnings_calendar_to_pdf_bytes, fetch_nasdaq_earnings_calendar
 
 
 POPULAR_TICKERS = [
@@ -231,6 +231,18 @@ def render_earnings_calendar():
     metric_cols[2].metric("Nasdaq", f"{len(filtered[filtered['Source'] == 'Nasdaq'])}")
     metric_cols[3].metric("Canada", f"{len(filtered[filtered['Country'] == 'Canada'])}")
     metric_cols[4].metric("Cap min", min_market_cap_label)
+
+    # ---- PDF export button ------------------------------------------------
+    try:
+        pdf_bytes = earnings_calendar_to_pdf_bytes(filtered, top_n=10)
+        st.download_button(
+            label="\U0001F4E5 Exporter PDF \u2013 Top 10",
+            data=pdf_bytes,
+            file_name="top10_earnings.pdf",
+            mime="application/pdf",
+        )
+    except Exception:
+        pass
 
     for event_date, group in filtered.groupby("Date", sort=True):
         day_offset = (event_date - today).days

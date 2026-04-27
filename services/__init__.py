@@ -21,7 +21,7 @@ from .data_quality import DataQualityReport, build_data_quality_report, quality_
 from .earnings_calendar import fetch_nasdaq_earnings_calendar, fetch_nasdaq_earnings_for_date
 from .sector_profiles import SectorProfile, get_sector_profile, sector_profile_summary
 from .valuation_guardrails import blend_reasonable_intrinsic_values, is_reasonable_intrinsic_value, upside_pct
-from .report_export import markdown_report_to_pdf_bytes
+from .report_export import earnings_calendar_to_pdf_bytes, markdown_report_to_pdf_bytes
 
 __all__ = [
     "AnalyzerSnapshot",
@@ -34,6 +34,7 @@ __all__ = [
     "build_investor_objective_snapshot",
     "business_model_hint",
     "combined_risk_label",
+    "earnings_calendar_to_pdf_bytes",
     "extract_next_earnings",
     "fetch_nasdaq_earnings_calendar",
     "fetch_nasdaq_earnings_for_date",

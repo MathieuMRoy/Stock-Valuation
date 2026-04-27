@@ -486,3 +486,281 @@ def markdown_report_to_pdf_bytes(report_markdown: str, *, document_title: str = 
 
     buffer.seek(0)
     return buffer.getvalue()
+
+
+# ---------------------------------------------------------------------------
+# Earnings calendar PDF – weekly "top N" one-pager
+# ---------------------------------------------------------------------------
+
+_DAY_NAMES_FR = {
+    "Monday": "Lundi",
+    "Tuesday": "Mardi",
+    "Wednesday": "Mercredi",
+    "Thursday": "Jeudi",
+    "Friday": "Vendredi",
+    "Saturday": "Samedi",
+    "Sunday": "Dimanche",
+}
+
+_DAY_ORDER = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+
+_TIME_BUCKETS = ["Pre-market", "After close", "Not supplied"]
+
+_BUCKET_LABELS = {
+    "Pre-market": "Before Open",
+    "After close": "After Close",
+    "Not supplied": "TBD",
+}
+
+
+def _format_cap_short(value: float) -> str:
+    """Format market cap as a compact string (e.g. '3.2T', '145B')."""
+    if value >= 1_000_000_000_000:
+        return f"${value / 1_000_000_000_000:.1f}T"
+    if value >= 1_000_000_000:
+        return f"${value / 1_000_000_000:.1f}B"
+    if value >= 1_000_000:
+        return f"${value / 1_000_000:.0f}M"
+    if value > 0:
+        return f"${value:,.0f}"
+    return "N/A"
+
+
+def _bucket_for_time(time_label: str) -> str:
+    """Normalize a time label into one of the three buckets."""
+    lower = str(time_label or "").lower()
+    if "pre" in lower:
+        return "Pre-market"
+    if "after" in lower:
+        return "After close"
+    return "Not supplied"
+
+
+def earnings_calendar_to_pdf_bytes(
+    df: "pd.DataFrame",
+    *,
+    top_n: int = 10,
+    title_override: str | None = None,
+) -> bytes:
+    """Render a landscape PDF calendar of the top-N earnings by market cap.
+
+    The layout mirrors popular weekly earnings infographics: one column per
+    weekday, split into *Before Open* / *After Close* sub-columns, with each
+    company displayed as a bordered card showing ticker, company name, and
+    market cap.
+    """
+    import pandas as pd  # local import to keep top-level imports minimal
+
+    if df.empty:
+        raise ValueError("Cannot generate PDF from an empty DataFrame.")
+
+    # ---- data preparation ------------------------------------------------
+    sorted_df = df.sort_values("Market Cap Value", ascending=False).head(top_n).copy()
+    sorted_df["_bucket"] = sorted_df["Time"].apply(_bucket_for_time)
+    sorted_df["_day_order"] = sorted_df["Day"].map(lambda d: _DAY_ORDER.index(d) if d in _DAY_ORDER else 99)
+    sorted_df = sorted_df.sort_values(["_day_order", "_bucket", "Market Cap Value"], ascending=[True, True, False])
+
+    present_days = [d for d in _DAY_ORDER if d in sorted_df["Day"].values]
+    if not present_days:
+        raise ValueError("No weekday data found in the DataFrame.")
+
+    # ---- determine date range for title ----------------------------------
+    min_date = sorted_df["Date"].min()
+    max_date = sorted_df["Date"].max()
+    if title_override:
+        page_title = title_override
+    elif min_date == max_date:
+        page_title = f"Top {top_n} Earnings – {min_date.strftime('%b %d, %Y')}"
+    else:
+        page_title = f"Top {top_n} Earnings – {min_date.strftime('%b %d')} au {max_date.strftime('%b %d, %Y')}"
+
+    # ---- page geometry ---------------------------------------------------
+    pw, ph = 14.0, 9.0  # landscape
+    fig = Figure(figsize=(pw, ph), facecolor="white")
+    ax = fig.add_axes((0, 0, 1, 1))
+    ax.axis("off")
+
+    # header band
+    header_h = 0.09
+    fig.patches.append(Rectangle((0, 1 - header_h), 1, header_h,
+                                 transform=fig.transFigure,
+                                 facecolor=_NAVY, edgecolor="none"))
+    fig.text(0.5, 1 - header_h / 2, page_title,
+             fontsize=18, fontweight="bold", color="white",
+             family="DejaVu Sans", ha="center", va="center")
+    fig.text(0.98, 1 - header_h / 2, "Valuation Master Pro",
+             fontsize=8, color="#8aafcf",
+             family="DejaVu Sans", ha="right", va="center")
+
+    # footer
+    fig.text(0.5, 0.015, "Educational use only – Not financial advice.",
+             fontsize=7, color=_MUTED, family="DejaVu Sans", ha="center")
+
+    # ---- column layout ---------------------------------------------------
+    margin_x = 0.025
+    margin_top = header_h + 0.015
+    margin_bot = 0.04
+    col_gap = 0.008
+    usable_w = 1.0 - 2 * margin_x
+    n_cols = len(present_days)
+    col_w = (usable_w - col_gap * (n_cols - 1)) / n_cols
+    content_top = 1 - margin_top
+    content_bot = margin_bot
+
+    for col_idx, day_name in enumerate(present_days):
+        col_x = margin_x + col_idx * (col_w + col_gap)
+
+        # day header bar
+        day_header_h = 0.055
+        day_y = content_top - day_header_h
+        fig.patches.append(FancyBboxPatch(
+            (col_x, day_y), col_w, day_header_h,
+            boxstyle="round,pad=0,rounding_size=0.008",
+            transform=fig.transFigure,
+            facecolor=_TEAL, edgecolor="none",
+        ))
+        day_label = _DAY_NAMES_FR.get(day_name, day_name)
+        fig.text(col_x + col_w / 2, day_y + day_header_h / 2,
+                 day_label, fontsize=12, fontweight="bold", color="white",
+                 family="DejaVu Sans", ha="center", va="center")
+
+        # sub-header row: Before Open | After Close
+        sub_h = 0.032
+        sub_y = day_y - sub_h - 0.004
+        half_w = (col_w - 0.006) / 2
+        for sub_idx, bucket in enumerate(["Pre-market", "After close"]):
+            sx = col_x + sub_idx * (half_w + 0.006)
+            fig.patches.append(Rectangle(
+                (sx, sub_y), half_w, sub_h,
+                transform=fig.transFigure,
+                facecolor="#e8f0f8", edgecolor="#c5d5e5", linewidth=0.6,
+            ))
+            fig.text(sx + half_w / 2, sub_y + sub_h / 2,
+                     _BUCKET_LABELS[bucket],
+                     fontsize=7, fontweight="bold", color=_MUTED,
+                     family="DejaVu Sans", ha="center", va="center")
+
+        # ---- render company cards ----------------------------------------
+        card_start_y = sub_y - 0.012
+        day_events = sorted_df[sorted_df["Day"] == day_name]
+
+        for bucket_idx, bucket in enumerate(["Pre-market", "After close"]):
+            bx = col_x + bucket_idx * (half_w + 0.006)
+            bucket_events = day_events[day_events["_bucket"] == bucket]
+            card_y = card_start_y
+
+            for _, row in bucket_events.iterrows():
+                cap_val = float(row.get("Market Cap Value", 0) or 0)
+                # scale card height based on market cap importance
+                if cap_val >= 100_000_000_000:
+                    card_h = 0.085
+                    ticker_size = 13
+                    name_size = 7.5
+                elif cap_val >= 10_000_000_000:
+                    card_h = 0.072
+                    ticker_size = 11
+                    name_size = 7
+                else:
+                    card_h = 0.062
+                    ticker_size = 10
+                    name_size = 6.5
+
+                if card_y - card_h < content_bot:
+                    break  # don't overflow
+
+                cy = card_y - card_h
+                # card background with rounded border
+                fig.patches.append(FancyBboxPatch(
+                    (bx + 0.003, cy), half_w - 0.006, card_h,
+                    boxstyle="round,pad=0.003,rounding_size=0.006",
+                    transform=fig.transFigure,
+                    facecolor="white", edgecolor="#d0dde8", linewidth=0.8,
+                ))
+
+                # left accent bar
+                accent_w = 0.004
+                fig.patches.append(Rectangle(
+                    (bx + 0.003, cy), accent_w, card_h,
+                    transform=fig.transFigure,
+                    facecolor=_BLUE if bucket == "Pre-market" else _ORANGE,
+                    edgecolor="none",
+                ))
+
+                # ticker (bold, large)
+                ticker_text = str(row.get("Ticker", "")).replace("$", r"\$")
+                fig.text(bx + 0.014, cy + card_h - 0.018,
+                         ticker_text,
+                         fontsize=ticker_size, fontweight="bold", color=_NAVY,
+                         family="DejaVu Sans", ha="left", va="top")
+
+                # company name (truncated)
+                company = str(row.get("Company", ""))
+                max_name_len = int(half_w * 180)
+                if len(company) > max_name_len:
+                    company = company[: max_name_len - 1] + "…"
+                safe_company = company.replace("$", r"\$")
+                fig.text(bx + 0.014, cy + card_h - 0.038,
+                         safe_company,
+                         fontsize=name_size, color=_MUTED,
+                         family="DejaVu Sans", ha="left", va="top")
+
+                # market cap badge
+                cap_text = _format_cap_short(cap_val)
+                safe_cap = cap_text.replace("$", r"\$")
+                fig.text(bx + half_w - 0.012, cy + 0.012,
+                         safe_cap,
+                         fontsize=6.5, fontweight="bold", color=_TEAL,
+                         family="DejaVu Sans", ha="right", va="bottom")
+
+                card_y = cy - 0.006
+
+        # Also place "Not supplied" / TBD events in the Before Open column
+        tbd_events = day_events[day_events["_bucket"] == "Not supplied"]
+        if not tbd_events.empty:
+            bx = col_x  # place in left sub-column
+            # find current y for that column (after pre-market cards)
+            pre_count = len(day_events[day_events["_bucket"] == "Pre-market"])
+            # approximate – use a fresh y tracker
+            tbd_y = card_start_y
+            for _ in range(pre_count):
+                tbd_y -= 0.075  # approximate skip
+            for _, row in tbd_events.iterrows():
+                card_h = 0.062
+                if tbd_y - card_h < content_bot:
+                    break
+                cy = tbd_y - card_h
+                fig.patches.append(FancyBboxPatch(
+                    (bx + 0.003, cy), half_w - 0.006, card_h,
+                    boxstyle="round,pad=0.003,rounding_size=0.006",
+                    transform=fig.transFigure,
+                    facecolor="#fafafa", edgecolor="#d0dde8", linewidth=0.8,
+                ))
+                fig.patches.append(Rectangle(
+                    (bx + 0.003, cy), 0.004, card_h,
+                    transform=fig.transFigure,
+                    facecolor=_MUTED, edgecolor="none",
+                ))
+                ticker_text = str(row.get("Ticker", "")).replace("$", r"\$")
+                fig.text(bx + 0.014, cy + card_h - 0.018,
+                         ticker_text,
+                         fontsize=10, fontweight="bold", color=_NAVY,
+                         family="DejaVu Sans", ha="left", va="top")
+                company = str(row.get("Company", ""))
+                if len(company) > 18:
+                    company = company[:17] + "…"
+                safe_company = company.replace("$", r"\$")
+                fig.text(bx + 0.014, cy + card_h - 0.038,
+                         safe_company,
+                         fontsize=6.5, color=_MUTED,
+                         family="DejaVu Sans", ha="left", va="top")
+                tbd_y = cy - 0.006
+
+    # ---- serialize -------------------------------------------------------
+    buf = BytesIO()
+    with PdfPages(buf) as pdf:
+        meta = pdf.infodict()
+        meta["Title"] = page_title
+        meta["Creator"] = "Valuation Master Pro"
+        pdf.savefig(fig)
+    buf.seek(0)
+    return buf.getvalue()
