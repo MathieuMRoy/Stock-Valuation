@@ -144,6 +144,21 @@ def _build_export_report(
     """Build a clean markdown export of the current stock analysis."""
     tech = technical_snapshot or {}
     sector_metrics = ", ".join(sector_profile.get("primary_metrics") or [])
+    valuation_verdict = valuation_label(valuation_gap_raw or 0.0)
+    market_risk_verdict = market_risk_label(tech)
+    combined_risk_verdict = combined_risk_label(
+        snapshot.altman_z,
+        snapshot.piotroski,
+        is_financial=snapshot.is_financial,
+        technical=tech,
+    )
+    profile_verdict = profile_label(
+        snapshot.sales_growth,
+        snapshot.eps_growth,
+        snapshot.ps,
+        float(snapshot.bench_data.get("ps", 0) or 0),
+        is_financial=snapshot.is_financial,
+    )
     caveats = [
         sector_profile.get("valuation_caveat"),
         sector_profile.get("risk_caveat"),
@@ -151,6 +166,20 @@ def _build_export_report(
         *snapshot.valuation_warnings[:4],
     ]
     caveat_lines = "\n".join(f"- {item}" for item in dict.fromkeys(item for item in caveats if item))
+    key_watch_item = next((item for item in dict.fromkeys(item for item in caveats if item)), None)
+    market_risk_context = (
+        f"{market_risk_verdict}, drawdown 52W {_format_pct(tech.get('drawdown_from_52w_high_pct'), signed=True)} "
+        f"and 20d volatility {_format_pct(tech.get('volatility_20d_pct'))}"
+    )
+    summary_lines = "\n".join(
+        [
+            f"- Thesis: {valuation_verdict} with a {profile_verdict.lower()} profile versus {snapshot.bench_data.get('name', 'the benchmark')}.",
+            f"- Valuation: current price {_format_currency(snapshot.current_price)} versus blended fair value {_format_currency(blended_intrinsic)} ({_format_pct(valuation_gap_raw, signed=True)}).",
+            f"- Risk: {combined_risk_verdict}; market setup shows {market_risk_context}.",
+            f"- Business lens: {sector_profile_summary(sector_profile)}",
+            f"- Watch item: {key_watch_item or 'No major caveat flagged by the app.'}",
+        ]
+    )
 
     technical_lines = "Technical data has not been loaded yet."
     if tech.get("data_quality") and tech.get("data_quality") != "insufficient":
@@ -171,6 +200,9 @@ def _build_export_report(
             f"Generated: {date.today().isoformat()}",
             f"Data quality: {quality_status}",
             f"Sector profile: {sector_profile.get('label', 'N/A')}",
+            "",
+            "## Resume executif",
+            summary_lines,
             "",
             "## Snapshot",
             f"- Current price: {_format_currency(snapshot.current_price)}",

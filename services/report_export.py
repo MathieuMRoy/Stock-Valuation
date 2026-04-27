@@ -427,6 +427,7 @@ def markdown_report_to_pdf_bytes(report_markdown: str, *, document_title: str = 
 
         canvas = _PdfReportCanvas(pdf, report.title)
         canvas.hero(report)
+        canvas.section_card("Resume executif", report.sections.get("Resume executif", []), accent=_TEAL, max_lines=8)
         canvas.heading("Executive snapshot")
         canvas.metric_cards(report.sections.get("Snapshot", []))
         canvas.section_grid(
@@ -441,7 +442,7 @@ def markdown_report_to_pdf_bytes(report_markdown: str, *, document_title: str = 
         remaining_sections = [
             (title, lines)
             for title, lines in report.sections.items()
-            if title not in {"Snapshot", "Sector lens", "Core metrics", "Technicals", "Caveats"}
+            if title not in {"Resume executif", "Snapshot", "Sector lens", "Core metrics", "Technicals", "Caveats"}
         ]
         for title, lines in remaining_sections:
             canvas.section_card(title, lines)
