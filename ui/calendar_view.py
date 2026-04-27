@@ -28,6 +28,16 @@ POPULAR_TICKERS = [
 ]
 
 
+MIN_MARKET_CAP_FILTERS = {
+    "Tous": 0.0,
+    "500 M$+": 500_000_000.0,
+    "1 B$+": 1_000_000_000.0,
+    "5 B$+": 5_000_000_000.0,
+    "10 B$+": 10_000_000_000.0,
+    "50 B$+": 50_000_000_000.0,
+}
+
+
 def _company_name_map() -> dict[str, str]:
     mapping: dict[str, str] = {}
     for item in TICKER_DB:
@@ -74,6 +84,12 @@ def _fetch_watchlist_earnings(tickers: list[str], start_date: date, end_date: da
             earnings_date = _coerce_calendar_date(calendar.get("Earnings Date")) if isinstance(calendar, dict) else None
             if not earnings_date or earnings_date < start_date or earnings_date > end_date:
                 continue
+            try:
+                fast_info = getattr(ticker_obj, "fast_info", {}) or {}
+                raw_market_cap = fast_info.get("market_cap") if hasattr(fast_info, "get") else getattr(fast_info, "market_cap", 0)
+                market_cap = float(raw_market_cap or 0)
+            except Exception:
+                market_cap = 0.0
 
             data.append(
                 {
@@ -88,7 +104,8 @@ def _fetch_watchlist_earnings(tickers: list[str], start_date: date, end_date: da
                     "EPS Forecast": "N/A",
                     "Estimates": "N/A",
                     "Fiscal Quarter": "N/A",
-                    "Market Cap": "N/A",
+                    "Market Cap": f"${market_cap:,.0f}" if market_cap > 0 else "N/A",
+                    "Market Cap Value": market_cap,
                     "Last Year EPS": "N/A",
                     "Source": "Yahoo fallback",
                 }
@@ -122,7 +139,7 @@ def get_upcoming_earnings(start_iso: str, end_iso: str, include_watchlist_fallba
     return (
         pd.concat(frames, ignore_index=True)
         .drop_duplicates(["Ticker", "Date"], keep="first")
-        .sort_values(["Date", "Ticker"])
+        .sort_values(["Date", "Market Cap Value", "Ticker"], ascending=[True, False, True])
     )
 
 
@@ -144,6 +161,18 @@ def render_earnings_calendar():
         value=False,
         help="Ajoute un fallback Yahoo pour les tickers .TO/.V de la watchlist.",
     )
+    sort_cols = st.columns([1.1, 1.1, 1.8])
+    sort_mode = sort_cols[0].selectbox(
+        "Tri",
+        ["Date puis cap decroissante", "Cap decroissante", "Ticker A-Z"],
+    )
+    min_market_cap_label = sort_cols[1].selectbox(
+        "Capitalisation min",
+        list(MIN_MARKET_CAP_FILTERS.keys()),
+        index=2,
+        help="Filtre les petites capitalisations pour garder les dossiers plus liquides/importants.",
+    )
+    sort_cols[2].caption("Par defaut, chaque journee affiche les plus grosses capitalisations en premier.")
 
     selected_date = None
     if view_mode == "Date precise":
@@ -166,16 +195,15 @@ def render_earnings_calendar():
     if df.empty:
         st.info("Aucune publication n'a ete detectee pour cette periode. Essaie une autre date ou active le fallback watchlist Canada.")
         return
+    if "Market Cap Value" not in df.columns:
+        df["Market Cap Value"] = 0.0
 
     week_limit = today + timedelta(days=7)
 
-    metric_cols = st.columns(4)
-    metric_cols[0].metric("Evenements suivis", f"{len(df)}")
-    metric_cols[1].metric("Cette semaine", f"{len(df[df['Date'] <= week_limit])}")
-    metric_cols[2].metric("Nasdaq", f"{len(df[df['Source'] == 'Nasdaq'])}")
-    metric_cols[3].metric("Canada", f"{len(df[df['Country'] == 'Canada'])}")
-
     filtered = df.copy()
+    min_market_cap = MIN_MARKET_CAP_FILTERS[min_market_cap_label]
+    if min_market_cap > 0:
+        filtered = filtered[filtered["Market Cap Value"].fillna(0) >= min_market_cap]
     if country_filter != "Tous":
         filtered = filtered[filtered["Country"] == country_filter]
     if search_text.strip():
@@ -187,6 +215,20 @@ def render_earnings_calendar():
     if filtered.empty:
         st.warning("Aucun evenement ne correspond aux filtres actuels.")
         return
+
+    if sort_mode == "Cap decroissante":
+        filtered = filtered.sort_values(["Market Cap Value", "Date", "Ticker"], ascending=[False, True, True])
+    elif sort_mode == "Ticker A-Z":
+        filtered = filtered.sort_values(["Ticker", "Date"])
+    else:
+        filtered = filtered.sort_values(["Date", "Market Cap Value", "Ticker"], ascending=[True, False, True])
+
+    metric_cols = st.columns(5)
+    metric_cols[0].metric("Evenements affiches", f"{len(filtered)}")
+    metric_cols[1].metric("Cette semaine", f"{len(filtered[filtered['Date'] <= week_limit])}")
+    metric_cols[2].metric("Nasdaq", f"{len(filtered[filtered['Source'] == 'Nasdaq'])}")
+    metric_cols[3].metric("Canada", f"{len(filtered[filtered['Country'] == 'Canada'])}")
+    metric_cols[4].metric("Cap min", min_market_cap_label)
 
     for event_date, group in filtered.groupby("Date", sort=True):
         day_offset = (event_date - today).days
@@ -206,6 +248,7 @@ def render_earnings_calendar():
                     st.markdown(f"### {row['Ticker']}")
                     st.write(row["Company"])
                     st.caption(f"Publication attendue le {row['Formatted']} | Source: {row.get('Source', 'N/A')}")
+                    st.caption(f"Market cap: {row.get('Market Cap', 'N/A')}")
                     st.caption(
                         f"EPS consensus: {row.get('EPS Forecast', 'N/A')} | "
                         f"Est.: {row.get('Estimates', 'N/A')} | Quarter: {row.get('Fiscal Quarter', 'N/A')}"

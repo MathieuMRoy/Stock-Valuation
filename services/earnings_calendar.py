@@ -41,6 +41,30 @@ def _country_for_symbol(symbol: str) -> str:
     return "USA / Nasdaq"
 
 
+def _parse_market_cap(raw_value: str | None) -> float:
+    """Parse Nasdaq market-cap strings into numeric dollars."""
+    text = str(raw_value or "").strip().upper()
+    if not text or text == "N/A":
+        return 0.0
+
+    multiplier = 1.0
+    if text.endswith("T"):
+        multiplier = 1_000_000_000_000.0
+        text = text[:-1]
+    elif text.endswith("B"):
+        multiplier = 1_000_000_000.0
+        text = text[:-1]
+    elif text.endswith("M"):
+        multiplier = 1_000_000.0
+        text = text[:-1]
+
+    cleaned = text.replace("$", "").replace(",", "").strip()
+    try:
+        return float(cleaned) * multiplier
+    except ValueError:
+        return 0.0
+
+
 def _nasdaq_rows(payload: dict[str, Any]) -> list[dict[str, Any]]:
     data = payload.get("data") if isinstance(payload, dict) else {}
     rows = data.get("rows") if isinstance(data, dict) else []
@@ -69,6 +93,7 @@ def fetch_nasdaq_earnings_for_date(
         if not symbol:
             continue
 
+        market_cap = str(row.get("marketCap") or "N/A").strip() or "N/A"
         events.append(
             {
                 "Ticker": symbol,
@@ -82,7 +107,8 @@ def fetch_nasdaq_earnings_for_date(
                 "EPS Forecast": str(row.get("epsForecast") or "N/A").strip() or "N/A",
                 "Estimates": str(row.get("noOfEsts") or "N/A").strip() or "N/A",
                 "Fiscal Quarter": str(row.get("fiscalQuarterEnding") or "N/A").strip() or "N/A",
-                "Market Cap": str(row.get("marketCap") or "N/A").strip() or "N/A",
+                "Market Cap": market_cap,
+                "Market Cap Value": _parse_market_cap(market_cap),
                 "Last Year EPS": str(row.get("lastYearEPS") or "N/A").strip() or "N/A",
                 "Source": "Nasdaq",
             }
@@ -114,4 +140,8 @@ def fetch_nasdaq_earnings_calendar(
     if not events:
         return pd.DataFrame()
 
-    return pd.DataFrame(events).drop_duplicates(["Ticker", "Date"]).sort_values(["Date", "Ticker"])
+    return (
+        pd.DataFrame(events)
+        .drop_duplicates(["Ticker", "Date"])
+        .sort_values(["Date", "Market Cap Value", "Ticker"], ascending=[True, False, True])
+    )
