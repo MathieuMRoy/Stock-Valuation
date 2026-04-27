@@ -154,7 +154,7 @@ def is_financial_company(sector_name: str | None, benchmark_name: str | None) ->
 
 
 def risk_label(altman_z: float | None, piotroski: int | None, is_financial: bool = False) -> str:
-    """Describe risk with a compact quality heuristic."""
+    """Describe balance-sheet/accounting risk, not market-price risk."""
     if is_financial:
         if (piotroski or 0) >= 7:
             return "Stable bank profile"
@@ -162,10 +162,57 @@ def risk_label(altman_z: float | None, piotroski: int | None, is_financial: bool
             return "Watch bank fundamentals"
         return "Bank-specific risk view"
     if (altman_z or 0) >= 3 and (piotroski or 0) >= 7:
-        return "Lower risk"
+        return "Lower financial risk"
     if (altman_z or 0) < 1.8 or (piotroski or 0) <= 3:
-        return "Higher risk"
-    return "Balanced risk"
+        return "Higher financial risk"
+    return "Balanced financial risk"
+
+
+def market_risk_label(technical: dict | None = None) -> str:
+    """Describe market-price risk from drawdown, volatility and trend."""
+    payload = technical or {}
+    drawdown = safe_float(payload.get("drawdown_from_52w_high_pct"))
+    volatility = safe_float(payload.get("volatility_20d_pct"))
+    technical_score = safe_float(payload.get("technical_score_out_of_10"))
+    momentum_3m = safe_float(payload.get("momentum_3m_pct"))
+
+    if drawdown <= -60:
+        return "Severe market risk"
+    if drawdown <= -35:
+        return "High drawdown risk"
+    if volatility >= 70:
+        return "High volatility risk"
+    if technical_score and technical_score <= 3.5 and momentum_3m < 0:
+        return "Weak momentum risk"
+    if drawdown <= -20 or volatility >= 50 or (technical_score and technical_score < 5):
+        return "Elevated market risk"
+    if technical_score and technical_score >= 7 and drawdown > -12:
+        return "Constructive market setup"
+    return "Balanced market risk"
+
+
+def combined_risk_label(
+    altman_z: float | None,
+    piotroski: int | None,
+    *,
+    is_financial: bool = False,
+    technical: dict | None = None,
+) -> str:
+    """Combine fundamental and market risk so a large selloff cannot show as simply low risk."""
+    financial = risk_label(altman_z, piotroski, is_financial=is_financial)
+    market = market_risk_label(technical)
+
+    if market in {"Severe market risk", "High drawdown risk"}:
+        return market
+    if market in {"High volatility risk", "Weak momentum risk", "Elevated market risk"}:
+        return market
+    if financial.startswith("Higher") or financial.startswith("Watch"):
+        return financial
+    if financial.startswith("Lower") and market == "Constructive market setup":
+        return "Lower overall risk"
+    if financial.startswith("Lower"):
+        return "Lower financial risk, market not low"
+    return financial
 
 
 def valuation_label(gap_pct: float) -> str:

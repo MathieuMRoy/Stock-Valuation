@@ -47,6 +47,7 @@ from fetchers.sec_edgar import get_sec_financials
 from fetchers.short_interest import get_historical_short_interest
 from fetchers.yahoo_finance import FINANCIAL_DATA_CACHE_VERSION
 from scoring import calculate_altman_z, calculate_piotroski_score, score_out_of_10
+from services.analyzer_service import combined_risk_label, market_risk_label
 from services.sector_profiles import get_sector_profile
 from technical import add_indicators, bull_flag_score, fetch_price_history, summarize_technical_setup
 
@@ -799,7 +800,13 @@ def _primary_risk_driver(company: dict[str, Any], technical: dict[str, Any]) -> 
     cycle_profile = _company_cycle_profile(company)
     valuation_score = _to_float(company.get("valuation_score")) or 0.0
     technical_score = _to_float(technical.get("technical_score_out_of_10")) or 0.0
+    drawdown = _to_float(technical.get("drawdown_from_52w_high_pct"))
+    volatility = _to_float(technical.get("volatility_20d_pct"))
 
+    if drawdown is not None and drawdown <= -35:
+        return "le drawdown majeur du titre: meme avec un bon bilan, le marche signale une forte volatilite et un risque de timing"
+    if volatility is not None and volatility >= 70:
+        return "la volatilite elevee du titre, qui peut dominer la lecture fondamentale a court terme"
     if company.get("is_financial"):
         return "la qualite du credit, la regulation et la tenue des marges"
     if cycle_profile == "cyclical":
@@ -816,8 +823,14 @@ def _risk_fit_verdict(company: dict[str, Any], technical: dict[str, Any], profil
     valuation_score = _to_float(company.get("valuation_score")) or 0.0
     technical_score = _to_float(technical.get("technical_score_out_of_10")) or 0.0
     cycle_profile = _company_cycle_profile(company)
+    market_risk = market_risk_label(technical)
 
     risk_points = 0
+    if market_risk in {"Severe market risk", "High drawdown risk"}:
+        risk_points += 3
+    elif market_risk in {"High volatility risk", "Weak momentum risk", "Elevated market risk"}:
+        risk_points += 2
+
     if health_score < 5.5:
         risk_points += 2
     elif health_score < 7:
@@ -829,6 +842,12 @@ def _risk_fit_verdict(company: dict[str, Any], technical: dict[str, Any], profil
         risk_points += 1
     if profile.get("is_short_term") and technical_score < 5:
         risk_points += 1
+
+    if profile.get("is_young_investor") and market_risk in {"Severe market risk", "High drawdown risk"}:
+        return "pas comme position simple: le bilan peut etre correct, mais le drawdown rend le risque de marche trop eleve pour appeler ca defensif"
+
+    if profile.get("is_defensive") and market_risk in {"Severe market risk", "High drawdown risk", "High volatility risk"}:
+        return "non, pas dans un angle defensif: le risque de prix domine la lecture fondamentale"
 
     if profile.get("is_young_investor"):
         if risk_points <= 1:
@@ -1956,16 +1975,29 @@ def _build_local_risk_response(chat_context: dict[str, Any], user_message: str) 
         return None, None
 
     trace = _build_agent_trace(["risk_agent", SUPERVISOR_AGENT_NAME], SUPERVISOR_AGENT_NAME)
+    technical = _ensure_enriched_technical_snapshot(chat_context, ticker, technical)
     risk_profile = _infer_risk_user_profile(user_message)
 
     verdict = _risk_fit_verdict(company, technical, risk_profile)
     risk_driver = _primary_risk_driver(company, technical)
     risk_subject = risk_profile.get("label") or "ton profil actuel"
+    overall_risk_label = combined_risk_label(
+        company.get("altman_z_score"),
+        company.get("piotroski_score"),
+        is_financial=bool(company.get("is_financial")),
+        technical=technical,
+    )
+    market_label = market_risk_label(technical)
     sections = [
         (
             "Pourquoi",
             f"{_business_model_sentence(company)} {_balance_sheet_resilience_sentence(company)} "
-            f"Lecture sante {company.get('health_score', 'N/A')}/10 et technique {technical.get('technical_score_out_of_10', 'N/A')}/10.",
+            f"Lecture globale risque: {overall_risk_label}. Sante {company.get('health_score', 'N/A')}/10 et technique {technical.get('technical_score_out_of_10', 'N/A')}/10.",
+        ),
+        (
+            "Risque de marche",
+            f"{market_label}. Drawdown 52 semaines {_format_pct(technical.get('drawdown_from_52w_high_pct'))}, "
+            f"volatilite 20j {_format_pct(technical.get('volatility_20d_pct'))}, momentum 3 mois {_format_pct(technical.get('momentum_3m_pct'))}.",
         ),
         ("Risque principal", risk_driver),
         ("A qui ca correspond", _risk_fit_conclusion(company, risk_profile)),
