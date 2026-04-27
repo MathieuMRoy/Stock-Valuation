@@ -607,30 +607,52 @@ def earnings_calendar_to_pdf_bytes(
     margin_top = header_h + 0.015
     margin_bot = 0.03
     col_gap = 0.008
+    sub_gap = 0.006
+
     usable_w = 1.0 - 2 * margin_x
-    n_cols = len(present_days)
-    col_w = (usable_w - col_gap * (n_cols - 1)) / n_cols
     content_top = 1 - margin_top
     content_bot = margin_bot
-
-    card_h = 0.076  # taller card relative to page height
+    card_h = 0.076
     card_gap = 0.006
 
-    from matplotlib.patches import Circle
+    day_subcols = {}
+    total_subcols = 0
+    for day_name in present_days:
+        evts = work[work["Day"] == day_name]
+        has_pre = not evts[evts["_bucket"] == "Pre-market"].empty
+        has_tbd = not evts[evts["_bucket"] == "Not supplied"].empty
+        has_post = not evts[evts["_bucket"] == "After close"].empty
+        
+        c = 0
+        if has_pre or has_tbd: c += 1
+        if has_post: c += 1
+        if c == 0: c = 1
+        day_subcols[day_name] = c
+        total_subcols += c
 
-    for col_idx, day_name in enumerate(present_days):
-        col_x = margin_x + col_idx * (col_w + col_gap)
+    num_days = len(present_days)
+    total_col_gaps = (num_days - 1) * col_gap
+    total_sub_gaps = sum(c - 1 for c in day_subcols.values()) * sub_gap
+    available_w = usable_w - total_col_gaps - total_sub_gaps
+    single_col_w = available_w / total_subcols
+
+    current_x = margin_x
+
+    for day_name in present_days:
+        c = day_subcols[day_name]
+        day_w = c * single_col_w + (c - 1) * sub_gap
+        col_x = current_x
 
         # day header bar
         day_header_h = 0.04
         day_y = content_top - day_header_h
         fig.patches.append(FancyBboxPatch(
-            (col_x, day_y), col_w, day_header_h,
+            (col_x, day_y), day_w, day_header_h,
             boxstyle="round,pad=0,rounding_size=0.008",
             transform=fig.transFigure, facecolor=_TEAL, edgecolor="none"
         ))
         day_label = _DAY_NAMES_FR.get(day_name, day_name)
-        fig.text(col_x + col_w / 2, day_y + day_header_h / 2, day_label.upper(), fontsize=12, fontweight="bold", color="white", family="DejaVu Sans", ha="center", va="center")
+        fig.text(col_x + day_w / 2, day_y + day_header_h / 2, day_label.upper(), fontsize=12, fontweight="bold", color="white", family="DejaVu Sans", ha="center", va="center")
 
         day_events = work[work["Day"] == day_name]
         has_pre = not day_events[day_events["_bucket"] == "Pre-market"].empty
@@ -640,17 +662,14 @@ def earnings_calendar_to_pdf_bytes(
         needs_pre_col = has_pre or has_tbd
         needs_post_col = has_post
 
-        half_w = (col_w - 0.006) / 2
         sub_cols = []
-        if needs_pre_col and not needs_post_col:
-            sx_centered = col_x + (col_w - half_w) / 2
-            sub_cols.append(("Pre-market", sx_centered, half_w))
-        elif needs_post_col and not needs_pre_col:
-            sx_centered = col_x + (col_w - half_w) / 2
-            sub_cols.append(("After close", sx_centered, half_w))
-        else:
-            sub_cols.append(("Pre-market", col_x, half_w))
-            sub_cols.append(("After close", col_x + half_w + 0.006, half_w))
+        if needs_pre_col and needs_post_col:
+            sub_cols.append(("Pre-market", col_x, single_col_w))
+            sub_cols.append(("After close", col_x + single_col_w + sub_gap, single_col_w))
+        elif needs_pre_col:
+            sub_cols.append(("Pre-market", col_x, single_col_w))
+        elif needs_post_col:
+            sub_cols.append(("After close", col_x, single_col_w))
 
         sub_h = 0.025
         sub_y = day_y - sub_h - 0.004
@@ -717,6 +736,8 @@ def earnings_calendar_to_pdf_bytes(
                 fig.text(sx + 0.012, cy + 0.012, eps_line, fontsize=7.5, color="#3a6b8c", family="DejaVu Sans", ha="left", va="bottom")
 
                 card_y = cy - card_gap - card_gap
+
+        current_x += day_w + col_gap
 
     # ---- serialize -------------------------------------------------------
     buf = BytesIO()
