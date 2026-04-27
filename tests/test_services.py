@@ -72,6 +72,7 @@ class AnalyzerServiceTests(unittest.TestCase):
         self.assertEqual(events[0]["Ticker"], "MSFT")
         self.assertEqual(events[0]["Time"], "After close")
         self.assertEqual(events[0]["EPS Forecast"], "$3.20")
+        self.assertEqual(events[0]["Market Cap Value"], 3_000_000_000_000)
         self.assertEqual(events[0]["Source"], "Nasdaq")
 
     def test_is_financial_company_detects_banks(self):
