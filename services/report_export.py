@@ -708,16 +708,6 @@ def earnings_calendar_to_pdf_bytes(
                 eps_line = f"Est: {eps_forecast}  |  LY: {last_year_eps}"
                 fig.text(sx + 0.012, cy + 0.012, eps_line, fontsize=7.5, color="#3a6b8c", family="DejaVu Sans", ha="left", va="bottom")
 
-                # Growth text (Bottom Right)
-                est_f = _parse_eps_float(raw_est)
-                ly_f = _parse_eps_float(raw_ly)
-                if est_f is not None and ly_f is not None and ly_f != 0 and (ly_f > 0 or est_f > ly_f):
-                    gro = (est_f - ly_f) / abs(ly_f) * 100
-                    if abs(gro) < 500:
-                        gro_text = f"+{gro:.0f}%" if gro > 0 else f"{gro:.0f}%"
-                        gro_color = "#2a9d8f" if gro > 0 else "#e76f51"
-                        fig.text(sx + sw - 0.006, cy + 0.012, gro_text, fontsize=7.5, fontweight="bold", color=gro_color, family="DejaVu Sans", ha="right", va="bottom")
-
                 card_y = cy - card_gap - card_gap
 
     # ---- serialize -------------------------------------------------------
