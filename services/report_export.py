@@ -525,7 +525,6 @@ def _format_cap_short(value: float) -> str:
         return f"${value:,.0f}"
     return "N/A"
 
-
 def _bucket_for_time(time_label: str) -> str:
     """Normalize a time label into one of the three buckets."""
     lower = str(time_label or "").lower()
@@ -535,6 +534,20 @@ def _bucket_for_time(time_label: str) -> str:
         return "After close"
     return "Not supplied"
 
+def _parse_eps_float(val_str: str) -> float | None:
+    try:
+        c = str(val_str).replace('$', '').replace(' ', '')
+        if c.startswith('(') and c.endswith(')'):
+            c = '-' + c[1:-1]
+        return float(c)
+    except Exception:
+        return None
+
+def _color_for_ticker(ticker: str) -> str:
+    import hashlib
+    colors = ["#4361ee", "#3f37c9", "#4cc9f0", "#f72585", "#7209b7", "#3a0ca3", "#f8961e", "#f3722c", "#f9c74f", "#90be6d", "#4d908e", "#277da1"]
+    idx = int(hashlib.md5(ticker.encode()).hexdigest(), 16) % len(colors)
+    return colors[idx]
 
 def earnings_calendar_to_pdf_bytes(
     df: "pd.DataFrame",
@@ -542,12 +555,7 @@ def earnings_calendar_to_pdf_bytes(
     top_n: int = 10,
     title_override: str | None = None,
 ) -> bytes:
-    """Render a landscape PDF calendar of the top-N earnings **per sub-column**.
-
-    Each day × time-bucket combination (e.g. Monday Before Open) gets its own
-    top-N list sorted by market cap.  Cards display ticker, company name,
-    EPS consensus forecast, last-year EPS, and market cap.
-    """
+    """Render a landscape PDF calendar of the top-N earnings **per sub-column**."""
     import pandas as pd
 
     if df.empty:
@@ -558,7 +566,6 @@ def earnings_calendar_to_pdf_bytes(
     work["_bucket"] = work["Time"].apply(_bucket_for_time)
     work["_day_order"] = work["Day"].map(lambda d: _DAY_ORDER.index(d) if d in _DAY_ORDER else 99)
 
-    # Top N per (day, bucket) – this is the key change
     work = (
         work
         .sort_values(["_day_order", "_bucket", "Market Cap Value"], ascending=[True, True, False])
@@ -589,19 +596,11 @@ def earnings_calendar_to_pdf_bytes(
 
     # header band
     header_h = 0.08
-    fig.patches.append(Rectangle((0, 1 - header_h), 1, header_h,
-                                 transform=fig.transFigure,
-                                 facecolor=_NAVY, edgecolor="none"))
-    fig.text(0.5, 1 - header_h / 2, page_title,
-             fontsize=24, fontweight="bold", color="white",
-             family="DejaVu Sans", ha="center", va="center")
-    fig.text(0.98, 1 - header_h / 2, "Valuation Master Pro",
-             fontsize=10, color="#8aafcf",
-             family="DejaVu Sans", ha="right", va="center")
+    fig.patches.append(Rectangle((0, 1 - header_h), 1, header_h, transform=fig.transFigure, facecolor=_NAVY, edgecolor="none"))
+    fig.text(0.5, 1 - header_h / 2, page_title, fontsize=24, fontweight="bold", color="white", family="DejaVu Sans", ha="center", va="center")
+    fig.text(0.98, 1 - header_h / 2, "Valuation Master Pro", fontsize=10, color="#8aafcf", family="DejaVu Sans", ha="right", va="center")
 
-    # footer
-    fig.text(0.5, 0.012, "Educational use only \\u2013 Not financial advice.",
-             fontsize=8, color=_MUTED, family="DejaVu Sans", ha="center")
+    fig.text(0.5, 0.012, "Educational use only \u2013 Not financial advice.", fontsize=8, color=_MUTED, family="DejaVu Sans", ha="center")
 
     # ---- column layout ---------------------------------------------------
     margin_x = 0.015
@@ -617,6 +616,8 @@ def earnings_calendar_to_pdf_bytes(
     card_h = 0.076  # taller card relative to page height
     card_gap = 0.006
 
+    from matplotlib.patches import Circle
+
     for col_idx, day_name in enumerate(present_days):
         col_x = margin_x + col_idx * (col_w + col_gap)
 
@@ -626,119 +627,105 @@ def earnings_calendar_to_pdf_bytes(
         fig.patches.append(FancyBboxPatch(
             (col_x, day_y), col_w, day_header_h,
             boxstyle="round,pad=0,rounding_size=0.008",
-            transform=fig.transFigure,
-            facecolor=_TEAL, edgecolor="none",
+            transform=fig.transFigure, facecolor=_TEAL, edgecolor="none"
         ))
         day_label = _DAY_NAMES_FR.get(day_name, day_name)
-        fig.text(col_x + col_w / 2, day_y + day_header_h / 2,
-                 day_label.upper(), fontsize=12, fontweight="bold", color="white",
-                 family="DejaVu Sans", ha="center", va="center")
+        fig.text(col_x + col_w / 2, day_y + day_header_h / 2, day_label.upper(), fontsize=12, fontweight="bold", color="white", family="DejaVu Sans", ha="center", va="center")
 
-        # sub-header row: Before Open | After Close
+        day_events = work[work["Day"] == day_name]
+        has_pre = not day_events[day_events["_bucket"] == "Pre-market"].empty
+        has_tbd = not day_events[day_events["_bucket"] == "Not supplied"].empty
+        has_post = not day_events[day_events["_bucket"] == "After close"].empty
+
+        needs_pre_col = has_pre or has_tbd
+        needs_post_col = has_post
+
+        sub_cols = []
+        if needs_pre_col and not needs_post_col:
+            sub_cols.append(("Pre-market", col_x, col_w))
+        elif needs_post_col and not needs_pre_col:
+            sub_cols.append(("After close", col_x, col_w))
+        else:
+            half_w = (col_w - 0.006) / 2
+            sub_cols.append(("Pre-market", col_x, half_w))
+            sub_cols.append(("After close", col_x + half_w + 0.006, half_w))
+
         sub_h = 0.025
         sub_y = day_y - sub_h - 0.004
-        half_w = (col_w - 0.006) / 2
-        for sub_idx, bucket in enumerate(["Pre-market", "After close"]):
-            sx = col_x + sub_idx * (half_w + 0.006)
-            fig.patches.append(Rectangle(
-                (sx, sub_y), half_w, sub_h,
-                transform=fig.transFigure,
-                facecolor="#e8f0f8", edgecolor="#c5d5e5", linewidth=0.6,
-            ))
-            fig.text(sx + half_w / 2, sub_y + sub_h / 2,
-                     _BUCKET_LABELS[bucket],
-                     fontsize=8, fontweight="bold", color=_MUTED,
-                     family="DejaVu Sans", ha="center", va="center")
 
-        # ---- render company cards ----------------------------------------
-        card_start_y = sub_y - 0.008
-        day_events = work[work["Day"] == day_name]
+        for bucket, sx, sw in sub_cols:
+            fig.patches.append(Rectangle((sx, sub_y), sw, sub_h, transform=fig.transFigure, facecolor="#e8f0f8", edgecolor="#c5d5e5", linewidth=0.6))
+            fig.text(sx + sw / 2, sub_y + sub_h / 2, _BUCKET_LABELS[bucket], fontsize=8, fontweight="bold", color=_MUTED, family="DejaVu Sans", ha="center", va="center")
 
-        for bucket_idx, bucket in enumerate(["Pre-market", "After close"]):
-            bx = col_x + bucket_idx * (half_w + 0.006)
+            card_start_y = sub_y - 0.008
             bucket_events = day_events[day_events["_bucket"] == bucket]
+            
+            # If Before Open, also mix in TBD at the end
+            if bucket == "Pre-market" and has_tbd:
+                bucket_events = pd.concat([bucket_events, day_events[day_events["_bucket"] == "Not supplied"]])
+
             card_y = card_start_y
 
             for _, row in bucket_events.iterrows():
                 if card_y - card_h < content_bot:
                     break
-
                 cy = card_y - card_h
 
-                # card background
+                is_tbd = row.get("_bucket") == "Not supplied"
+                bg_color = "#fafafa" if is_tbd else "white"
+
                 fig.patches.append(FancyBboxPatch(
-                    (bx + 0.002, cy), half_w - 0.004, card_h,
+                    (sx + 0.002, cy), sw - 0.004, card_h,
                     boxstyle="round,pad=0.002,rounding_size=0.006",
-                    transform=fig.transFigure,
-                    facecolor="white", edgecolor="#d0dde8", linewidth=0.8,
+                    transform=fig.transFigure, facecolor=bg_color, edgecolor="#d0dde8", linewidth=0.8
                 ))
 
-                # left accent bar
-                fig.patches.append(Rectangle(
-                    (bx + 0.002, cy), 0.004, card_h,
-                    transform=fig.transFigure,
-                    facecolor=_BLUE if bucket == "Pre-market" else _ORANGE,
-                    edgecolor="none",
-                ))
-
-                # ticker (very prominent)
                 ticker_text = str(row.get("Ticker", "")).replace("$", r"\$")
-                fig.text(bx + 0.012, cy + card_h - 0.018,
-                         ticker_text,
-                         fontsize=13, fontweight="bold", color=_NAVY,
-                         family="DejaVu Sans", ha="left", va="top")
 
-                # EPS line
-                eps_forecast = str(row.get("EPS Forecast", "N/A") or "N/A").replace("$", r"\$")
-                last_year_eps = str(row.get("Last Year EPS", "N/A") or "N/A").replace("$", r"\$")
+                # Avatar Circle
+                circle_r = 0.012
+                cx = sx + 0.016
+                cy_avatar = cy + card_h / 2
+                av_color = _MUTED if is_tbd else _color_for_ticker(ticker_text)
+                fig.patches.append(Circle((cx, cy_avatar), circle_r, transform=fig.transFigure, facecolor=av_color, edgecolor="none"))
+                init = ticker_text[0].upper() if ticker_text else "?"
+                fig.text(cx, cy_avatar, init, fontsize=12, fontweight="bold", color="white", family="DejaVu Sans", ha="center", va="center")
+
+                # Ticker text
+                fig.text(cx + circle_r + 0.006, cy + card_h - 0.018, ticker_text, fontsize=13, fontweight="bold", color=_NAVY, family="DejaVu Sans", ha="left", va="top")
+
+                # EPS line with YoY Growth
+                raw_est = str(row.get("EPS Forecast", "N/A") or "N/A")
+                raw_ly = str(row.get("Last Year EPS", "N/A") or "N/A")
+                eps_forecast = raw_est.replace("$", r"\$")
+                last_year_eps = raw_ly.replace("$", r"\$")
+                
                 eps_line = f"Est: {eps_forecast}  |  LY: {last_year_eps}"
-                fig.text(bx + 0.012, cy + 0.012,
-                         eps_line,
-                         fontsize=7.5, color="#3a6b8c",
-                         family="DejaVu Sans", ha="left", va="bottom")
+                fig.text(cx + circle_r + 0.006, cy + 0.014, eps_line, fontsize=7.5, color="#3a6b8c", family="DejaVu Sans", ha="left", va="bottom")
 
-                # market cap badge (prominent top right)
+                # Growth Badge
+                est_f = _parse_eps_float(raw_est)
+                ly_f = _parse_eps_float(raw_ly)
+                if est_f is not None and ly_f is not None and ly_f != 0 and (ly_f > 0 or est_f > ly_f):
+                    gro = (est_f - ly_f) / abs(ly_f) * 100
+                    if abs(gro) < 500:
+                        gro_text = f" +{gro:.0f}%" if gro > 0 else f" {gro:.0f}%"
+                        gro_color = "#2a9d8f" if gro > 0 else "#e76f51"
+                        fig.text(cx + circle_r + 0.006 + 0.038, cy + card_h - 0.018, gro_text, fontsize=7.5, fontweight="bold", color=gro_color, family="DejaVu Sans", ha="left", va="top")
+
+                # Market Cap Badge
                 cap_val = float(row.get("Market Cap Value", 0) or 0)
                 cap_text = _format_cap_short(cap_val).replace("$", r"\$")
-                fig.text(bx + half_w - 0.008, cy + card_h - 0.020,
-                         cap_text,
-                         fontsize=8.5, fontweight="bold", color=_TEAL,
-                         family="DejaVu Sans", ha="right", va="top")
-
-                card_y = cy - card_gap
-
-        # TBD events → append to Before Open column
-        tbd_events = day_events[day_events["_bucket"] == "Not supplied"]
-        if not tbd_events.empty:
-            bx = col_x
-            pre_count = len(day_events[day_events["_bucket"] == "Pre-market"])
-            tbd_y = card_start_y - pre_count * (card_h + card_gap)
-            for _, row in tbd_events.iterrows():
-                if tbd_y - card_h < content_bot:
-                    break
-                cy = tbd_y - card_h
-                fig.patches.append(FancyBboxPatch(
-                    (bx + 0.002, cy), half_w - 0.004, card_h,
-                    boxstyle="round,pad=0.002,rounding_size=0.006",
-                    transform=fig.transFigure,
-                    facecolor="#fafafa", edgecolor="#d0dde8", linewidth=0.8,
-                ))
-                fig.patches.append(Rectangle(
-                    (bx + 0.002, cy), 0.004, card_h,
-                    transform=fig.transFigure, facecolor=_MUTED, edgecolor="none",
-                ))
-                ticker_text = str(row.get("Ticker", "")).replace("$", r"\$")
-                fig.text(bx + 0.012, cy + card_h - 0.018,
-                         ticker_text, fontsize=13, fontweight="bold", color=_NAVY,
-                         family="DejaVu Sans", ha="left", va="top")
                 
-                eps_forecast = str(row.get("EPS Forecast", "N/A") or "N/A").replace("$", r"\$")
-                last_year_eps = str(row.get("Last Year EPS", "N/A") or "N/A").replace("$", r"\$")
-                fig.text(bx + 0.012, cy + 0.012,
-                         f"Est: {eps_forecast}  |  LY: {last_year_eps}",
-                         fontsize=7.5, color="#3a6b8c",
-                         family="DejaVu Sans", ha="left", va="bottom")
-                tbd_y = cy - card_gap
+                # tiny pill background for cap
+                fig.patches.append(FancyBboxPatch(
+                    (sx + sw - 0.030, cy + card_h - 0.026), 0.024, 0.014,
+                    boxstyle="round,pad=0.004,rounding_size=0.004",
+                    transform=fig.transFigure, facecolor="#e8f5e9", edgecolor="none"
+                ))
+                fig.text(sx + sw - 0.008, cy + card_h - 0.020, cap_text, fontsize=8.5, fontweight="bold", color=_TEAL, family="DejaVu Sans", ha="right", va="top")
+
+                card_y = cy - card_gap - card_gap
 
     # ---- serialize -------------------------------------------------------
     buf = BytesIO()
