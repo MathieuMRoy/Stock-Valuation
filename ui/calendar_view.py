@@ -181,7 +181,7 @@ def render_earnings_calendar():
         end_date = selected_date
     elif view_mode == "7 prochains jours":
         start_date = today
-        end_date = today + timedelta(days=7)
+        end_date = today + timedelta(days=6)
     elif view_mode == "30 prochains jours":
         start_date = today
         end_date = today + timedelta(days=30)
