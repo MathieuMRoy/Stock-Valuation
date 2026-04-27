@@ -582,80 +582,80 @@ def earnings_calendar_to_pdf_bytes(
         page_title = f"Top {top_n} Earnings – {min_date.strftime('%b %d')} au {max_date.strftime('%b %d, %Y')}"
 
     # ---- page geometry ---------------------------------------------------
-    pw, ph = 14.0, 18.0  # landscape-wide, tall to fit 10 cards per column
+    pw, ph = 16.0, 9.5  # true landscape, plenty of horizontal space
     fig = Figure(figsize=(pw, ph), facecolor="white")
     ax = fig.add_axes((0, 0, 1, 1))
     ax.axis("off")
 
     # header band
-    header_h = 0.045
+    header_h = 0.08
     fig.patches.append(Rectangle((0, 1 - header_h), 1, header_h,
                                  transform=fig.transFigure,
                                  facecolor=_NAVY, edgecolor="none"))
     fig.text(0.5, 1 - header_h / 2, page_title,
-             fontsize=20, fontweight="bold", color="white",
+             fontsize=24, fontweight="bold", color="white",
              family="DejaVu Sans", ha="center", va="center")
     fig.text(0.98, 1 - header_h / 2, "Valuation Master Pro",
-             fontsize=9, color="#8aafcf",
+             fontsize=10, color="#8aafcf",
              family="DejaVu Sans", ha="right", va="center")
 
     # footer
-    fig.text(0.5, 0.006, "Educational use only \\u2013 Not financial advice.",
-             fontsize=7, color=_MUTED, family="DejaVu Sans", ha="center")
+    fig.text(0.5, 0.012, "Educational use only \\u2013 Not financial advice.",
+             fontsize=8, color=_MUTED, family="DejaVu Sans", ha="center")
 
     # ---- column layout ---------------------------------------------------
-    margin_x = 0.018
-    margin_top = header_h + 0.008
-    margin_bot = 0.018
-    col_gap = 0.006
+    margin_x = 0.015
+    margin_top = header_h + 0.015
+    margin_bot = 0.03
+    col_gap = 0.008
     usable_w = 1.0 - 2 * margin_x
     n_cols = len(present_days)
     col_w = (usable_w - col_gap * (n_cols - 1)) / n_cols
     content_top = 1 - margin_top
     content_bot = margin_bot
 
-    card_h = 0.058  # uniform compact card height
-    card_gap = 0.004
+    card_h = 0.076  # taller card relative to page height
+    card_gap = 0.006
 
     for col_idx, day_name in enumerate(present_days):
         col_x = margin_x + col_idx * (col_w + col_gap)
 
         # day header bar
-        day_header_h = 0.030
+        day_header_h = 0.04
         day_y = content_top - day_header_h
         fig.patches.append(FancyBboxPatch(
             (col_x, day_y), col_w, day_header_h,
-            boxstyle="round,pad=0,rounding_size=0.005",
+            boxstyle="round,pad=0,rounding_size=0.008",
             transform=fig.transFigure,
             facecolor=_TEAL, edgecolor="none",
         ))
         day_label = _DAY_NAMES_FR.get(day_name, day_name)
         fig.text(col_x + col_w / 2, day_y + day_header_h / 2,
-                 day_label, fontsize=12, fontweight="bold", color="white",
+                 day_label.upper(), fontsize=12, fontweight="bold", color="white",
                  family="DejaVu Sans", ha="center", va="center")
 
         # sub-header row: Before Open | After Close
-        sub_h = 0.018
-        sub_y = day_y - sub_h - 0.003
-        half_w = (col_w - 0.005) / 2
+        sub_h = 0.025
+        sub_y = day_y - sub_h - 0.004
+        half_w = (col_w - 0.006) / 2
         for sub_idx, bucket in enumerate(["Pre-market", "After close"]):
-            sx = col_x + sub_idx * (half_w + 0.005)
+            sx = col_x + sub_idx * (half_w + 0.006)
             fig.patches.append(Rectangle(
                 (sx, sub_y), half_w, sub_h,
                 transform=fig.transFigure,
-                facecolor="#e8f0f8", edgecolor="#c5d5e5", linewidth=0.5,
+                facecolor="#e8f0f8", edgecolor="#c5d5e5", linewidth=0.6,
             ))
             fig.text(sx + half_w / 2, sub_y + sub_h / 2,
                      _BUCKET_LABELS[bucket],
-                     fontsize=6.5, fontweight="bold", color=_MUTED,
+                     fontsize=8, fontweight="bold", color=_MUTED,
                      family="DejaVu Sans", ha="center", va="center")
 
         # ---- render company cards ----------------------------------------
-        card_start_y = sub_y - 0.006
+        card_start_y = sub_y - 0.008
         day_events = work[work["Day"] == day_name]
 
         for bucket_idx, bucket in enumerate(["Pre-market", "After close"]):
-            bx = col_x + bucket_idx * (half_w + 0.005)
+            bx = col_x + bucket_idx * (half_w + 0.006)
             bucket_events = day_events[day_events["_bucket"] == bucket]
             card_y = card_start_y
 
@@ -668,53 +668,42 @@ def earnings_calendar_to_pdf_bytes(
                 # card background
                 fig.patches.append(FancyBboxPatch(
                     (bx + 0.002, cy), half_w - 0.004, card_h,
-                    boxstyle="round,pad=0.002,rounding_size=0.004",
+                    boxstyle="round,pad=0.002,rounding_size=0.006",
                     transform=fig.transFigure,
-                    facecolor="white", edgecolor="#d0dde8", linewidth=0.7,
+                    facecolor="white", edgecolor="#d0dde8", linewidth=0.8,
                 ))
 
                 # left accent bar
                 fig.patches.append(Rectangle(
-                    (bx + 0.002, cy), 0.003, card_h,
+                    (bx + 0.002, cy), 0.004, card_h,
                     transform=fig.transFigure,
                     facecolor=_BLUE if bucket == "Pre-market" else _ORANGE,
                     edgecolor="none",
                 ))
 
-                # ticker (bold)
+                # ticker (very prominent)
                 ticker_text = str(row.get("Ticker", "")).replace("$", r"\$")
-                fig.text(bx + 0.010, cy + card_h - 0.010,
+                fig.text(bx + 0.012, cy + card_h - 0.018,
                          ticker_text,
-                         fontsize=10, fontweight="bold", color=_NAVY,
+                         fontsize=13, fontweight="bold", color=_NAVY,
                          family="DejaVu Sans", ha="left", va="top")
 
-                # company name (truncated)
-                company = str(row.get("Company", ""))
-                max_name_len = int(half_w * 200)
-                if len(company) > max_name_len:
-                    company = company[: max_name_len - 1] + "…"
-                safe_company = company.replace("$", r"\$")
-                fig.text(bx + 0.010, cy + card_h - 0.025,
-                         safe_company,
-                         fontsize=6, color=_MUTED,
-                         family="DejaVu Sans", ha="left", va="top")
-
-                # EPS line: consensus + last year
+                # EPS line
                 eps_forecast = str(row.get("EPS Forecast", "N/A") or "N/A").replace("$", r"\$")
                 last_year_eps = str(row.get("Last Year EPS", "N/A") or "N/A").replace("$", r"\$")
-                eps_line = f"EPS est: {eps_forecast}  |  LY: {last_year_eps}"
-                fig.text(bx + 0.010, cy + card_h - 0.038,
+                eps_line = f"Est: {eps_forecast}  |  LY: {last_year_eps}"
+                fig.text(bx + 0.012, cy + 0.012,
                          eps_line,
-                         fontsize=5.2, color="#3a6b8c",
-                         family="DejaVu Sans", ha="left", va="top")
+                         fontsize=7.5, color="#3a6b8c",
+                         family="DejaVu Sans", ha="left", va="bottom")
 
-                # market cap badge (bottom-right)
+                # market cap badge (prominent top right)
                 cap_val = float(row.get("Market Cap Value", 0) or 0)
                 cap_text = _format_cap_short(cap_val).replace("$", r"\$")
-                fig.text(bx + half_w - 0.008, cy + 0.006,
+                fig.text(bx + half_w - 0.008, cy + card_h - 0.020,
                          cap_text,
-                         fontsize=5.5, fontweight="bold", color=_TEAL,
-                         family="DejaVu Sans", ha="right", va="bottom")
+                         fontsize=8.5, fontweight="bold", color=_TEAL,
+                         family="DejaVu Sans", ha="right", va="top")
 
                 card_y = cy - card_gap
 
@@ -730,31 +719,25 @@ def earnings_calendar_to_pdf_bytes(
                 cy = tbd_y - card_h
                 fig.patches.append(FancyBboxPatch(
                     (bx + 0.002, cy), half_w - 0.004, card_h,
-                    boxstyle="round,pad=0.002,rounding_size=0.004",
+                    boxstyle="round,pad=0.002,rounding_size=0.006",
                     transform=fig.transFigure,
-                    facecolor="#fafafa", edgecolor="#d0dde8", linewidth=0.7,
+                    facecolor="#fafafa", edgecolor="#d0dde8", linewidth=0.8,
                 ))
                 fig.patches.append(Rectangle(
-                    (bx + 0.002, cy), 0.003, card_h,
+                    (bx + 0.002, cy), 0.004, card_h,
                     transform=fig.transFigure, facecolor=_MUTED, edgecolor="none",
                 ))
                 ticker_text = str(row.get("Ticker", "")).replace("$", r"\$")
-                fig.text(bx + 0.010, cy + card_h - 0.010,
-                         ticker_text, fontsize=10, fontweight="bold", color=_NAVY,
+                fig.text(bx + 0.012, cy + card_h - 0.018,
+                         ticker_text, fontsize=13, fontweight="bold", color=_NAVY,
                          family="DejaVu Sans", ha="left", va="top")
-                company = str(row.get("Company", ""))
-                if len(company) > 20:
-                    company = company[:19] + "…"
-                fig.text(bx + 0.010, cy + card_h - 0.025,
-                         company.replace("$", r"\$"),
-                         fontsize=6, color=_MUTED,
-                         family="DejaVu Sans", ha="left", va="top")
+                
                 eps_forecast = str(row.get("EPS Forecast", "N/A") or "N/A").replace("$", r"\$")
                 last_year_eps = str(row.get("Last Year EPS", "N/A") or "N/A").replace("$", r"\$")
-                fig.text(bx + 0.010, cy + card_h - 0.038,
-                         f"EPS est: {eps_forecast}  |  LY: {last_year_eps}",
-                         fontsize=5.2, color="#3a6b8c",
-                         family="DejaVu Sans", ha="left", va="top")
+                fig.text(bx + 0.012, cy + 0.012,
+                         f"Est: {eps_forecast}  |  LY: {last_year_eps}",
+                         fontsize=7.5, color="#3a6b8c",
+                         family="DejaVu Sans", ha="left", va="bottom")
                 tbd_y = cy - card_gap
 
     # ---- serialize -------------------------------------------------------
